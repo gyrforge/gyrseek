@@ -8,7 +8,7 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
 2. The run function in src/lib.rs routes by manager and subcommand.
 3. Supported command paths are either:
    - single-target scans (for example uv add pkg)
-   - bulk scans (for example uv sync, uv pip sync)
+  - bulk scans (for example uv sync, uv pip sync, poetry install, pip or pip3 install with multiple targets)
 4. If detection and scanning pass, the original command is forwarded.
 5. If anomaly or required detection failure occurs, execution exits non-zero (fail-closed).
 
@@ -17,8 +17,10 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - parse_package_details extracts package and optional version for single-target commands.
 - Bulk source parsing:
   - parse_uv_lock_packages_from_content parses uv.lock package entries.
+  - parse_poetry_lock_packages_from_content parses poetry.lock package entries.
   - parse_requirements_packages_from_content parses requirements-style entries.
   - parse_pylock_packages_from_content parses pylock package entries.
+  - parse_pip_install_packages_from_args resolves package targets from pip or pip3 install args, including -r or --requirements files.
 - Version history lookup:
   - fetch_history queries PyPI for Python packages.
   - fetch_history queries npm registry for npm packages.

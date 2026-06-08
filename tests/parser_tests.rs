@@ -1,9 +1,12 @@
 use gyrseek::{
+    parse_pip_install_packages_from_args,
+    parse_poetry_lock_packages_from_content,
     parse_pylock_packages_from_content,
     parse_requirements_packages_from_content,
     parse_uv_lock_packages_from_content,
     GyrSeek,
 };
+use std::fs;
 
 #[test]
 fn parses_uv_add_as_latest_when_unpinned() {
@@ -140,6 +143,58 @@ name = "local-editable"
             ("requests".to_string(), Some("2.31.0".to_string())),
             ("pytest".to_string(), Some("9.0.1".to_string())),
             ("local-editable".to_string(), None),
+        ]
+    );
+}
+
+#[test]
+fn parses_pip_install_multi_packages_and_requirements_file() {
+    let req_path = std::env::temp_dir().join(format!(
+        "gyrseek-requirements-{}-{}.txt",
+        std::process::id(),
+        1
+    ));
+    fs::write(&req_path, "requests==2.31.0\npytest\n").unwrap();
+
+    let args = vec![
+        "pip3".to_string(),
+        "install".to_string(),
+        "-r".to_string(),
+        req_path.to_string_lossy().to_string(),
+        "flask==3.0.0".to_string(),
+    ];
+
+    let parsed = parse_pip_install_packages_from_args(&args);
+    assert_eq!(
+        parsed,
+        vec![
+            ("requests".to_string(), Some("2.31.0".to_string())),
+            ("pytest".to_string(), None),
+            ("flask".to_string(), Some("3.0.0".to_string())),
+        ]
+    );
+
+    let _ = fs::remove_file(req_path);
+}
+
+#[test]
+fn parses_poetry_lock_packages_for_install_scanning() {
+    let lock = r#"
+[[package]]
+name = "pytest"
+version = "9.0.3"
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+"#;
+
+    let parsed = parse_poetry_lock_packages_from_content(lock);
+    assert_eq!(
+        parsed,
+        vec![
+            ("pytest".to_string(), "9.0.3".to_string()),
+            ("requests".to_string(), "2.31.0".to_string()),
         ]
     );
 }

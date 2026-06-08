@@ -97,6 +97,8 @@ cargo run -- uv pip sync pylock.toml
 cargo run -- uv sync
 cargo run -- pip install flask
 cargo run -- pip3 install django==5.0.6
+cargo run -- pip3 install -r requirements.txt
+cargo run -- poetry install
 cargo run -- poetry update pytest
 ```
 
@@ -114,6 +116,8 @@ cargo run -- npm i lodash@4.17.21
 - `uv sync` scans all packages found in `uv.lock` before forwarding.
 - `uv pip sync` scans all parseable packages found in its source files before forwarding.
 - `uv pip sync` currently supports requirements-style files and dedicated `pylock.toml` parsing.
+- `pip install` and `pip3 install` scan all parseable package entries, including requirements files passed with `-r/--requirements`.
+- `poetry install` scans all packages found in `poetry.lock` before forwarding.
 - Version selection is currently sorted lexicographically, not semantic-version aware.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
 - For supported install/sync command paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.

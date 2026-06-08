@@ -21,6 +21,8 @@ This file stores persistent working memory and agent instructions for this repos
   - Behavioral anomaly detection compares observed network endpoints across versions
   - uv sync scans all packages from uv.lock
   - uv pip sync scans packages from requirements-style files and pylock.toml
+  - pip/pip3 install scans multi-package inputs, including `-r/--requirements` files
+  - poetry install scans all locked packages from poetry.lock
   - Fail-closed when package detection is expected but missing
 
 ## Mandatory Update Policy (After Every Change)
@@ -33,7 +35,7 @@ After every code or behavior change in this repository:
 ## Quick Post-Change Checklist
 - [ ] Code updated
 - [ ] Tests updated and run
-- [ ] .copilot/AGENTS.md updated
+- [ ] .copilot/Agents.md updated
 - [ ] README.md updated
 - [ ] docs/ARCHITECTURE.md updated if needed
 - [ ] docs/DEV_GUIDE.md updated if needed

@@ -80,6 +80,10 @@ pub fn parse_uv_lock_packages_from_content(content: &str) -> Vec<(String, String
     packages
 }
 
+pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, String)> {
+    parse_uv_lock_packages_from_content(content)
+}
+
 pub fn parse_pylock_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
     let mut packages = Vec::new();
     let mut in_package = false;
@@ -156,6 +160,52 @@ pub fn parse_requirements_packages_from_content(content: &str) -> Vec<(String, O
         if let Some(pkg) = parse_requirements_spec(line) {
             packages.push(pkg);
         }
+    }
+
+    packages
+}
+
+pub fn parse_pip_install_packages_from_args(args: &[String]) -> Vec<(String, Option<String>)> {
+    if args.first().map(String::as_str) != Some("pip") && args.first().map(String::as_str) != Some("pip3") {
+        return Vec::new();
+    }
+    if args.get(1).map(String::as_str) != Some("install") {
+        return Vec::new();
+    }
+
+    let mut packages = Vec::new();
+    let mut idx = 2;
+
+    while idx < args.len() {
+        let arg = &args[idx];
+
+        if arg == "-r" || arg == "--requirements" {
+            if let Some(path) = args.get(idx + 1) {
+                if let Ok(content) = fs::read_to_string(path) {
+                    packages.extend(parse_requirements_packages_from_content(&content));
+                }
+            }
+            idx += 2;
+            continue;
+        }
+
+        if let Some(path) = arg.strip_prefix("--requirements=") {
+            if let Ok(content) = fs::read_to_string(path) {
+                packages.extend(parse_requirements_packages_from_content(&content));
+            }
+            idx += 1;
+            continue;
+        }
+
+        if arg.starts_with('-') {
+            idx += 1;
+            continue;
+        }
+
+        if let Some(pkg) = parse_requirements_spec(arg) {
+            packages.push(pkg);
+        }
+        idx += 1;
     }
 
     packages
@@ -385,6 +435,15 @@ impl GyrSeek {
         parse_uv_lock_packages_from_content(&lock_content)
     }
 
+    fn parse_poetry_lock_packages(&self) -> Vec<(String, String)> {
+        let lock_content = match fs::read_to_string("poetry.lock") {
+            Ok(content) => content,
+            Err(_) => return Vec::new(),
+        };
+
+        parse_poetry_lock_packages_from_content(&lock_content)
+    }
+
     fn parse_uv_pip_sync_packages(&self) -> Vec<(String, Option<String>)> {
         let mut packages = Vec::new();
         for arg in self.passthrough_args.iter().skip(3) {
@@ -406,6 +465,10 @@ impl GyrSeek {
         }
 
         packages
+    }
+
+    fn parse_pip_install_packages(&self) -> Vec<(String, Option<String>)> {
+        parse_pip_install_packages_from_args(&self.passthrough_args)
     }
 }
 
@@ -476,6 +539,33 @@ fn should_enforce_package_detection(eye: &GyrSeek) -> bool {
 pub async fn run(args: Vec<String>) {
     let eye = GyrSeek::new(args);
 
+    if eye.manager == "poetry" && eye.passthrough_args.get(1).map(String::as_str) == Some("install") {
+        let lock_packages = eye.parse_poetry_lock_packages();
+        if lock_packages.is_empty() {
+            println!(
+                "❌ [gyrseek] 'poetry install' detected but no packages found in poetry.lock. Failing closed."
+            );
+            std::process::exit(1);
+        }
+
+        println!(
+            "🛡️ [gyrseek] 'poetry install' detected. Testing {} locked package(s) from poetry.lock...",
+            lock_packages.len()
+        );
+
+        for (pkg_name, locked_version) in lock_packages {
+            if !scan_package_versions(&eye, &pkg_name, &locked_version).await {
+                std::process::exit(1);
+            }
+        }
+
+        println!(
+            "\n✅ [gyrseek] Clear behavioral report for poetry lock package set. Forwarding command safely..."
+        );
+        eye.forward_original_command();
+        return;
+    }
+
     if eye.manager == "uv"
         && eye.passthrough_args.get(1).map(String::as_str) == Some("pip")
         && eye.passthrough_args.get(2).map(String::as_str) == Some("sync")
@@ -526,6 +616,35 @@ pub async fn run(args: Vec<String>) {
         }
 
         println!("\n✅ [gyrseek] Clear behavioral report for all locked packages. Forwarding command safely...");
+        eye.forward_original_command();
+        return;
+    }
+
+    if (eye.manager == "pip" || eye.manager == "pip3")
+        && eye.passthrough_args.get(1).map(String::as_str) == Some("install")
+    {
+        let pip_packages = eye.parse_pip_install_packages();
+        if pip_packages.is_empty() {
+            println!(
+                "❌ [gyrseek] 'pip install' detected but no parseable package entries were found. Failing closed."
+            );
+            std::process::exit(1);
+        }
+
+        println!(
+            "🛡️ [gyrseek] '{}' install detected. Testing {} package(s)...",
+            eye.manager,
+            pip_packages.len()
+        );
+
+        for (pkg_name, maybe_version) in pip_packages {
+            let tgt_version = maybe_version.unwrap_or_else(|| "latest".to_string());
+            if !scan_package_versions(&eye, &pkg_name, &tgt_version).await {
+                std::process::exit(1);
+            }
+        }
+
+        println!("\n✅ [gyrseek] Clear behavioral report for pip package set. Forwarding command safely...");
         eye.forward_original_command();
         return;
     }
