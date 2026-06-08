@@ -222,6 +222,25 @@ fn parses_npm_install_multi_packages_from_args() {
 }
 
 #[test]
+fn parses_npm_update_multi_packages_from_args() {
+    let args = vec![
+        "npm".to_string(),
+        "update".to_string(),
+        "lodash".to_string(),
+        "typescript".to_string(),
+    ];
+
+    let parsed = parse_npm_install_packages_from_args(&args);
+    assert_eq!(
+        parsed,
+        vec![
+            ("lodash".to_string(), None),
+            ("typescript".to_string(), None),
+        ]
+    );
+}
+
+#[test]
 fn parses_npm_packages_from_package_json_content() {
     let package_json = r#"
 {

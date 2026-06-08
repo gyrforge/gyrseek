@@ -262,7 +262,10 @@ pub fn parse_npm_install_packages_from_args(args: &[String]) -> Vec<(String, Opt
     if args.first().map(String::as_str) != Some("npm") {
         return Vec::new();
     }
-    if args.get(1).map(String::as_str) != Some("install") && args.get(1).map(String::as_str) != Some("i") {
+    if args.get(1).map(String::as_str) != Some("install")
+        && args.get(1).map(String::as_str) != Some("i")
+        && args.get(1).map(String::as_str) != Some("update")
+    {
         return Vec::new();
     }
 
@@ -341,7 +344,10 @@ pub fn parse_package_details(manager: &str, args: &[String]) -> (Option<String>,
                 None
             }
         } else if manager == "npm" {
-            if args.get(1).map(String::as_str) == Some("install") || args.get(1).map(String::as_str) == Some("i") {
+            if args.get(1).map(String::as_str) == Some("install")
+                || args.get(1).map(String::as_str) == Some("i")
+                || args.get(1).map(String::as_str) == Some("update")
+            {
                 Some(2)
             } else {
                 None
@@ -396,7 +402,9 @@ pub fn should_enforce_package_detection(manager: &str, args: &[String]) -> bool 
     }
 
     if manager == "npm" {
-        return args.get(1).map(String::as_str) == Some("install") || args.get(1).map(String::as_str) == Some("i");
+        return args.get(1).map(String::as_str) == Some("install")
+            || args.get(1).map(String::as_str) == Some("i")
+            || args.get(1).map(String::as_str) == Some("update");
     }
 
     false

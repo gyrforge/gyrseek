@@ -276,12 +276,14 @@ pub async fn run(args: Vec<String>) {
 
     if eye.manager == "npm"
         && (eye.passthrough_args.get(1).map(String::as_str) == Some("install")
-            || eye.passthrough_args.get(1).map(String::as_str) == Some("i"))
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("i")
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("update"))
     {
         let npm_packages = eye.parse_npm_install_packages();
         if npm_packages.is_empty() {
             println!(
-                "❌ [gyrseek] 'npm install' detected but no parseable package entries were found. Failing closed."
+                "❌ [gyrseek] 'npm {}' detected but no parseable package entries were found. Failing closed.",
+                eye.passthrough_args.get(1).map(String::as_str).unwrap_or("install")
             );
             std::process::exit(1);
         }

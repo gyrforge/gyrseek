@@ -8,7 +8,7 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
 2. The run function in src/lib.rs routes by manager and subcommand.
 3. Supported command paths are either:
    - single-target scans (for example uv add pkg)
-  - bulk scans (for example uv sync, uv pip sync, uv lock update flags, poetry install or poetry update, pip or pip3 install with multiple targets, npm install or npm i)
+  - bulk scans (for example uv sync, uv pip sync, uv lock update flags, poetry install or poetry update, pip or pip3 install with multiple targets, npm install or npm i or npm update)
 4. If detection and scanning pass, the original command is forwarded.
 5. If anomaly or required detection failure occurs, execution exits non-zero (fail-closed).
 

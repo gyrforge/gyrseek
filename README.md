@@ -12,6 +12,7 @@ It currently supports:
 - `pip3 install`
 - `poetry add|update|install`
 - `npm install` / `npm i`
+- `npm update`
 - git clone behavior simulation tests
 
 ## How It Works
@@ -112,6 +113,8 @@ cargo run -- npm install lodash
 cargo run -- npm install lodash express
 cargo run -- npm i lodash@4.17.21
 cargo run -- npm install
+cargo run -- npm update
+cargo run -- npm update lodash typescript
 ```
 
 ## Important Notes
@@ -125,7 +128,7 @@ cargo run -- npm install
 - `uv lock -P/--upgrade-package` scans all explicitly targeted update packages before forwarding.
 - `pip install` and `pip3 install` scan all parseable package entries, including requirements files passed with `-r/--requirements`.
 - `poetry install` and `poetry update` scan all packages found in `poetry.lock` before forwarding.
-- `npm install` and `npm i` scan all explicit package targets; when no targets are provided, they scan dependencies declared in `package.json`.
+- `npm install`, `npm i`, and `npm update` scan all explicit package targets; when no targets are provided, they scan dependencies declared in `package.json`.
 - Version selection is currently sorted lexicographically, not semantic-version aware.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
 - For supported install/sync command paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
