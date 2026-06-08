@@ -27,9 +27,13 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - fetch_history queries PyPI for Python packages.
   - fetch_history queries npm registry for npm packages.
 - Behavior capture:
-  - trace_sandbox_install runs isolated installs under strace and captures connection IPs.
+  - trace_sandbox_install_batch runs via SandboxRunner backend and captures per-version connection IPs from trace output.
+  - Docker backend can execute current and baseline probes in one container session for a package.
+  - build_runner_from_env selects backend mode (`docker` default, `host` fallback).
 - Anomaly decision:
   - find_new_connections returns endpoints seen in current but not in baseline.
+- In-run optimization:
+  - run keeps an in-memory cache keyed by manager/package/version to avoid repeating identical scans in one execution.
 
 ## Decision Model
 For each scanned package:
@@ -45,13 +49,15 @@ gyrseek blocks instead of passthrough when package detection is expected for sup
 ## Current Limitations
 - Version ordering is lexicographic, not semantic-version aware.
 - git clone runtime interception is not enabled yet (simulation tests only).
-- strace availability and output format are assumed.
+- Docker mode assumes Docker CLI availability; host mode assumes strace availability and is less safe.
+- Trace extraction still assumes current strace output patterns.
 
 ## Main Files
 - src/main.rs: binary entrypoint
 - src/lib.rs: routing and enforcement orchestration
 - src/parsing.rs: command, lockfile, and requirements parsing
 - src/scanning.rs: registry history lookup and behavior scanning
+- src/sandbox.rs: sandbox backend abstraction and mode selection
 - tests/parser_tests.rs: parser behavior coverage
 - tests/behavior_tests.rs: anomaly decision simulation coverage
 - tests/git_clone_behavior_tests.rs: git-clone simulation coverage

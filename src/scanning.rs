@@ -1,8 +1,9 @@
-use std::collections::HashSet;
-use std::process::{Command, Stdio};
+use std::collections::{HashMap, HashSet};
 
 use regex::Regex;
 use serde::Deserialize;
+
+use crate::sandbox::SandboxRunner;
 
 #[derive(Deserialize, Debug)]
 struct PyPiResponse {
@@ -71,56 +72,28 @@ pub async fn fetch_history(manager: &str, package: &str, target_v: &str) -> (Str
     (target_v.to_string(), None, None)
 }
 
-pub fn trace_sandbox_install(manager: &str, package: &str, version: &str) -> HashSet<String> {
-    let mut ips = HashSet::new();
-    let temp_dir = tempfile::tempdir().unwrap();
-    let target_path = temp_dir.path().to_str().unwrap();
+pub fn trace_sandbox_install_batch(
+    runner: &dyn SandboxRunner,
+    manager: &str,
+    package: &str,
+    versions: &[String],
+) -> Result<HashMap<String, HashSet<String>>, String> {
+    let traces = runner.trace_install_batch(manager, package, versions)?;
+    let re = Regex::new(r#"sin_addr=inet_addr\("([\d.]+)"\)"#).unwrap();
+    let mut by_version: HashMap<String, HashSet<String>> = HashMap::new();
 
-    let cmd_args = if manager == "npm" {
-        vec![
-            "-f".to_string(),
-            "-e".to_string(),
-            "trace=network,execve".to_string(),
-            "npm".to_string(),
-            "install".to_string(),
-            format!("{}@{}", package, version),
-            "--prefix".to_string(),
-            target_path.to_string(),
-            "--no-save".to_string(),
-        ]
-    } else {
-        vec![
-            "-f".to_string(),
-            "-e".to_string(),
-            "trace=network,execve".to_string(),
-            "uv".to_string(),
-            "pip".to_string(),
-            "install".to_string(),
-            format!("{}=={}", package, version),
-            "--target".to_string(),
-            target_path.to_string(),
-            "--no-cache".to_string(),
-        ]
-    };
-
-    let output = Command::new("strace")
-        .args(&cmd_args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::null())
-        .output();
-
-    if let Ok(res) = output {
-        let stderr_str = String::from_utf8_lossy(&res.stderr);
-        let re = Regex::new(r#"sin_addr=inet_addr\("([\d.]+)"\)"#).unwrap();
+    for (version, stderr_str) in traces {
+        let mut ips = HashSet::new();
         for cap in re.captures_iter(&stderr_str) {
             ips.insert(cap[1].to_string());
         }
+        by_version.insert(version, ips);
     }
 
-    ips
+    Ok(by_version)
 }
 
-pub async fn scan_package_versions(manager: &str, pkg_name: &str, tgt_version: &str) -> bool {
+pub async fn scan_package_versions(runner: &dyn SandboxRunner, manager: &str, pkg_name: &str, tgt_version: &str) -> bool {
     let (v_curr, v_m1, v_m2) = fetch_history(manager, pkg_name, tgt_version).await;
     let baseline_m1 = v_m1.clone().unwrap_or_else(|| "n/a".to_string());
     let baseline_m2 = v_m2.clone().unwrap_or_else(|| "n/a".to_string());
@@ -129,14 +102,57 @@ pub async fn scan_package_versions(manager: &str, pkg_name: &str, tgt_version: &
         pkg_name, v_curr, baseline_m1, baseline_m2
     );
 
-    let ips_curr = trace_sandbox_install(manager, pkg_name, &v_curr);
+    let mut requested_versions = vec![v_curr.clone()];
+    if let Some(ref v) = v_m1 {
+        requested_versions.push(v.clone());
+    }
+    if let Some(ref v) = v_m2 {
+        requested_versions.push(v.clone());
+    }
+
+    let traces_by_version = match trace_sandbox_install_batch(runner, manager, pkg_name, &requested_versions) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("❌ [gyrseek] Sandbox execution failed for '{}': {}", pkg_name, e);
+            return false;
+        }
+    };
+
+    let ips_curr = match traces_by_version.get(&v_curr) {
+        Some(v) => v.clone(),
+        None => {
+            println!(
+                "❌ [gyrseek] Sandbox trace missing for '{}@{}'.",
+                pkg_name, v_curr
+            );
+            return false;
+        }
+    };
 
     let mut baseline_ips = HashSet::new();
     if let Some(ref v) = v_m1 {
-        baseline_ips.extend(trace_sandbox_install(manager, pkg_name, v));
+        match traces_by_version.get(v) {
+            Some(found) => baseline_ips.extend(found.iter().cloned()),
+            None => {
+                println!(
+                    "❌ [gyrseek] Sandbox trace missing for baseline '{}@{}'.",
+                    pkg_name, v
+                );
+                return false;
+            }
+        }
     }
     if let Some(ref v) = v_m2 {
-        baseline_ips.extend(trace_sandbox_install(manager, pkg_name, v));
+        match traces_by_version.get(v) {
+            Some(found) => baseline_ips.extend(found.iter().cloned()),
+            None => {
+                println!(
+                    "❌ [gyrseek] Sandbox trace missing for baseline '{}@{}'.",
+                    pkg_name, v
+                );
+                return false;
+            }
+        }
     }
 
     let new_connections = find_new_connections(&ips_curr, &baseline_ips);
@@ -144,8 +160,8 @@ pub async fn scan_package_versions(manager: &str, pkg_name: &str, tgt_version: &
     if !new_connections.is_empty() {
         println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
         println!(
-            "The requested version tried contacting new endpoints not seen in previous versions: {:?}",
-            new_connections
+            "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({} and {}): {:?}",
+            pkg_name, v_curr, baseline_m1, baseline_m2, new_connections
         );
         println!("Aborting host operation securely.");
         return false;

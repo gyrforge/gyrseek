@@ -3,7 +3,13 @@
 ## Local Setup
 1. Install Rust toolchain.
 2. Ensure required package managers are available for your target flows: uv, pip or pip3, poetry, npm.
-3. Ensure strace is available in PATH.
+3. Ensure Docker CLI is available in PATH for default sandbox mode.
+4. If using host mode (`GYRSEEK_SANDBOX=host`), ensure strace is available in PATH.
+
+## Sandbox Mode
+- Default: `GYRSEEK_SANDBOX=docker`
+- Fallback: `GYRSEEK_SANDBOX=host` (reduced safety)
+- Initialization failure is fail-closed (process exits non-zero).
 
 ## Build and Test
 - Build debug: cargo build

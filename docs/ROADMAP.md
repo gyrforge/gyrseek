@@ -9,11 +9,13 @@
 - Add runtime git clone interception path with safe heuristics.
 - Improve baseline selection strategy when fewer historical versions exist.
 - Add structured logging mode for CI and machine parsing.
+- Explore cross-package batching in sandbox sessions while keeping package-version attribution deterministic.
 
 ## Hardening
 - Improve resilience to strace output variations.
 - Improve error taxonomy and actionable user messages.
 - Add timeout and retry controls for registry lookups.
+- Add microVM sandbox backend (strict mode) beyond Docker and host modes.
 
 ## Collaboration
 - Keep .copilot/Agents.md and README.md updated on every change.

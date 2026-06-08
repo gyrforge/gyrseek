@@ -11,6 +11,7 @@ This file stores persistent working memory and agent instructions for this repos
   - src/lib.rs (command routing and orchestration)
   - src/parsing.rs (parsing helpers)
   - src/scanning.rs (registry lookup and anomaly scanning)
+  - src/sandbox.rs (sandbox runner backends and mode selection)
 - Test strategy:
   - Integration tests under tests/
   - Run with cargo test
@@ -27,6 +28,10 @@ This file stores persistent working memory and agent instructions for this repos
   - pip/pip3 install scans multi-package inputs, including `-r/--requirements` files
   - poetry install and poetry update scan all locked packages from poetry.lock
   - npm install/npm i/npm update scans multi-package inputs and package.json dependencies when no explicit package args are given
+  - Sandbox execution mode is selected via GYRSEEK_SANDBOX (`docker` default, `host` fallback)
+  - Sandbox initialization failures fail closed (non-zero exit)
+  - Docker sandbox batches current and baseline version probes for a package in one container session while preserving version-level attribution
+  - In-run cache reuses scan results for repeated manager/package/version probes within the same execution
   - Fail-closed when package detection is expected but missing
 
 ## Mandatory Update Policy (After Every Change)

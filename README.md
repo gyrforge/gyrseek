@@ -26,6 +26,7 @@ It currently supports:
    - current version
    - previous version (`baseline-1`)
    - two versions back (`baseline-2`)
+   - probes may run in one sandbox session per package, while preserving per-version trace attribution
    - for bulk commands (`uv sync`, `uv pip sync`), apply this per detected package
 5. Compare observed network endpoints:
    - New endpoints found: block and exit with error
@@ -61,7 +62,28 @@ Current scope:
 - Rust toolchain (`cargo`, `rustc`)
 - Network access to package registries
 - Package managers you want to wrap (`uv`, `pip`, `poetry`, `npm`)
-- `strace` available on your system PATH (used for network syscall tracing)
+- Docker CLI available on your system PATH (default sandbox mode)
+- `strace` available in host mode (`GYRSEEK_SANDBOX=host`)
+
+## Sandbox Modes
+
+`gyrseek` now runs scan probes through a `SandboxRunner` backend selected by environment variable:
+
+- Default: `GYRSEEK_SANDBOX=docker`
+- Alternative (reduced safety): `GYRSEEK_SANDBOX=host`
+
+Behavior:
+
+- If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
+- Docker mode is intended as the safer default.
+- Host mode exists for local development or environments without Docker.
+
+Examples:
+
+```bash
+GYRSEEK_SANDBOX=docker cargo run -- npm install
+GYRSEEK_SANDBOX=host cargo run -- pip3 install -r requirements.txt
+```
 
 ## Build
 
@@ -120,6 +142,9 @@ cargo run -- npm update lodash typescript
 ## Important Notes
 
 - `gyrseek` forwards your command in the current working directory.
+- Scanning now runs via a sandbox backend; default mode is Docker.
+- Repeated package-version probes within the same CLI execution are cached in-memory and reused.
+- Docker mode batches current and baseline probes for one package into a single sandbox/container run.
 - For tools like `poetry` or `npm`, run it inside a project directory containing the expected project files (`pyproject.toml`, `package.json`, etc.).
 - `uv sync` scans all packages found in `uv.lock` before forwarding.
 - `uv pip sync` scans all parseable packages found in its source files before forwarding.
@@ -179,6 +204,7 @@ Repository policy: after each change, update both `.copilot/Agents.md` and `READ
 - `src/lib.rs`: command routing and orchestration
 - `src/parsing.rs`: command and lock or requirements parsing helpers
 - `src/scanning.rs`: registry lookup and behavior scanning engine
+- `src/sandbox.rs`: sandbox backends and mode selection
 - `tests/parser_tests.rs`: command parsing tests
 - `tests/behavior_tests.rs`: behavior anomaly simulation tests
 - `tests/git_clone_behavior_tests.rs`: git clone behavior simulation tests

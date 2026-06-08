@@ -1,6 +1,8 @@
 mod parsing;
+mod sandbox;
 mod scanning;
 
+use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
 
@@ -17,6 +19,7 @@ pub use parsing::{
 pub use scanning::find_new_connections;
 
 use parsing::{parse_package_details, should_enforce_package_detection};
+use sandbox::{build_runner_from_env, SandboxRunner};
 use scanning::scan_package_versions;
 
 pub struct GyrSeek {
@@ -105,8 +108,37 @@ impl GyrSeek {
     }
 }
 
+async fn scan_with_cache(
+    cache: &mut HashMap<String, bool>,
+    runner: &dyn SandboxRunner,
+    manager: &str,
+    pkg_name: &str,
+    tgt_version: &str,
+) -> bool {
+    let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
+    if let Some(cached) = cache.get(&key) {
+        println!(
+            "🧠 [gyrseek] Cache hit for '{}@{}' in current run.",
+            pkg_name, tgt_version
+        );
+        return *cached;
+    }
+
+    let result = scan_package_versions(runner, manager, pkg_name, tgt_version).await;
+    cache.insert(key, result);
+    result
+}
+
 pub async fn run(args: Vec<String>) {
     let eye = GyrSeek::new(args);
+    let mut scan_cache: HashMap<String, bool> = HashMap::new();
+    let runner = match build_runner_from_env() {
+        Ok(r) => r,
+        Err(e) => {
+            println!("❌ [gyrseek] Sandbox initialization failed: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("lock") {
         let upgrade_packages = eye.parse_uv_lock_upgrade_packages();
@@ -119,7 +151,7 @@ pub async fn run(args: Vec<String>) {
             );
 
             for pkg_name in upgrade_packages {
-                if !scan_package_versions(&eye.manager, &pkg_name, "latest").await {
+                if !scan_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, &pkg_name, "latest").await {
                     std::process::exit(1);
                 }
             }
@@ -144,7 +176,15 @@ pub async fn run(args: Vec<String>) {
             );
 
             for (pkg_name, locked_version) in lock_packages {
-                if !scan_package_versions(&eye.manager, &pkg_name, &locked_version).await {
+                if !scan_with_cache(
+                    &mut scan_cache,
+                    runner.as_ref(),
+                    &eye.manager,
+                    &pkg_name,
+                    &locked_version,
+                )
+                .await
+                {
                     std::process::exit(1);
                 }
             }
@@ -179,7 +219,15 @@ pub async fn run(args: Vec<String>) {
         );
 
         for (pkg_name, locked_version) in lock_packages {
-            if !scan_package_versions(&eye.manager, &pkg_name, &locked_version).await {
+            if !scan_with_cache(
+                &mut scan_cache,
+                runner.as_ref(),
+                &eye.manager,
+                &pkg_name,
+                &locked_version,
+            )
+            .await
+            {
                 std::process::exit(1);
             }
         }
@@ -210,7 +258,15 @@ pub async fn run(args: Vec<String>) {
 
         for (pkg_name, maybe_version) in sync_packages {
             let tgt_version = maybe_version.unwrap_or_else(|| "latest".to_string());
-            if !scan_package_versions(&eye.manager, &pkg_name, &tgt_version).await {
+            if !scan_with_cache(
+                &mut scan_cache,
+                runner.as_ref(),
+                &eye.manager,
+                &pkg_name,
+                &tgt_version,
+            )
+            .await
+            {
                 std::process::exit(1);
             }
         }
@@ -235,7 +291,15 @@ pub async fn run(args: Vec<String>) {
         );
 
         for (pkg_name, locked_version) in lock_packages {
-            if !scan_package_versions(&eye.manager, &pkg_name, &locked_version).await {
+            if !scan_with_cache(
+                &mut scan_cache,
+                runner.as_ref(),
+                &eye.manager,
+                &pkg_name,
+                &locked_version,
+            )
+            .await
+            {
                 std::process::exit(1);
             }
         }
@@ -264,7 +328,15 @@ pub async fn run(args: Vec<String>) {
 
         for (pkg_name, maybe_version) in pip_packages {
             let tgt_version = maybe_version.unwrap_or_else(|| "latest".to_string());
-            if !scan_package_versions(&eye.manager, &pkg_name, &tgt_version).await {
+            if !scan_with_cache(
+                &mut scan_cache,
+                runner.as_ref(),
+                &eye.manager,
+                &pkg_name,
+                &tgt_version,
+            )
+            .await
+            {
                 std::process::exit(1);
             }
         }
@@ -296,7 +368,15 @@ pub async fn run(args: Vec<String>) {
 
         for (pkg_name, maybe_version) in npm_packages {
             let tgt_version = maybe_version.unwrap_or_else(|| "latest".to_string());
-            if !scan_package_versions(&eye.manager, &pkg_name, &tgt_version).await {
+            if !scan_with_cache(
+                &mut scan_cache,
+                runner.as_ref(),
+                &eye.manager,
+                &pkg_name,
+                &tgt_version,
+            )
+            .await
+            {
                 std::process::exit(1);
             }
         }
@@ -322,7 +402,15 @@ pub async fn run(args: Vec<String>) {
     let pkg_name = package.unwrap();
     let tgt_version = target_v.unwrap_or_else(|| "latest".to_string());
 
-    if !scan_package_versions(&eye.manager, &pkg_name, &tgt_version).await {
+    if !scan_with_cache(
+        &mut scan_cache,
+        runner.as_ref(),
+        &eye.manager,
+        &pkg_name,
+        &tgt_version,
+    )
+    .await
+    {
         std::process::exit(1);
     }
 
