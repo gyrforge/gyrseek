@@ -5,6 +5,8 @@ use std::fs;
 use std::process::Command;
 
 pub use parsing::{
+    parse_npm_install_packages_from_args,
+    parse_npm_packages_from_package_json_content,
     parse_pip_install_packages_from_args,
     parse_poetry_lock_packages_from_content,
     parse_pylock_packages_from_content,
@@ -91,6 +93,10 @@ impl GyrSeek {
 
     fn parse_pip_install_packages(&self) -> Vec<(String, Option<String>)> {
         parse_pip_install_packages_from_args(&self.passthrough_args)
+    }
+
+    fn parse_npm_install_packages(&self) -> Vec<(String, Option<String>)> {
+        parse_npm_install_packages_from_args(&self.passthrough_args)
     }
 }
 
@@ -201,6 +207,36 @@ pub async fn run(args: Vec<String>) {
         }
 
         println!("\n✅ [gyrseek] Clear behavioral report for pip package set. Forwarding command safely...");
+        eye.forward_original_command();
+        return;
+    }
+
+    if eye.manager == "npm"
+        && (eye.passthrough_args.get(1).map(String::as_str) == Some("install")
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("i"))
+    {
+        let npm_packages = eye.parse_npm_install_packages();
+        if npm_packages.is_empty() {
+            println!(
+                "❌ [gyrseek] 'npm install' detected but no parseable package entries were found. Failing closed."
+            );
+            std::process::exit(1);
+        }
+
+        println!(
+            "🛡️ [gyrseek] '{}' detected. Testing {} package(s)...",
+            eye.passthrough_args.get(1).map(String::as_str).unwrap_or("install"),
+            npm_packages.len()
+        );
+
+        for (pkg_name, maybe_version) in npm_packages {
+            let tgt_version = maybe_version.unwrap_or_else(|| "latest".to_string());
+            if !scan_package_versions(&eye.manager, &pkg_name, &tgt_version).await {
+                std::process::exit(1);
+            }
+        }
+
+        println!("\n✅ [gyrseek] Clear behavioral report for npm package set. Forwarding command safely...");
         eye.forward_original_command();
         return;
     }

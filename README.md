@@ -106,7 +106,9 @@ cargo run -- poetry update pytest
 
 ```bash
 cargo run -- npm install lodash
+cargo run -- npm install lodash express
 cargo run -- npm i lodash@4.17.21
+cargo run -- npm install
 ```
 
 ## Important Notes
@@ -118,6 +120,7 @@ cargo run -- npm i lodash@4.17.21
 - `uv pip sync` currently supports requirements-style files and dedicated `pylock.toml` parsing.
 - `pip install` and `pip3 install` scan all parseable package entries, including requirements files passed with `-r/--requirements`.
 - `poetry install` scans all packages found in `poetry.lock` before forwarding.
+- `npm install` and `npm i` scan all explicit package targets; when no targets are provided, they scan dependencies declared in `package.json`.
 - Version selection is currently sorted lexicographically, not semantic-version aware.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
 - For supported install/sync command paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.

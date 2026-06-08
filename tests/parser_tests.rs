@@ -1,4 +1,6 @@
 use gyrseek::{
+    parse_npm_install_packages_from_args,
+    parse_npm_packages_from_package_json_content,
     parse_pip_install_packages_from_args,
     parse_poetry_lock_packages_from_content,
     parse_pylock_packages_from_content,
@@ -195,6 +197,52 @@ version = "2.31.0"
         vec![
             ("pytest".to_string(), "9.0.3".to_string()),
             ("requests".to_string(), "2.31.0".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn parses_npm_install_multi_packages_from_args() {
+    let args = vec![
+        "npm".to_string(),
+        "install".to_string(),
+        "lodash@4.17.21".to_string(),
+        "express".to_string(),
+    ];
+
+    let parsed = parse_npm_install_packages_from_args(&args);
+    assert_eq!(
+        parsed,
+        vec![
+            ("lodash".to_string(), Some("4.17.21".to_string())),
+            ("express".to_string(), None),
+        ]
+    );
+}
+
+#[test]
+fn parses_npm_packages_from_package_json_content() {
+    let package_json = r#"
+{
+  "name": "demo",
+  "dependencies": {
+    "lodash": "^4.17.21",
+    "axios": "1.8.2"
+  },
+  "devDependencies": {
+    "vitest": "~1.6.0"
+  }
+}
+"#;
+
+    let mut parsed = parse_npm_packages_from_package_json_content(package_json);
+    parsed.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        parsed,
+        vec![
+            ("axios".to_string(), Some("1.8.2".to_string())),
+            ("lodash".to_string(), None),
+            ("vitest".to_string(), None),
         ]
     );
 }

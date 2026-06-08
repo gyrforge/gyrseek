@@ -25,6 +25,7 @@ This file stores persistent working memory and agent instructions for this repos
   - uv pip sync scans packages from requirements-style files and pylock.toml
   - pip/pip3 install scans multi-package inputs, including `-r/--requirements` files
   - poetry install scans all locked packages from poetry.lock
+  - npm install/npm i scans multi-package inputs and package.json dependencies when no explicit package args are given
   - Fail-closed when package detection is expected but missing
 
 ## Mandatory Update Policy (After Every Change)

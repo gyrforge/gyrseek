@@ -209,6 +209,83 @@ fn parse_npm_spec(arg: &str) -> (String, Option<String>) {
     (arg.to_string(), None)
 }
 
+fn normalize_npm_version_spec(spec: &str) -> Option<String> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.starts_with("file:")
+        || trimmed.starts_with("git+")
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("workspace:")
+        || trimmed == "latest"
+    {
+        return None;
+    }
+
+    if trimmed.starts_with('^')
+        || trimmed.starts_with('~')
+        || trimmed.starts_with('>')
+        || trimmed.starts_with('<')
+        || trimmed.starts_with('=')
+        || trimmed.starts_with('*')
+    {
+        return None;
+    }
+
+    Some(trimmed.to_string())
+}
+
+pub fn parse_npm_packages_from_package_json_content(content: &str) -> Vec<(String, Option<String>)> {
+    let mut packages = Vec::new();
+    let parsed: serde_json::Value = match serde_json::from_str(content) {
+        Ok(value) => value,
+        Err(_) => return packages,
+    };
+
+    for section in ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] {
+        if let Some(obj) = parsed.get(section).and_then(serde_json::Value::as_object) {
+            for (name, version_val) in obj {
+                if let Some(spec) = version_val.as_str() {
+                    packages.push((name.to_string(), normalize_npm_version_spec(spec)));
+                }
+            }
+        }
+    }
+
+    packages
+}
+
+pub fn parse_npm_install_packages_from_args(args: &[String]) -> Vec<(String, Option<String>)> {
+    if args.first().map(String::as_str) != Some("npm") {
+        return Vec::new();
+    }
+    if args.get(1).map(String::as_str) != Some("install") && args.get(1).map(String::as_str) != Some("i") {
+        return Vec::new();
+    }
+
+    let mut packages = Vec::new();
+    for arg in args.iter().skip(2) {
+        if arg.starts_with('-') {
+            continue;
+        }
+        let (name, version) = parse_npm_spec(arg);
+        packages.push((name, version.and_then(|v| normalize_npm_version_spec(&v))));
+    }
+
+    if !packages.is_empty() {
+        return packages;
+    }
+
+    if let Ok(content) = fs::read_to_string("package.json") {
+        return parse_npm_packages_from_package_json_content(&content);
+    }
+
+    Vec::new()
+}
+
 pub fn parse_package_details(manager: &str, args: &[String]) -> (Option<String>, Option<String>) {
     if manager == "uv" || manager == "pip" || manager == "pip3" || manager == "poetry" || manager == "npm" {
         let pkg_arg_start = if manager == "uv" {
