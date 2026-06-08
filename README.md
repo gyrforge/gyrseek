@@ -5,6 +5,8 @@
 It currently supports:
 - `uv add`
 - `uv pip install`
+- `uv pip sync <SRC_FILE>...`
+- `uv sync`
 - `pip install`
 - `pip3 install`
 - `poetry add|update|install`
@@ -22,9 +24,12 @@ It currently supports:
    - current version
    - previous version (`baseline-1`)
    - two versions back (`baseline-2`)
+   - for bulk commands (`uv sync`, `uv pip sync`), apply this per detected package
 5. Compare observed network endpoints:
    - New endpoints found: block and exit with error
    - No new endpoints: forward your original command
+6. Fail-closed behavior:
+   - if package detection is expected but no package entries are detected, block and exit
 
 ## Network Behavior Detection
 
@@ -87,6 +92,9 @@ or with release binary:
 ```bash
 cargo run -- uv add pytest
 cargo run -- uv pip install requests==2.31.0
+cargo run -- uv pip sync requirements.txt
+cargo run -- uv pip sync pylock.toml
+cargo run -- uv sync
 cargo run -- pip install flask
 cargo run -- pip3 install django==5.0.6
 cargo run -- poetry update pytest
@@ -103,8 +111,12 @@ cargo run -- npm i lodash@4.17.21
 
 - `gyrseek` forwards your command in the current working directory.
 - For tools like `poetry` or `npm`, run it inside a project directory containing the expected project files (`pyproject.toml`, `package.json`, etc.).
+- `uv sync` scans all packages found in `uv.lock` before forwarding.
+- `uv pip sync` scans all parseable packages found in its source files before forwarding.
+- `uv pip sync` currently supports requirements-style files and dedicated `pylock.toml` parsing.
 - Version selection is currently sorted lexicographically, not semantic-version aware.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
+- For supported install/sync command paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
 
 ## Manual Test Runs
 
@@ -134,6 +146,17 @@ Show test output (`println!`) while running tests:
 ```bash
 cargo test -- --nocapture
 ```
+
+## Collaboration and Handoff
+
+For multi-developer and multi-LLM collaboration, use these docs together:
+
+- docs/ARCHITECTURE.md: control-flow and component map
+- docs/DEV_GUIDE.md: contributor workflow and change hygiene
+- docs/ROADMAP.md: planned improvements and known next steps
+- .copilot/Agents.md: repository memory and mandatory update policy
+
+Repository policy: after each change, update both `.copilot/Agents.md` and `README.md`.
 
 ## Project Layout
 

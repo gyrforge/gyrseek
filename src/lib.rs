@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs;
 use std::process::{Command, Stdio};
 
 use regex::Regex;
@@ -22,6 +23,142 @@ pub struct GyrSeek {
 /// Returns connections present in the current version but absent in baseline versions.
 pub fn find_new_connections(ips_curr: &HashSet<String>, baseline_ips: &HashSet<String>) -> Vec<String> {
     ips_curr.difference(baseline_ips).cloned().collect()
+}
+
+fn parse_toml_quoted_value(line: &str, key: &str) -> Option<String> {
+    let prefix = format!("{} = \"", key);
+    let rest = line.strip_prefix(&prefix)?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+pub fn parse_uv_lock_packages_from_content(content: &str) -> Vec<(String, String)> {
+    let mut packages = Vec::new();
+    let mut in_package = false;
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+
+        if line == "[[package]]" {
+            if let (Some(n), Some(v)) = (name.take(), version.take()) {
+                packages.push((n, v));
+            }
+            in_package = true;
+            name = None;
+            version = None;
+            continue;
+        }
+
+        if !in_package {
+            continue;
+        }
+
+        if line.starts_with("[[") && line != "[[package]]" {
+            if let (Some(n), Some(v)) = (name.take(), version.take()) {
+                packages.push((n, v));
+            }
+            in_package = false;
+            continue;
+        }
+
+        if name.is_none() {
+            name = parse_toml_quoted_value(line, "name");
+            continue;
+        }
+
+        if version.is_none() {
+            version = parse_toml_quoted_value(line, "version");
+        }
+    }
+
+    if let (Some(n), Some(v)) = (name, version) {
+        packages.push((n, v));
+    }
+
+    packages
+}
+
+pub fn parse_pylock_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
+    let mut packages = Vec::new();
+    let mut in_package = false;
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+
+        if line == "[[package]]" || line == "[[packages]]" {
+            if let Some(n) = name.take() {
+                packages.push((n, version.take()));
+            }
+            in_package = true;
+            name = None;
+            version = None;
+            continue;
+        }
+
+        if !in_package {
+            continue;
+        }
+
+        if line.starts_with("[[") && line != "[[package]]" && line != "[[packages]]" {
+            if let Some(n) = name.take() {
+                packages.push((n, version.take()));
+            }
+            in_package = false;
+            continue;
+        }
+
+        if name.is_none() {
+            name = parse_toml_quoted_value(line, "name");
+            continue;
+        }
+
+        if version.is_none() {
+            version = parse_toml_quoted_value(line, "version");
+        }
+    }
+
+    if let Some(n) = name {
+        packages.push((n, version));
+    }
+
+    packages
+}
+
+fn parse_requirements_spec(spec: &str) -> Option<(String, Option<String>)> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+
+    let base = trimmed.split_whitespace().next().unwrap_or(trimmed);
+
+    if let Some((name, version)) = base.split_once("==") {
+        if !name.is_empty() && !version.is_empty() {
+            return Some((name.to_string(), Some(version.to_string())));
+        }
+    }
+
+    if base.starts_with('-') || base.starts_with('.') || base.contains("://") {
+        return None;
+    }
+
+    Some((base.to_string(), None))
+}
+
+pub fn parse_requirements_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
+    let mut packages = Vec::new();
+
+    for line in content.lines() {
+        if let Some(pkg) = parse_requirements_spec(line) {
+            packages.push(pkg);
+        }
+    }
+
+    packages
 }
 
 fn parse_npm_spec(arg: &str) -> (String, Option<String>) {
@@ -238,22 +375,42 @@ impl GyrSeek {
 
         let _ = child.wait();
     }
-}
 
-pub async fn run(args: Vec<String>) {
-    let eye = GyrSeek::new(args);
+    fn parse_uv_lock_packages(&self) -> Vec<(String, String)> {
+        let lock_content = match fs::read_to_string("uv.lock") {
+            Ok(content) => content,
+            Err(_) => return Vec::new(),
+        };
 
-    let (package, target_v) = eye.parse_package_details();
-
-    if package.is_none() {
-        eye.forward_original_command();
-        return;
+        parse_uv_lock_packages_from_content(&lock_content)
     }
 
-    let pkg_name = package.unwrap();
-    let tgt_version = target_v.unwrap_or_else(|| "latest".to_string());
+    fn parse_uv_pip_sync_packages(&self) -> Vec<(String, Option<String>)> {
+        let mut packages = Vec::new();
+        for arg in self.passthrough_args.iter().skip(3) {
+            if arg.starts_with('-') {
+                continue;
+            }
 
-    let (v_curr, v_m1, v_m2) = eye.fetch_history(&pkg_name, &tgt_version).await;
+            if !fs::metadata(arg).map(|m| m.is_file()).unwrap_or(false) {
+                continue;
+            }
+
+            if let Ok(content) = fs::read_to_string(arg) {
+                if arg.ends_with("pylock.toml") {
+                    packages.extend(parse_pylock_packages_from_content(&content));
+                } else {
+                    packages.extend(parse_requirements_packages_from_content(&content));
+                }
+            }
+        }
+
+        packages
+    }
+}
+
+async fn scan_package_versions(eye: &GyrSeek, pkg_name: &str, tgt_version: &str) -> bool {
+    let (v_curr, v_m1, v_m2) = eye.fetch_history(pkg_name, tgt_version).await;
     let baseline_m1 = v_m1.clone().unwrap_or_else(|| "n/a".to_string());
     let baseline_m2 = v_m2.clone().unwrap_or_else(|| "n/a".to_string());
     println!(
@@ -262,14 +419,14 @@ pub async fn run(args: Vec<String>) {
     );
 
     // Execute scans inside clean environments
-    let ips_curr = eye.trace_sandbox_install(&pkg_name, &v_curr);
+    let ips_curr = eye.trace_sandbox_install(pkg_name, &v_curr);
 
     let mut baseline_ips = HashSet::new();
     if let Some(ref v) = v_m1 {
-        baseline_ips.extend(eye.trace_sandbox_install(&pkg_name, v));
+        baseline_ips.extend(eye.trace_sandbox_install(pkg_name, v));
     }
     if let Some(ref v) = v_m2 {
-        baseline_ips.extend(eye.trace_sandbox_install(&pkg_name, v));
+        baseline_ips.extend(eye.trace_sandbox_install(pkg_name, v));
     }
 
     // Isolate anomalies introduced in the newest package release.
@@ -282,6 +439,114 @@ pub async fn run(args: Vec<String>) {
             new_connections
         );
         println!("Aborting host operation securely.");
+        return false;
+    }
+
+    true
+}
+
+fn should_enforce_package_detection(eye: &GyrSeek) -> bool {
+    if eye.manager == "uv" {
+        return eye.passthrough_args.get(1).map(String::as_str) == Some("add")
+            || (eye.passthrough_args.get(1).map(String::as_str) == Some("pip")
+                && eye.passthrough_args.get(2).map(String::as_str) == Some("install"))
+            || (eye.passthrough_args.get(1).map(String::as_str) == Some("pip")
+                && eye.passthrough_args.get(2).map(String::as_str) == Some("sync"))
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("sync");
+    }
+
+    if eye.manager == "pip" || eye.manager == "pip3" {
+        return eye.passthrough_args.get(1).map(String::as_str) == Some("install");
+    }
+
+    if eye.manager == "poetry" {
+        return eye.passthrough_args.get(1).map(String::as_str) == Some("add")
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("update")
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("install");
+    }
+
+    if eye.manager == "npm" {
+        return eye.passthrough_args.get(1).map(String::as_str) == Some("install")
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("i");
+    }
+
+    false
+}
+
+pub async fn run(args: Vec<String>) {
+    let eye = GyrSeek::new(args);
+
+    if eye.manager == "uv"
+        && eye.passthrough_args.get(1).map(String::as_str) == Some("pip")
+        && eye.passthrough_args.get(2).map(String::as_str) == Some("sync")
+    {
+        let sync_packages = eye.parse_uv_pip_sync_packages();
+        if sync_packages.is_empty() {
+            println!(
+                "❌ [gyrseek] 'uv pip sync' detected but no parseable package entries were found. Failing closed."
+            );
+            std::process::exit(1);
+        }
+
+        println!(
+            "🛡️ [gyrseek] 'uv pip sync' detected. Testing {} package(s) from sync sources...",
+            sync_packages.len()
+        );
+
+        for (pkg_name, maybe_version) in sync_packages {
+            let tgt_version = maybe_version.unwrap_or_else(|| "latest".to_string());
+            if !scan_package_versions(&eye, &pkg_name, &tgt_version).await {
+                std::process::exit(1);
+            }
+        }
+
+        println!("\n✅ [gyrseek] Clear behavioral report for sync package set. Forwarding command safely...");
+        eye.forward_original_command();
+        return;
+    }
+
+    if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("sync") {
+        let lock_packages = eye.parse_uv_lock_packages();
+        if lock_packages.is_empty() {
+            println!(
+                "❌ [gyrseek] 'uv sync' detected but no packages found in uv.lock. Failing closed."
+            );
+            std::process::exit(1);
+        }
+
+        println!(
+            "🛡️ [gyrseek] 'uv sync' detected. Testing {} locked package(s) from uv.lock...",
+            lock_packages.len()
+        );
+
+        for (pkg_name, locked_version) in lock_packages {
+            if !scan_package_versions(&eye, &pkg_name, &locked_version).await {
+                std::process::exit(1);
+            }
+        }
+
+        println!("\n✅ [gyrseek] Clear behavioral report for all locked packages. Forwarding command safely...");
+        eye.forward_original_command();
+        return;
+    }
+
+    let (package, target_v) = eye.parse_package_details();
+
+    if package.is_none() {
+        if should_enforce_package_detection(&eye) {
+            println!(
+                "❌ [gyrseek] Expected package target could not be detected for this command. Failing closed."
+            );
+            std::process::exit(1);
+        }
+        eye.forward_original_command();
+        return;
+    }
+
+    let pkg_name = package.unwrap();
+    let tgt_version = target_v.unwrap_or_else(|| "latest".to_string());
+
+    if !scan_package_versions(&eye, &pkg_name, &tgt_version).await {
         std::process::exit(1);
     }
 
