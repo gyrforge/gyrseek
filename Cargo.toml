@@ -12,3 +12,4 @@ serde_yaml = "0.9"
 regex = "1.10"
 tempfile = "3"
 dns-lookup = "2"
+chrono = { version = "0.4", features = ["clock"] }

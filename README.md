@@ -74,6 +74,11 @@ baseline_overrides:
    lodash:
       baseline-1: "4.17.20"
 baseline_count: 2
+min_baseline_age_hours:
+   requests: 6
+   lodash: 12
+new_package_exemptions:
+   - newly-published-package
 ```
 
 Override config path:
@@ -99,6 +104,10 @@ Behavior:
 - `baseline_overrides` is optional and lets you pin baseline versions per package.
 - Each package can set either or both `baseline-1` and `baseline-2`; missing keys continue using registry-derived baselines.
 - `baseline_count` controls how many historical baselines are compared; default is `2`.
+- Baselines are age-gated: by default, a version must be at least `2` hours old before it is used for comparison.
+- `min_baseline_age_hours` lets you override that age gate per package (package not listed uses the default `2` hours).
+- `new_package_exemptions` lets you exempt specific new packages when fewer than 2 eligible baseline versions exist.
+- If an exempted package later has 2 or more eligible baseline versions, `gyrseek` warns so you can remove the exemption.
 
 ## Git Clone Behavior
 

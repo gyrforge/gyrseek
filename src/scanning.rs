@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 
+use chrono::{DateTime, Duration, Utc};
 use dns_lookup::lookup_addr;
 use regex::Regex;
 use serde::Deserialize;
@@ -13,17 +14,29 @@ struct VersionPlan {
     target_version: String,
     current: String,
     baselines: Vec<String>,
+    eligible_baseline_versions: usize,
+    new_package_exempt: bool,
 }
 
 #[derive(Deserialize, Debug)]
 struct PyPiResponse {
-    releases: std::collections::HashMap<String, serde_json::Value>,
+    releases: std::collections::HashMap<String, Vec<PyPiReleaseFile>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct PyPiReleaseFile {
+    upload_time_iso_8601: Option<String>,
+    upload_time: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
 struct NpmResponse {
     versions: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    time: std::collections::HashMap<String, String>,
 }
+
+const DEFAULT_MIN_BASELINE_AGE_HOURS: i64 = 2;
 
 /// Returns connections present in the current version but absent in baseline versions.
 pub fn find_new_connections(ips_curr: &HashSet<String>, baseline_ips: &HashSet<String>) -> Vec<String> {
@@ -137,6 +150,7 @@ pub async fn fetch_history_with_baselines(
     package: &str,
     target_v: &str,
     baseline_count: usize,
+    min_baseline_age_hours: i64,
 ) -> (String, Vec<String>) {
     println!("🔍 [gyrseek] Fetching version matrix from registry for '{}'...", package);
     let client = reqwest::Client::new();
@@ -157,8 +171,16 @@ pub async fn fetch_history_with_baselines(
                 };
 
                 if let Some(idx) = versions.iter().position(|v| v == &current) {
-                    let start = idx.saturating_sub(baseline_count);
-                    let baselines = versions[start..idx].iter().rev().cloned().collect();
+                    let cutoff = Utc::now() - Duration::hours(min_baseline_age_hours.max(0));
+                    let mut published_at: HashMap<String, DateTime<Utc>> = HashMap::new();
+                    for (version, ts) in data.time {
+                        if let Ok(dt) = DateTime::parse_from_rfc3339(&ts) {
+                            published_at.insert(version, dt.with_timezone(&Utc));
+                        }
+                    }
+                    let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
+                    let baselines =
+                        select_age_eligible_baselines(candidates, &published_at, cutoff, baseline_count);
                     return (current, baselines);
                 }
             }
@@ -178,8 +200,33 @@ pub async fn fetch_history_with_baselines(
                 };
 
                 if let Some(idx) = versions.iter().position(|v| v == &current) {
-                    let start = idx.saturating_sub(baseline_count);
-                    let baselines = versions[start..idx].iter().rev().cloned().collect();
+                    let cutoff = Utc::now() - Duration::hours(min_baseline_age_hours.max(0));
+                    let mut published_at: HashMap<String, DateTime<Utc>> = HashMap::new();
+
+                    for (version, files) in data.releases {
+                        let mut earliest: Option<DateTime<Utc>> = None;
+                        for file in files {
+                            let parsed = file
+                                .upload_time_iso_8601
+                                .as_deref()
+                                .or(file.upload_time.as_deref())
+                                .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                                .map(|dt| dt.with_timezone(&Utc));
+                            if let Some(parsed) = parsed {
+                                earliest = match earliest {
+                                    Some(curr) if curr <= parsed => Some(curr),
+                                    _ => Some(parsed),
+                                };
+                            }
+                        }
+                        if let Some(ts) = earliest {
+                            published_at.insert(version, ts);
+                        }
+                    }
+
+                    let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
+                    let baselines =
+                        select_age_eligible_baselines(candidates, &published_at, cutoff, baseline_count);
                     return (current, baselines);
                 }
             }
@@ -251,6 +298,36 @@ fn select_effective_baselines(
     baselines
 }
 
+fn select_age_eligible_baselines(
+    candidates_newest_first: Vec<String>,
+    published_at: &HashMap<String, DateTime<Utc>>,
+    cutoff: DateTime<Utc>,
+    baseline_count: usize,
+) -> Vec<String> {
+    let mut selected = Vec::new();
+    for version in candidates_newest_first {
+        if let Some(ts) = published_at.get(&version) {
+            if *ts <= cutoff {
+                selected.push(version);
+                if selected.len() >= baseline_count {
+                    break;
+                }
+            }
+        }
+    }
+    selected
+}
+
+fn exemption_behavior(new_package_exempt: bool, eligible_baseline_versions: usize) -> (bool, bool) {
+    if !new_package_exempt {
+        return (false, false);
+    }
+    if eligible_baseline_versions < 2 {
+        return (true, false);
+    }
+    (false, true)
+}
+
 pub async fn scan_packages_versions(
     runner: &dyn SandboxRunner,
     manager: &str,
@@ -259,6 +336,8 @@ pub async fn scan_packages_versions(
     domain_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
     baseline_count: usize,
+    min_baseline_age_hours_by_package: &HashMap<String, usize>,
+    new_package_exemptions: &HashSet<String>,
 ) -> HashMap<String, bool> {
     let mut results = HashMap::new();
     if pkg_targets.is_empty() {
@@ -267,14 +346,38 @@ pub async fn scan_packages_versions(
 
     let mut plans = Vec::new();
     for (pkg_name, tgt_version) in pkg_targets {
+        let min_baseline_age_hours = min_baseline_age_hours_by_package
+            .get(pkg_name)
+            .copied()
+            .unwrap_or(DEFAULT_MIN_BASELINE_AGE_HOURS as usize) as i64;
+
+        let fetch_count = baseline_count.max(2);
         let (v_curr, fetched_baselines) =
-            fetch_history_with_baselines(manager, pkg_name, tgt_version, baseline_count).await;
+            fetch_history_with_baselines(
+                manager,
+                pkg_name,
+                tgt_version,
+                fetch_count,
+                min_baseline_age_hours,
+            )
+            .await;
+        let eligible_baseline_versions = fetched_baselines.len();
+
         let baselines = select_effective_baselines(
             &v_curr,
             fetched_baselines,
             baseline_overrides.get(pkg_name),
             baseline_count,
         );
+
+        let new_package_exempt = new_package_exemptions.contains(pkg_name);
+        let (_, should_warn_exemption) = exemption_behavior(new_package_exempt, eligible_baseline_versions);
+        if should_warn_exemption {
+            println!(
+                "⚠️ [gyrseek] Package '{}' is listed in new_package_exemptions but now has {} eligible baseline versions; consider removing the exemption.",
+                pkg_name, eligible_baseline_versions
+            );
+        }
 
         if baseline_overrides.get(pkg_name).is_some() {
             println!(
@@ -285,8 +388,8 @@ pub async fn scan_packages_versions(
         }
 
         println!(
-            "🛡️ [gyrseek] Comparing versions for '{}': current={} baselines={:?}",
-            pkg_name, v_curr, baselines
+            "🛡️ [gyrseek] Comparing versions for '{}': current={} baselines={:?} (min_baseline_age_hours={})",
+            pkg_name, v_curr, baselines, min_baseline_age_hours
         );
 
         plans.push(VersionPlan {
@@ -294,6 +397,8 @@ pub async fn scan_packages_versions(
             target_version: tgt_version.clone(),
             current: v_curr,
             baselines,
+            eligible_baseline_versions,
+            new_package_exempt,
         });
     }
 
@@ -361,6 +466,17 @@ pub async fn scan_packages_versions(
             continue;
         }
 
+        let (skip_due_to_exemption, _) =
+            exemption_behavior(plan.new_package_exempt, plan.eligible_baseline_versions);
+        if skip_due_to_exemption {
+            println!(
+                "⚠️ [gyrseek] New package exemption applied for '{}': only {} eligible baseline version(s) available (<2). Skipping anomaly block for now.",
+                plan.package, plan.eligible_baseline_versions
+            );
+            results.insert(key, true);
+            continue;
+        }
+
         let new_connections = find_new_connections(&ips_curr, &baseline_ips);
         let (new_connections, allowlisted_connections) =
             filter_allowlisted_new_connections(new_connections, ip_allowlist);
@@ -423,7 +539,11 @@ pub async fn scan_packages_versions(
 
 #[cfg(test)]
 mod tests {
-    use super::select_effective_baselines;
+    use std::collections::HashMap;
+
+    use chrono::{TimeZone, Utc};
+
+    use super::{exemption_behavior, select_age_eligible_baselines, select_effective_baselines};
 
     #[test]
     fn baseline_count_limits_fetched_baselines_without_overrides() {
@@ -462,6 +582,139 @@ mod tests {
         );
         assert_eq!(out, vec!["2.9.0".to_string(), "2.8.0".to_string()]);
     }
+
+    #[test]
+    fn age_filter_keeps_only_versions_older_than_cutoff() {
+        let candidates = vec![
+            "2.9.0".to_string(),
+            "2.8.0".to_string(),
+            "2.7.0".to_string(),
+        ];
+        let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
+
+        let mut published = HashMap::new();
+        published.insert(
+            "2.9.0".to_string(),
+            Utc.with_ymd_and_hms(2026, 1, 1, 13, 0, 0).unwrap(),
+        );
+        published.insert(
+            "2.8.0".to_string(),
+            Utc.with_ymd_and_hms(2026, 1, 1, 11, 59, 0).unwrap(),
+        );
+        published.insert(
+            "2.7.0".to_string(),
+            Utc.with_ymd_and_hms(2025, 12, 31, 10, 0, 0).unwrap(),
+        );
+
+        let selected = select_age_eligible_baselines(candidates, &published, cutoff, 2);
+        assert_eq!(selected, vec!["2.8.0".to_string(), "2.7.0".to_string()]);
+    }
+
+    #[test]
+    fn age_filter_includes_versions_exactly_at_cutoff() {
+        let candidates = vec!["2.9.0".to_string(), "2.8.0".to_string()];
+        let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
+
+        let mut published = HashMap::new();
+        published.insert("2.9.0".to_string(), cutoff);
+        published.insert(
+            "2.8.0".to_string(),
+            Utc.with_ymd_and_hms(2026, 1, 1, 11, 0, 0).unwrap(),
+        );
+
+        let selected = select_age_eligible_baselines(candidates, &published, cutoff, 2);
+        assert_eq!(selected, vec!["2.9.0".to_string(), "2.8.0".to_string()]);
+    }
+
+    #[test]
+    fn age_filter_skips_candidates_without_publish_timestamps() {
+        let candidates = vec!["2.9.0".to_string(), "2.8.0".to_string(), "2.7.0".to_string()];
+        let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
+
+        let mut published = HashMap::new();
+        published.insert(
+            "2.8.0".to_string(),
+            Utc.with_ymd_and_hms(2026, 1, 1, 11, 0, 0).unwrap(),
+        );
+        published.insert(
+            "2.7.0".to_string(),
+            Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap(),
+        );
+
+        let selected = select_age_eligible_baselines(candidates, &published, cutoff, 2);
+        assert_eq!(selected, vec!["2.8.0".to_string(), "2.7.0".to_string()]);
+    }
+
+    #[test]
+    fn age_filter_still_respects_baseline_count_limit() {
+        let candidates = vec![
+            "2.9.0".to_string(),
+            "2.8.0".to_string(),
+            "2.7.0".to_string(),
+            "2.6.0".to_string(),
+        ];
+        let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
+
+        let mut published = HashMap::new();
+        published.insert(
+            "2.9.0".to_string(),
+            Utc.with_ymd_and_hms(2026, 1, 1, 11, 59, 0).unwrap(),
+        );
+        published.insert(
+            "2.8.0".to_string(),
+            Utc.with_ymd_and_hms(2026, 1, 1, 11, 0, 0).unwrap(),
+        );
+        published.insert(
+            "2.7.0".to_string(),
+            Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap(),
+        );
+        published.insert(
+            "2.6.0".to_string(),
+            Utc.with_ymd_and_hms(2026, 1, 1, 9, 0, 0).unwrap(),
+        );
+
+        let selected = select_age_eligible_baselines(candidates, &published, cutoff, 2);
+        assert_eq!(selected, vec!["2.9.0".to_string(), "2.8.0".to_string()]);
+    }
+
+    #[test]
+    fn exemption_applies_only_when_less_than_two_baselines() {
+        assert_eq!(exemption_behavior(true, 0), (true, false));
+        assert_eq!(exemption_behavior(true, 1), (true, false));
+        assert_eq!(exemption_behavior(true, 2), (false, true));
+        assert_eq!(exemption_behavior(false, 0), (false, false));
+    }
+
+    #[test]
+    fn baseline_count_zero_returns_no_effective_baselines() {
+        let out = select_effective_baselines(
+            "3.0.0",
+            vec!["2.9.0".to_string(), "2.8.0".to_string()],
+            None,
+            0,
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn override_order_is_preserved_then_filled_from_fetched() {
+        let override_pair = (Some("2.7.0".to_string()), Some("2.6.0".to_string()));
+        let out = select_effective_baselines(
+            "3.0.0",
+            vec!["2.9.0".to_string(), "2.8.0".to_string(), "2.7.0".to_string()],
+            Some(&override_pair),
+            4,
+        );
+        assert_eq!(
+            out,
+            vec![
+                "2.7.0".to_string(),
+                "2.6.0".to_string(),
+                "2.9.0".to_string(),
+                "2.8.0".to_string()
+            ]
+        );
+    }
 }
 
 pub async fn scan_package_versions(
@@ -473,6 +726,8 @@ pub async fn scan_package_versions(
     domain_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
     baseline_count: usize,
+    min_baseline_age_hours_by_package: &HashMap<String, usize>,
+    new_package_exemptions: &HashSet<String>,
 ) -> bool {
     let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
     let outcome = scan_packages_versions(
@@ -483,6 +738,8 @@ pub async fn scan_package_versions(
         domain_allowlist,
         baseline_overrides,
         baseline_count,
+        min_baseline_age_hours_by_package,
+        new_package_exemptions,
     )
     .await;
     outcome

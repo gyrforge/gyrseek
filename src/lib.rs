@@ -42,6 +42,10 @@ struct GyrseekConfig {
     baseline_overrides: HashMap<String, BaselineOverrideConfig>,
     #[serde(default)]
     baseline_count: Option<usize>,
+    #[serde(default)]
+    min_baseline_age_hours: HashMap<String, usize>,
+    #[serde(default)]
+    new_package_exemptions: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -93,13 +97,22 @@ fn load_policy_config(
         HashSet<String>,
         HashMap<String, (Option<String>, Option<String>)>,
         usize,
+        HashMap<String, usize>,
+        HashSet<String>,
     ),
     String,
 > {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) if !explicit && e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((HashSet::new(), HashSet::new(), HashMap::new(), 2));
+            return Ok((
+                HashSet::new(),
+                HashSet::new(),
+                HashMap::new(),
+                2,
+                HashMap::new(),
+                HashSet::new(),
+            ));
         }
         Err(e) => {
             return Err(format!("Failed to read config file '{}': {}", path, e));
@@ -165,7 +178,39 @@ fn load_policy_config(
         None => 2,
     };
 
-    Ok((set, domain_set, baseline_overrides, baseline_count))
+    let mut min_baseline_age_hours = HashMap::new();
+    for (package, hours) in cfg.min_baseline_age_hours {
+        let package = package.trim().to_string();
+        if package.is_empty() {
+            continue;
+        }
+        if hours == 0 {
+            println!(
+                "⚠️ [gyrseek] Ignoring invalid min_baseline_age_hours for '{}': 0",
+                package
+            );
+            continue;
+        }
+        min_baseline_age_hours.insert(package, hours);
+    }
+
+    let mut new_package_exemptions = HashSet::new();
+    for package in cfg.new_package_exemptions {
+        let package = package.trim().to_string();
+        if package.is_empty() {
+            continue;
+        }
+        new_package_exemptions.insert(package);
+    }
+
+    Ok((
+        set,
+        domain_set,
+        baseline_overrides,
+        baseline_count,
+        min_baseline_age_hours,
+        new_package_exemptions,
+    ))
 }
 
 #[cfg(test)]
@@ -200,12 +245,21 @@ mod config_tests {
     #[test]
     fn missing_default_config_returns_empty_allowlist() {
         let missing = "gyrseek-config-does-not-exist.yaml";
-        let (ip_allowlist, domain_allowlist, baseline_overrides, baseline_count) =
+        let (
+            ip_allowlist,
+            domain_allowlist,
+            baseline_overrides,
+            baseline_count,
+            min_baseline_age_hours,
+            new_package_exemptions,
+        ) =
             load_policy_config(missing, false).expect("missing default should be allowed");
         assert!(ip_allowlist.is_empty());
         assert!(domain_allowlist.is_empty());
         assert!(baseline_overrides.is_empty());
         assert_eq!(baseline_count, 2);
+        assert!(min_baseline_age_hours.is_empty());
+        assert!(new_package_exemptions.is_empty());
     }
 
     #[test]
@@ -224,7 +278,15 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (ip_allowlist, domain_allowlist, baseline_overrides, baseline_count) = load_policy_config(
+        let (
+            ip_allowlist,
+            domain_allowlist,
+            baseline_overrides,
+            baseline_count,
+            min_baseline_age_hours,
+            new_package_exemptions,
+        ) =
+            load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -246,6 +308,8 @@ mod config_tests {
             Some(&(Some("4.17.20".to_string()), None))
         );
         assert_eq!(baseline_count, 2);
+        assert!(min_baseline_age_hours.is_empty());
+        assert!(new_package_exemptions.is_empty());
     }
 
     #[test]
@@ -253,13 +317,89 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "baseline_count: 4").expect("config should be written");
 
-        let (_, _, _, baseline_count) = load_policy_config(
+        let (_, _, _, baseline_count, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
         .expect("config should parse");
 
         assert_eq!(baseline_count, 4);
+    }
+
+    #[test]
+    fn parses_per_package_min_baseline_age_hours() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(
+            file,
+            "min_baseline_age_hours:\n  requests: 6\n  lodash: 12\n  badpkg: 0"
+        )
+        .expect("config should be written");
+
+        let (_, _, _, _, min_baseline_age_hours, _) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert_eq!(min_baseline_age_hours.get("requests"), Some(&6));
+        assert_eq!(min_baseline_age_hours.get("lodash"), Some(&12));
+        assert!(!min_baseline_age_hours.contains_key("badpkg"));
+    }
+
+    #[test]
+    fn parses_new_package_exemptions() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(
+            file,
+            "new_package_exemptions:\n  - requests\n  - lodash\n  - '  '"
+        )
+        .expect("config should be written");
+
+        let (_, _, _, _, _, new_package_exemptions) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert!(new_package_exemptions.contains("requests"));
+        assert!(new_package_exemptions.contains("lodash"));
+        assert_eq!(new_package_exemptions.len(), 2);
+    }
+
+    #[test]
+    fn baseline_count_zero_falls_back_to_default_two() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "baseline_count: 0").expect("config should be written");
+
+        let (_, _, _, baseline_count, _, _) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert_eq!(baseline_count, 2);
+    }
+
+    #[test]
+    fn trims_package_keys_for_baseline_and_age_policies() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(
+            file,
+            "baseline_overrides:\n  \"  requests  \":\n    baseline-1: \"2.30.0\"\nmin_baseline_age_hours:\n  \"  requests  \": 6"
+        )
+        .expect("config should be written");
+
+        let (_, _, baseline_overrides, _, min_baseline_age_hours, _) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert_eq!(
+            baseline_overrides.get("requests"),
+            Some(&(Some("2.30.0".to_string()), None))
+        );
+        assert_eq!(min_baseline_age_hours.get("requests"), Some(&6));
     }
 }
 
@@ -359,6 +499,8 @@ async fn scan_with_cache(
     domain_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
     baseline_count: usize,
+    min_baseline_age_hours_by_package: &HashMap<String, usize>,
+    new_package_exemptions: &HashSet<String>,
 ) -> bool {
     let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
     if let Some(cached) = cache.get(&key) {
@@ -379,6 +521,8 @@ async fn scan_with_cache(
             domain_allowlist,
             baseline_overrides,
             baseline_count,
+            min_baseline_age_hours_by_package,
+            new_package_exemptions,
         )
         .await;
     cache.insert(key, result);
@@ -394,6 +538,8 @@ async fn scan_many_with_cache(
     domain_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
     baseline_count: usize,
+    min_baseline_age_hours_by_package: &HashMap<String, usize>,
+    new_package_exemptions: &HashSet<String>,
 ) -> bool {
     let mut uncached: Vec<(String, String)> = Vec::new();
 
@@ -424,6 +570,8 @@ async fn scan_many_with_cache(
         domain_allowlist,
         baseline_overrides,
         baseline_count,
+        min_baseline_age_hours_by_package,
+        new_package_exemptions,
     )
     .await;
 
@@ -451,8 +599,14 @@ pub async fn run(args: Vec<String>) {
         }
     };
 
-    let (ip_allowlist, domain_allowlist, baseline_overrides, baseline_count) =
-        match load_policy_config(&config_path, config_explicit) {
+    let (
+        ip_allowlist,
+        domain_allowlist,
+        baseline_overrides,
+        baseline_count,
+        min_baseline_age_hours_by_package,
+        new_package_exemptions,
+    ) = match load_policy_config(&config_path, config_explicit) {
         Ok(v) => v,
         Err(e) => {
             println!("❌ [gyrseek] {}", e);
@@ -482,6 +636,18 @@ pub async fn run(args: Vec<String>) {
         );
     }
     println!("ℹ️ [gyrseek] Using baseline_count={}", baseline_count);
+    if !min_baseline_age_hours_by_package.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] Loaded per-package min_baseline_age_hours for {} package(s)",
+            min_baseline_age_hours_by_package.len()
+        );
+    }
+    if !new_package_exemptions.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] Loaded new package exemptions for {} package(s)",
+            new_package_exemptions.len()
+        );
+    }
 
     let eye = GyrSeek::new(args);
 
@@ -534,6 +700,8 @@ pub async fn run(args: Vec<String>) {
                 &domain_allowlist,
                 &baseline_overrides,
                 baseline_count,
+                &min_baseline_age_hours_by_package,
+                &new_package_exemptions,
             )
             .await
             {
@@ -568,6 +736,8 @@ pub async fn run(args: Vec<String>) {
                 &domain_allowlist,
                 &baseline_overrides,
                 baseline_count,
+                &min_baseline_age_hours_by_package,
+                &new_package_exemptions,
             )
             .await
             {
@@ -612,6 +782,8 @@ pub async fn run(args: Vec<String>) {
             &domain_allowlist,
             &baseline_overrides,
             baseline_count,
+            &min_baseline_age_hours_by_package,
+            &new_package_exemptions,
         )
         .await
         {
@@ -657,6 +829,8 @@ pub async fn run(args: Vec<String>) {
             &domain_allowlist,
             &baseline_overrides,
             baseline_count,
+            &min_baseline_age_hours_by_package,
+            &new_package_exemptions,
         )
         .await
         {
@@ -691,6 +865,8 @@ pub async fn run(args: Vec<String>) {
             &domain_allowlist,
             &baseline_overrides,
             baseline_count,
+            &min_baseline_age_hours_by_package,
+            &new_package_exemptions,
         )
         .await
         {
@@ -734,6 +910,8 @@ pub async fn run(args: Vec<String>) {
             &domain_allowlist,
             &baseline_overrides,
             baseline_count,
+            &min_baseline_age_hours_by_package,
+            &new_package_exemptions,
         )
         .await
         {
@@ -780,6 +958,8 @@ pub async fn run(args: Vec<String>) {
             &domain_allowlist,
             &baseline_overrides,
             baseline_count,
+            &min_baseline_age_hours_by_package,
+            &new_package_exemptions,
         )
         .await
         {
@@ -817,6 +997,8 @@ pub async fn run(args: Vec<String>) {
         &domain_allowlist,
         &baseline_overrides,
         baseline_count,
+        &min_baseline_age_hours_by_package,
+        &new_package_exemptions,
     )
     .await
     {
