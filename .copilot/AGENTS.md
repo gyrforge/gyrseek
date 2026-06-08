@@ -8,7 +8,9 @@ This file stores persistent working memory and agent instructions for this repos
 - Language: Rust
 - Entry points:
   - src/main.rs (binary entrypoint)
-  - src/lib.rs (core logic)
+  - src/lib.rs (command routing and orchestration)
+  - src/parsing.rs (parsing helpers)
+  - src/scanning.rs (registry lookup and anomaly scanning)
 - Test strategy:
   - Integration tests under tests/
   - Run with cargo test

@@ -165,7 +165,9 @@ Repository policy: after each change, update both `.copilot/Agents.md` and `READ
 ## Project Layout
 
 - `src/main.rs`: binary entrypoint
-- `src/lib.rs`: core CLI logic
+- `src/lib.rs`: command routing and orchestration
+- `src/parsing.rs`: command and lock or requirements parsing helpers
+- `src/scanning.rs`: registry lookup and behavior scanning engine
 - `tests/parser_tests.rs`: command parsing tests
 - `tests/behavior_tests.rs`: behavior anomaly simulation tests
 - `tests/git_clone_behavior_tests.rs`: git clone behavior simulation tests

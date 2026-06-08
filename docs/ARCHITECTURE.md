@@ -47,7 +47,9 @@ gyrseek blocks instead of passthrough when package detection is expected for sup
 
 ## Main Files
 - src/main.rs: binary entrypoint
-- src/lib.rs: routing, parsing, scanning, and enforcement
+- src/lib.rs: routing and enforcement orchestration
+- src/parsing.rs: command, lockfile, and requirements parsing
+- src/scanning.rs: registry history lookup and behavior scanning
 - tests/parser_tests.rs: parser behavior coverage
 - tests/behavior_tests.rs: anomaly decision simulation coverage
 - tests/git_clone_behavior_tests.rs: git-clone simulation coverage
