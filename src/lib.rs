@@ -40,6 +40,8 @@ struct GyrseekConfig {
     domain_allowlist: Vec<String>,
     #[serde(default)]
     baseline_overrides: HashMap<String, BaselineOverrideConfig>,
+    #[serde(default)]
+    baseline_count: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -90,13 +92,14 @@ fn load_policy_config(
         HashSet<String>,
         HashSet<String>,
         HashMap<String, (Option<String>, Option<String>)>,
+        usize,
     ),
     String,
 > {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) if !explicit && e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((HashSet::new(), HashSet::new(), HashMap::new()));
+            return Ok((HashSet::new(), HashSet::new(), HashMap::new(), 2));
         }
         Err(e) => {
             return Err(format!("Failed to read config file '{}': {}", path, e));
@@ -153,7 +156,16 @@ fn load_policy_config(
         }
     }
 
-    Ok((set, domain_set, baseline_overrides))
+    let baseline_count = match cfg.baseline_count {
+        Some(0) => {
+            println!("⚠️ [gyrseek] Ignoring invalid baseline_count=0; using default 2");
+            2
+        }
+        Some(v) => v,
+        None => 2,
+    };
+
+    Ok((set, domain_set, baseline_overrides, baseline_count))
 }
 
 #[cfg(test)]
@@ -188,11 +200,12 @@ mod config_tests {
     #[test]
     fn missing_default_config_returns_empty_allowlist() {
         let missing = "gyrseek-config-does-not-exist.yaml";
-        let (ip_allowlist, domain_allowlist, baseline_overrides) =
+        let (ip_allowlist, domain_allowlist, baseline_overrides, baseline_count) =
             load_policy_config(missing, false).expect("missing default should be allowed");
         assert!(ip_allowlist.is_empty());
         assert!(domain_allowlist.is_empty());
         assert!(baseline_overrides.is_empty());
+        assert_eq!(baseline_count, 2);
     }
 
     #[test]
@@ -211,7 +224,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (ip_allowlist, domain_allowlist, baseline_overrides) = load_policy_config(
+        let (ip_allowlist, domain_allowlist, baseline_overrides, baseline_count) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -232,6 +245,21 @@ mod config_tests {
             baseline_overrides.get("lodash"),
             Some(&(Some("4.17.20".to_string()), None))
         );
+        assert_eq!(baseline_count, 2);
+    }
+
+    #[test]
+    fn parses_baseline_count_override_from_config() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "baseline_count: 4").expect("config should be written");
+
+        let (_, _, _, baseline_count) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert_eq!(baseline_count, 4);
     }
 }
 
@@ -330,6 +358,7 @@ async fn scan_with_cache(
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
+    baseline_count: usize,
 ) -> bool {
     let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
     if let Some(cached) = cache.get(&key) {
@@ -349,6 +378,7 @@ async fn scan_with_cache(
             ip_allowlist,
             domain_allowlist,
             baseline_overrides,
+            baseline_count,
         )
         .await;
     cache.insert(key, result);
@@ -363,6 +393,7 @@ async fn scan_many_with_cache(
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
+    baseline_count: usize,
 ) -> bool {
     let mut uncached: Vec<(String, String)> = Vec::new();
 
@@ -392,6 +423,7 @@ async fn scan_many_with_cache(
         ip_allowlist,
         domain_allowlist,
         baseline_overrides,
+        baseline_count,
     )
     .await;
 
@@ -419,7 +451,7 @@ pub async fn run(args: Vec<String>) {
         }
     };
 
-    let (ip_allowlist, domain_allowlist, baseline_overrides) =
+    let (ip_allowlist, domain_allowlist, baseline_overrides, baseline_count) =
         match load_policy_config(&config_path, config_explicit) {
         Ok(v) => v,
         Err(e) => {
@@ -449,6 +481,7 @@ pub async fn run(args: Vec<String>) {
             config_path
         );
     }
+    println!("ℹ️ [gyrseek] Using baseline_count={}", baseline_count);
 
     let eye = GyrSeek::new(args);
 
@@ -500,6 +533,7 @@ pub async fn run(args: Vec<String>) {
                 &ip_allowlist,
                 &domain_allowlist,
                 &baseline_overrides,
+                baseline_count,
             )
             .await
             {
@@ -533,6 +567,7 @@ pub async fn run(args: Vec<String>) {
                 &ip_allowlist,
                 &domain_allowlist,
                 &baseline_overrides,
+                baseline_count,
             )
             .await
             {
@@ -576,6 +611,7 @@ pub async fn run(args: Vec<String>) {
             &ip_allowlist,
             &domain_allowlist,
             &baseline_overrides,
+            baseline_count,
         )
         .await
         {
@@ -620,6 +656,7 @@ pub async fn run(args: Vec<String>) {
             &ip_allowlist,
             &domain_allowlist,
             &baseline_overrides,
+            baseline_count,
         )
         .await
         {
@@ -653,6 +690,7 @@ pub async fn run(args: Vec<String>) {
             &ip_allowlist,
             &domain_allowlist,
             &baseline_overrides,
+            baseline_count,
         )
         .await
         {
@@ -695,6 +733,7 @@ pub async fn run(args: Vec<String>) {
             &ip_allowlist,
             &domain_allowlist,
             &baseline_overrides,
+            baseline_count,
         )
         .await
         {
@@ -740,6 +779,7 @@ pub async fn run(args: Vec<String>) {
             &ip_allowlist,
             &domain_allowlist,
             &baseline_overrides,
+            baseline_count,
         )
         .await
         {
@@ -776,6 +816,7 @@ pub async fn run(args: Vec<String>) {
         &ip_allowlist,
         &domain_allowlist,
         &baseline_overrides,
+        baseline_count,
     )
     .await
     {

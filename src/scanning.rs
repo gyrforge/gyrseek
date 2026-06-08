@@ -12,8 +12,7 @@ struct VersionPlan {
     package: String,
     target_version: String,
     current: String,
-    baseline_m1: Option<String>,
-    baseline_m2: Option<String>,
+    baselines: Vec<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -133,7 +132,12 @@ where
     (new_ip_domain_context, new_ip_domain_matches)
 }
 
-pub async fn fetch_history(manager: &str, package: &str, target_v: &str) -> (String, Option<String>, Option<String>) {
+pub async fn fetch_history_with_baselines(
+    manager: &str,
+    package: &str,
+    target_v: &str,
+    baseline_count: usize,
+) -> (String, Vec<String>) {
     println!("🔍 [gyrseek] Fetching version matrix from registry for '{}'...", package);
     let client = reqwest::Client::new();
 
@@ -153,9 +157,9 @@ pub async fn fetch_history(manager: &str, package: &str, target_v: &str) -> (Str
                 };
 
                 if let Some(idx) = versions.iter().position(|v| v == &current) {
-                    let v_m1 = if idx > 0 { Some(versions[idx - 1].clone()) } else { None };
-                    let v_m2 = if idx > 1 { Some(versions[idx - 2].clone()) } else { None };
-                    return (current, v_m1, v_m2);
+                    let start = idx.saturating_sub(baseline_count);
+                    let baselines = versions[start..idx].iter().rev().cloned().collect();
+                    return (current, baselines);
                 }
             }
         }
@@ -174,15 +178,15 @@ pub async fn fetch_history(manager: &str, package: &str, target_v: &str) -> (Str
                 };
 
                 if let Some(idx) = versions.iter().position(|v| v == &current) {
-                    let v_m1 = if idx > 0 { Some(versions[idx - 1].clone()) } else { None };
-                    let v_m2 = if idx > 1 { Some(versions[idx - 2].clone()) } else { None };
-                    return (current, v_m1, v_m2);
+                    let start = idx.saturating_sub(baseline_count);
+                    let baselines = versions[start..idx].iter().rev().cloned().collect();
+                    return (current, baselines);
                 }
             }
         }
     }
 
-    (target_v.to_string(), None, None)
+    (target_v.to_string(), Vec::new())
 }
 
 pub fn trace_sandbox_install_matrix(
@@ -205,6 +209,48 @@ pub fn trace_sandbox_install_matrix(
     Ok(by_probe)
 }
 
+fn select_effective_baselines(
+    current: &str,
+    fetched_baselines: Vec<String>,
+    baseline_override: Option<&(Option<String>, Option<String>)>,
+    baseline_count: usize,
+) -> Vec<String> {
+    if baseline_count == 0 {
+        return Vec::new();
+    }
+
+    let mut baselines = fetched_baselines;
+
+    if let Some((override_m1, override_m2)) = baseline_override {
+        let mut merged = Vec::new();
+        if let Some(v) = override_m1.clone() {
+            merged.push(v);
+        }
+        if let Some(v) = override_m2.clone() {
+            if !merged.contains(&v) {
+                merged.push(v);
+            }
+        }
+
+        for v in &baselines {
+            if merged.len() >= baseline_count {
+                break;
+            }
+            if !merged.contains(v) && v != current {
+                merged.push(v.clone());
+            }
+        }
+
+        baselines = merged;
+    }
+
+    if baselines.len() > baseline_count {
+        baselines.truncate(baseline_count);
+    }
+
+    baselines
+}
+
 pub async fn scan_packages_versions(
     runner: &dyn SandboxRunner,
     manager: &str,
@@ -212,6 +258,7 @@ pub async fn scan_packages_versions(
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
+    baseline_count: usize,
 ) -> HashMap<String, bool> {
     let mut results = HashMap::new();
     if pkg_targets.is_empty() {
@@ -220,34 +267,33 @@ pub async fn scan_packages_versions(
 
     let mut plans = Vec::new();
     for (pkg_name, tgt_version) in pkg_targets {
-        let (v_curr, mut v_m1, mut v_m2) = fetch_history(manager, pkg_name, tgt_version).await;
-        if let Some((override_m1, override_m2)) = baseline_overrides.get(pkg_name) {
-            if let Some(v) = override_m1.clone() {
-                v_m1 = Some(v);
-            }
-            if let Some(v) = override_m2.clone() {
-                v_m2 = Some(v);
-            }
+        let (v_curr, fetched_baselines) =
+            fetch_history_with_baselines(manager, pkg_name, tgt_version, baseline_count).await;
+        let baselines = select_effective_baselines(
+            &v_curr,
+            fetched_baselines,
+            baseline_overrides.get(pkg_name),
+            baseline_count,
+        );
+
+        if baseline_overrides.get(pkg_name).is_some() {
             println!(
-                "ℹ️ [gyrseek] Applying baseline override(s) for '{}': baseline-1={} baseline-2={}",
+                "ℹ️ [gyrseek] Applying baseline override(s) for '{}': baseline set={:?}",
                 pkg_name,
-                v_m1.clone().unwrap_or_else(|| "n/a".to_string()),
-                v_m2.clone().unwrap_or_else(|| "n/a".to_string())
+                baselines
             );
         }
-        let baseline_m1 = v_m1.clone().unwrap_or_else(|| "n/a".to_string());
-        let baseline_m2 = v_m2.clone().unwrap_or_else(|| "n/a".to_string());
+
         println!(
-            "🛡️ [gyrseek] Comparing versions for '{}': current={} baseline-1={} baseline-2={}",
-            pkg_name, v_curr, baseline_m1, baseline_m2
+            "🛡️ [gyrseek] Comparing versions for '{}': current={} baselines={:?}",
+            pkg_name, v_curr, baselines
         );
 
         plans.push(VersionPlan {
             package: pkg_name.clone(),
             target_version: tgt_version.clone(),
             current: v_curr,
-            baseline_m1: v_m1,
-            baseline_m2: v_m2,
+            baselines,
         });
     }
 
@@ -262,10 +308,7 @@ pub async fn scan_packages_versions(
         };
 
         add_probe(&plan.package, &plan.current);
-        if let Some(ref v) = plan.baseline_m1 {
-            add_probe(&plan.package, v);
-        }
-        if let Some(ref v) = plan.baseline_m2 {
+        for v in &plan.baselines {
             add_probe(&plan.package, v);
         }
     }
@@ -299,20 +342,7 @@ pub async fn scan_packages_versions(
         let mut baseline_ips = HashSet::new();
         let mut missing = false;
 
-        if let Some(ref v) = plan.baseline_m1 {
-            let k = (plan.package.clone(), v.clone());
-            match traces_by_probe.get(&k) {
-                Some(found) => baseline_ips.extend(found.iter().cloned()),
-                None => {
-                    println!(
-                        "❌ [gyrseek] Sandbox trace missing for baseline '{}@{}'.",
-                        plan.package, v
-                    );
-                    missing = true;
-                }
-            }
-        }
-        if let Some(ref v) = plan.baseline_m2 {
+        for v in &plan.baselines {
             let k = (plan.package.clone(), v.clone());
             match traces_by_probe.get(&k) {
                 Some(found) => baseline_ips.extend(found.iter().cloned()),
@@ -354,16 +384,19 @@ pub async fn scan_packages_versions(
         }
 
         if !new_connections.is_empty() {
-            let baseline_m1 = plan.baseline_m1.clone().unwrap_or_else(|| "n/a".to_string());
-            let baseline_m2 = plan.baseline_m2.clone().unwrap_or_else(|| "n/a".to_string());
+            let baseline_label = if plan.baselines.is_empty() {
+                "n/a".to_string()
+            } else {
+                plan.baselines.join(", ")
+            };
 
             let (new_ip_domain_context, new_ip_domain_matches) =
                 enrich_new_connection_domains_with(&new_connections, &baseline_ips, reverse_dns_domain);
 
             println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
             println!(
-                "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({} and {}): {:?}",
-                plan.package, plan.current, baseline_m1, baseline_m2, new_connections
+                "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({}): {:?}",
+                plan.package, plan.current, baseline_label, new_connections
             );
             if !new_ip_domain_context.is_empty() {
                 println!(
@@ -388,6 +421,49 @@ pub async fn scan_packages_versions(
     results
 }
 
+#[cfg(test)]
+mod tests {
+    use super::select_effective_baselines;
+
+    #[test]
+    fn baseline_count_limits_fetched_baselines_without_overrides() {
+        let out = select_effective_baselines(
+            "3.0.0",
+            vec!["2.9.0".to_string(), "2.8.0".to_string(), "2.7.0".to_string()],
+            None,
+            2,
+        );
+        assert_eq!(out, vec!["2.9.0".to_string(), "2.8.0".to_string()]);
+    }
+
+    #[test]
+    fn overrides_take_priority_and_fill_remaining_slots() {
+        let override_pair = (Some("2.5.0".to_string()), None);
+        let out = select_effective_baselines(
+            "3.0.0",
+            vec!["2.9.0".to_string(), "2.8.0".to_string(), "2.7.0".to_string()],
+            Some(&override_pair),
+            3,
+        );
+        assert_eq!(
+            out,
+            vec!["2.5.0".to_string(), "2.9.0".to_string(), "2.8.0".to_string()]
+        );
+    }
+
+    #[test]
+    fn duplicate_override_versions_are_deduped_and_truncated() {
+        let override_pair = (Some("2.9.0".to_string()), Some("2.9.0".to_string()));
+        let out = select_effective_baselines(
+            "3.0.0",
+            vec!["2.9.0".to_string(), "2.8.0".to_string()],
+            Some(&override_pair),
+            2,
+        );
+        assert_eq!(out, vec!["2.9.0".to_string(), "2.8.0".to_string()]);
+    }
+}
+
 pub async fn scan_package_versions(
     runner: &dyn SandboxRunner,
     manager: &str,
@@ -396,6 +472,7 @@ pub async fn scan_package_versions(
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
+    baseline_count: usize,
 ) -> bool {
     let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
     let outcome = scan_packages_versions(
@@ -405,6 +482,7 @@ pub async fn scan_package_versions(
         ip_allowlist,
         domain_allowlist,
         baseline_overrides,
+        baseline_count,
     )
     .await;
     outcome

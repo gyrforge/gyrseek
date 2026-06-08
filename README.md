@@ -73,6 +73,7 @@ baseline_overrides:
       baseline-2: "2.29.0"
    lodash:
       baseline-1: "4.17.20"
+baseline_count: 2
 ```
 
 Override config path:
@@ -97,6 +98,7 @@ Behavior:
 - Subdomains match allowlisted parent domains (for example, `cdn.example.com` matches `example.com`).
 - `baseline_overrides` is optional and lets you pin baseline versions per package.
 - Each package can set either or both `baseline-1` and `baseline-2`; missing keys continue using registry-derived baselines.
+- `baseline_count` controls how many historical baselines are compared; default is `2`.
 
 ## Git Clone Behavior
 
