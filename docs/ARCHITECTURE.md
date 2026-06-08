@@ -27,11 +27,12 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - fetch_history queries PyPI for Python packages.
   - fetch_history queries npm registry for npm packages.
 - Behavior capture:
-  - trace_sandbox_install_matrix runs via SandboxRunner backend and captures per package-version connection IPs from trace output.
+  - trace_sandbox_install_matrix runs via SandboxRunner backend and captures per package-version connection IPs and install-time git clone command signatures from trace output.
   - Docker backend can execute probe matrices (multiple packages with their current and baseline versions) in one container session.
   - build_runner_from_env selects backend mode (`docker` default, `host` fallback).
 - Anomaly decision:
   - find_new_connections returns endpoints seen in current but not in baseline.
+  - install-time git clone signatures are diffed across current and baseline versions; newly introduced clone behavior is fail-closed unless allowlisted.
 - In-run optimization:
   - run keeps an in-memory cache keyed by manager/package/version to avoid repeating identical scans in one execution.
 
@@ -39,16 +40,17 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
 For each scanned package:
 1. Determine current target version (explicit or latest).
 2. Resolve baseline versions (v-1 and v-2 where available).
-3. Collect network endpoint sets for current and baseline installs.
-4. Compute set difference current minus baseline.
-5. If difference is non-empty, block command.
+3. Collect behavior signals for current and baseline installs (network endpoints and install-time git clone signatures).
+4. Compute set differences current minus baseline for each signal type.
+5. Apply allowlists (`ip_allowlist`, `domain_allowlist`, `git_clone_allowlist`).
+6. If non-allowlisted differences remain, block command.
 
 ## Fail-Closed Policy
 gyrseek blocks instead of passthrough when package detection is expected for supported install or sync flows but no package entries are detected.
 
 ## Current Limitations
 - Version ordering is lexicographic, not semantic-version aware.
-- git clone runtime interception is not enabled yet (simulation tests only).
+- Direct runtime interception for standalone `git clone ...` commands is not enabled yet.
 - Docker mode assumes Docker CLI availability; host mode assumes strace availability and is less safe.
 - Trace extraction still assumes current strace output patterns.
 
@@ -61,3 +63,4 @@ gyrseek blocks instead of passthrough when package detection is expected for sup
 - tests/parser_tests.rs: parser behavior coverage
 - tests/behavior_tests.rs: anomaly decision simulation coverage
 - tests/git_clone_behavior_tests.rs: git-clone simulation coverage
+- tests/git_clone_scan_tests.rs: install-time git-clone signature diff coverage

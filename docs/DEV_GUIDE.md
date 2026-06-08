@@ -17,6 +17,20 @@
 - Run tests: cargo test
 - Run one test file: cargo test --test parser_tests
 
+## Policy Config Surface
+- Primary policy file: gyrseek.yaml (or override with --config / GYRSEEK_CONFIG).
+- Current policy keys include:
+	- ip_allowlist
+	- domain_allowlist
+	- git_clone_allowlist
+	- baseline_overrides (`baseline-1` / `baseline-2`)
+	- baseline_count
+	- min_baseline_age_hours
+	- new_package_exemptions
+	- minimum_release_age_package
+	- release_burst_threshold
+	- release_burst_window_hours
+
 ## Adding a New Supported Command
 1. Add command detection in run routing logic.
 2. Decide if command is single-target or bulk-target.
@@ -27,7 +41,7 @@
 
 ## Required Change Hygiene
 After every repository change:
-1. Update .copilot/Agents.md.
+1. Update .copilot/AGENTS.md.
 2. Update README.md.
 3. Keep docs in docs/ in sync if architecture or workflow changed.
 4. Run cargo test before finishing.

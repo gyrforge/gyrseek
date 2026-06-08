@@ -24,6 +24,7 @@ This file stores persistent working memory and agent instructions for this repos
   - Supports uv add, uv pip install, uv pip sync, uv sync, uv lock update flags, pip/pip3 install, poetry add/update/install, npm install/i/update
   - Behavioral anomaly detection compares observed network endpoints across versions
   - Behavioral anomaly detection also compares install-time git clone command signatures across versions and fails closed when new clone behavior appears
+  - Direct runtime interception for standalone `git clone ...` commands is still not enabled; only install-time clone behavior inside package scan traces is currently enforced
   - Install-time git clone behavior comparison is covered by integration tests in tests/git_clone_scan_tests.rs
   - New IPs remain fail-closed anomalies; warning output now includes reverse-DNS domain context as informational enrichment
   - Behavior tests include deterministic DNS-enrichment coverage (match and unresolved lookup paths)
@@ -61,7 +62,7 @@ This file stores persistent working memory and agent instructions for this repos
 
 ## Mandatory Update Policy (After Every Change)
 After every code or behavior change in this repository:
-1. Update this file (.copilot/Agents.md) with the new behavior, scope, or constraints.
+1. Update this file (.copilot/AGENTS.md) with the new behavior, scope, or constraints.
 2. Update README.md so user-facing documentation matches the current implementation.
 3. Ensure both updates happen in the same change set whenever possible.
 4. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, and docs/ROADMAP.md.
@@ -69,7 +70,7 @@ After every code or behavior change in this repository:
 ## Quick Post-Change Checklist
 - [ ] Code updated
 - [ ] Tests updated and run
-- [ ] .copilot/Agents.md updated
+- [ ] .copilot/AGENTS.md updated
 - [ ] README.md updated
 - [ ] docs/ARCHITECTURE.md updated if needed
 - [ ] docs/DEV_GUIDE.md updated if needed
