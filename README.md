@@ -48,6 +48,15 @@ It currently supports:
 
 This gives you a behavioral signal rather than relying only on package metadata.
 
+Example warning output when abnormal network behavior is detected:
+
+```text
+❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
+Package 'left-pad', version '1.3.0' contacted new endpoints not seen in baseline versions (1.2.0, 1.1.3): ["203.0.113.42"]
+ℹ️ [gyrseek] Reverse DNS context for new IPs (informational only): ["203.0.113.42 -> suspicious-c2.example"]
+Aborting host operation securely.
+```
+
 ## Stable Allowlist Config
 
 You can define allowlisted IPs and domains that should be ignored before anomaly blocking.
@@ -130,6 +139,14 @@ Current scope:
 
 - You can test detection logic for clone scenarios through integration tests.
 - Runtime command interception for `git clone ...` is not enabled yet in the CLI command parser.
+
+Example warning output for abnormal git clone behavior (simulation/test context):
+
+```text
+❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
+git clone simulation contacted new endpoints not seen in baseline clone behavior: ["185.199.108.133"]
+Aborting host operation securely.
+```
 
 ## Prerequisites
 
