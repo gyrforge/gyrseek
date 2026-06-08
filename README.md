@@ -26,7 +26,7 @@ It currently supports:
    - current version
    - previous version (`baseline-1`)
    - two versions back (`baseline-2`)
-   - probes may run in one sandbox session per package, while preserving per-version trace attribution
+   - probes may run in one sandbox session across multiple packages and versions, while preserving package-version trace attribution
    - for bulk commands (`uv sync`, `uv pip sync`), apply this per detected package
 5. Compare observed network endpoints:
    - New endpoints found: block and exit with error
@@ -144,7 +144,9 @@ cargo run -- npm update lodash typescript
 - `gyrseek` forwards your command in the current working directory.
 - Scanning now runs via a sandbox backend; default mode is Docker.
 - Repeated package-version probes within the same CLI execution are cached in-memory and reused.
-- Docker mode batches current and baseline probes for one package into a single sandbox/container run.
+- Docker mode batches probe matrices (multiple packages x versions) into a single sandbox/container run when possible.
+- Docker mode keeps resource limits, but currently relaxes rootfs and capability hardening because probe setup installs sandbox tooling in-container.
+- Docker setup currently runs as root in-container with apt sandbox user disabled to allow installing probe tooling under restrictive container flags.
 - For tools like `poetry` or `npm`, run it inside a project directory containing the expected project files (`pyproject.toml`, `package.json`, etc.).
 - `uv sync` scans all packages found in `uv.lock` before forwarding.
 - `uv pip sync` scans all parseable packages found in its source files before forwarding.
@@ -157,6 +159,30 @@ cargo run -- npm update lodash typescript
 - Version selection is currently sorted lexicographically, not semantic-version aware.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
 - For supported install/sync command paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
+
+## Docker Hardening Limitations
+
+Current Docker sandbox mode is designed for practical compatibility and throughput, not maximum isolation.
+
+Current limitations:
+
+- Container setup installs probe tooling at runtime (`apt-get` and, for Python, `uv`).
+- Container setup currently runs as root.
+- Full `--read-only` rootfs is not enabled in this mode.
+- Full capability dropping is not enabled in this mode.
+- Outbound network remains generally available so package manager traffic can proceed.
+
+Why these limits currently exist:
+
+- Earlier stricter configurations (read-only rootfs + full capability drop + non-root runtime setup) caused apt/setup failures and prevented scans from running.
+- The current configuration is the stable path that allows matrix probes (multiple packages and versions) to complete in one sandbox run.
+
+Recommended hardening direction:
+
+- Use prebuilt scanner images that already include required tooling (`strace`, certs, and `uv` where needed).
+- After prebuilt images are in place, re-enable non-root runtime, read-only rootfs, and full capability drop.
+- Add seccomp/apparmor policies and image digest pinning.
+- Consider tighter egress controls (allowlist or proxy model) for stronger containment.
 
 ## Manual Test Runs
 

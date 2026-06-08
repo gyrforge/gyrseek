@@ -9,7 +9,7 @@
 - Add runtime git clone interception path with safe heuristics.
 - Improve baseline selection strategy when fewer historical versions exist.
 - Add structured logging mode for CI and machine parsing.
-- Explore cross-package batching in sandbox sessions while keeping package-version attribution deterministic.
+- Add dedicated tests for matrix batch execution paths (multi-package, multi-version in one sandbox run).
 
 ## Hardening
 - Improve resilience to strace output variations.

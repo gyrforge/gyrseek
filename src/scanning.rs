@@ -5,6 +5,15 @@ use serde::Deserialize;
 
 use crate::sandbox::SandboxRunner;
 
+#[derive(Clone)]
+struct VersionPlan {
+    package: String,
+    target_version: String,
+    current: String,
+    baseline_m1: Option<String>,
+    baseline_m2: Option<String>,
+}
+
 #[derive(Deserialize, Debug)]
 struct PyPiResponse {
     releases: std::collections::HashMap<String, serde_json::Value>,
@@ -72,100 +81,160 @@ pub async fn fetch_history(manager: &str, package: &str, target_v: &str) -> (Str
     (target_v.to_string(), None, None)
 }
 
-pub fn trace_sandbox_install_batch(
+pub fn trace_sandbox_install_matrix(
     runner: &dyn SandboxRunner,
     manager: &str,
-    package: &str,
-    versions: &[String],
-) -> Result<HashMap<String, HashSet<String>>, String> {
-    let traces = runner.trace_install_batch(manager, package, versions)?;
+    probes: &[(String, String)],
+) -> Result<HashMap<(String, String), HashSet<String>>, String> {
+    let traces = runner.trace_install_matrix(manager, probes)?;
     let re = Regex::new(r#"sin_addr=inet_addr\("([\d.]+)"\)"#).unwrap();
-    let mut by_version: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut by_probe: HashMap<(String, String), HashSet<String>> = HashMap::new();
 
-    for (version, stderr_str) in traces {
+    for ((package, version), stderr_str) in traces {
         let mut ips = HashSet::new();
         for cap in re.captures_iter(&stderr_str) {
             ips.insert(cap[1].to_string());
         }
-        by_version.insert(version, ips);
+        by_probe.insert((package, version), ips);
     }
 
-    Ok(by_version)
+    Ok(by_probe)
+}
+
+pub async fn scan_packages_versions(
+    runner: &dyn SandboxRunner,
+    manager: &str,
+    pkg_targets: &[(String, String)],
+) -> HashMap<String, bool> {
+    let mut results = HashMap::new();
+    if pkg_targets.is_empty() {
+        return results;
+    }
+
+    let mut plans = Vec::new();
+    for (pkg_name, tgt_version) in pkg_targets {
+        let (v_curr, v_m1, v_m2) = fetch_history(manager, pkg_name, tgt_version).await;
+        let baseline_m1 = v_m1.clone().unwrap_or_else(|| "n/a".to_string());
+        let baseline_m2 = v_m2.clone().unwrap_or_else(|| "n/a".to_string());
+        println!(
+            "🛡️ [gyrseek] Comparing versions for '{}': current={} baseline-1={} baseline-2={}",
+            pkg_name, v_curr, baseline_m1, baseline_m2
+        );
+
+        plans.push(VersionPlan {
+            package: pkg_name.clone(),
+            target_version: tgt_version.clone(),
+            current: v_curr,
+            baseline_m1: v_m1,
+            baseline_m2: v_m2,
+        });
+    }
+
+    let mut probes: Vec<(String, String)> = Vec::new();
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    for plan in &plans {
+        let mut add_probe = |package: &str, version: &str| {
+            let probe = (package.to_string(), version.to_string());
+            if seen.insert(probe.clone()) {
+                probes.push(probe);
+            }
+        };
+
+        add_probe(&plan.package, &plan.current);
+        if let Some(ref v) = plan.baseline_m1 {
+            add_probe(&plan.package, v);
+        }
+        if let Some(ref v) = plan.baseline_m2 {
+            add_probe(&plan.package, v);
+        }
+    }
+
+    let traces_by_probe = match trace_sandbox_install_matrix(runner, manager, &probes) {
+        Ok(v) => v,
+        Err(e) => {
+            for plan in &plans {
+                println!("❌ [gyrseek] Sandbox execution failed for '{}': {}", plan.package, e);
+                results.insert(format!("{}|{}", plan.package, plan.target_version), false);
+            }
+            return results;
+        }
+    };
+
+    for plan in plans {
+        let key = format!("{}|{}", plan.package, plan.target_version);
+        let current_key = (plan.package.clone(), plan.current.clone());
+        let ips_curr = match traces_by_probe.get(&current_key) {
+            Some(v) => v.clone(),
+            None => {
+                println!(
+                    "❌ [gyrseek] Sandbox trace missing for '{}@{}'.",
+                    plan.package, plan.current
+                );
+                results.insert(key, false);
+                continue;
+            }
+        };
+
+        let mut baseline_ips = HashSet::new();
+        let mut missing = false;
+
+        if let Some(ref v) = plan.baseline_m1 {
+            let k = (plan.package.clone(), v.clone());
+            match traces_by_probe.get(&k) {
+                Some(found) => baseline_ips.extend(found.iter().cloned()),
+                None => {
+                    println!(
+                        "❌ [gyrseek] Sandbox trace missing for baseline '{}@{}'.",
+                        plan.package, v
+                    );
+                    missing = true;
+                }
+            }
+        }
+        if let Some(ref v) = plan.baseline_m2 {
+            let k = (plan.package.clone(), v.clone());
+            match traces_by_probe.get(&k) {
+                Some(found) => baseline_ips.extend(found.iter().cloned()),
+                None => {
+                    println!(
+                        "❌ [gyrseek] Sandbox trace missing for baseline '{}@{}'.",
+                        plan.package, v
+                    );
+                    missing = true;
+                }
+            }
+        }
+
+        if missing {
+            results.insert(key, false);
+            continue;
+        }
+
+        let new_connections = find_new_connections(&ips_curr, &baseline_ips);
+        if !new_connections.is_empty() {
+            let baseline_m1 = plan.baseline_m1.clone().unwrap_or_else(|| "n/a".to_string());
+            let baseline_m2 = plan.baseline_m2.clone().unwrap_or_else(|| "n/a".to_string());
+            println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
+            println!(
+                "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({} and {}): {:?}",
+                plan.package, plan.current, baseline_m1, baseline_m2, new_connections
+            );
+            println!("Aborting host operation securely.");
+            results.insert(key, false);
+            continue;
+        }
+
+        results.insert(key, true);
+    }
+
+    results
 }
 
 pub async fn scan_package_versions(runner: &dyn SandboxRunner, manager: &str, pkg_name: &str, tgt_version: &str) -> bool {
-    let (v_curr, v_m1, v_m2) = fetch_history(manager, pkg_name, tgt_version).await;
-    let baseline_m1 = v_m1.clone().unwrap_or_else(|| "n/a".to_string());
-    let baseline_m2 = v_m2.clone().unwrap_or_else(|| "n/a".to_string());
-    println!(
-        "🛡️ [gyrseek] Comparing versions for '{}': current={} baseline-1={} baseline-2={}",
-        pkg_name, v_curr, baseline_m1, baseline_m2
-    );
-
-    let mut requested_versions = vec![v_curr.clone()];
-    if let Some(ref v) = v_m1 {
-        requested_versions.push(v.clone());
-    }
-    if let Some(ref v) = v_m2 {
-        requested_versions.push(v.clone());
-    }
-
-    let traces_by_version = match trace_sandbox_install_batch(runner, manager, pkg_name, &requested_versions) {
-        Ok(v) => v,
-        Err(e) => {
-            println!("❌ [gyrseek] Sandbox execution failed for '{}': {}", pkg_name, e);
-            return false;
-        }
-    };
-
-    let ips_curr = match traces_by_version.get(&v_curr) {
-        Some(v) => v.clone(),
-        None => {
-            println!(
-                "❌ [gyrseek] Sandbox trace missing for '{}@{}'.",
-                pkg_name, v_curr
-            );
-            return false;
-        }
-    };
-
-    let mut baseline_ips = HashSet::new();
-    if let Some(ref v) = v_m1 {
-        match traces_by_version.get(v) {
-            Some(found) => baseline_ips.extend(found.iter().cloned()),
-            None => {
-                println!(
-                    "❌ [gyrseek] Sandbox trace missing for baseline '{}@{}'.",
-                    pkg_name, v
-                );
-                return false;
-            }
-        }
-    }
-    if let Some(ref v) = v_m2 {
-        match traces_by_version.get(v) {
-            Some(found) => baseline_ips.extend(found.iter().cloned()),
-            None => {
-                println!(
-                    "❌ [gyrseek] Sandbox trace missing for baseline '{}@{}'.",
-                    pkg_name, v
-                );
-                return false;
-            }
-        }
-    }
-
-    let new_connections = find_new_connections(&ips_curr, &baseline_ips);
-
-    if !new_connections.is_empty() {
-        println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
-        println!(
-            "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({} and {}): {:?}",
-            pkg_name, v_curr, baseline_m1, baseline_m2, new_connections
-        );
-        println!("Aborting host operation securely.");
-        return false;
-    }
-
-    true
+    let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
+    let outcome = scan_packages_versions(runner, manager, &targets).await;
+    outcome
+        .get(&format!("{}|{}", pkg_name, tgt_version))
+        .copied()
+        .unwrap_or(false)
 }

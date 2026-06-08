@@ -27,8 +27,8 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - fetch_history queries PyPI for Python packages.
   - fetch_history queries npm registry for npm packages.
 - Behavior capture:
-  - trace_sandbox_install_batch runs via SandboxRunner backend and captures per-version connection IPs from trace output.
-  - Docker backend can execute current and baseline probes in one container session for a package.
+  - trace_sandbox_install_matrix runs via SandboxRunner backend and captures per package-version connection IPs from trace output.
+  - Docker backend can execute probe matrices (multiple packages with their current and baseline versions) in one container session.
   - build_runner_from_env selects backend mode (`docker` default, `host` fallback).
 - Anomaly decision:
   - find_new_connections returns endpoints seen in current but not in baseline.

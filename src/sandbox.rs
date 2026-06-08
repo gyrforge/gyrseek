@@ -3,16 +3,15 @@ use std::process::{Command, Stdio};
 pub trait SandboxRunner {
     fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String>;
 
-    fn trace_install_batch(
+    fn trace_install_matrix(
         &self,
         manager: &str,
-        package: &str,
-        versions: &[String],
-    ) -> Result<Vec<(String, String)>, String> {
+        probes: &[(String, String)],
+    ) -> Result<Vec<((String, String), String)>, String> {
         let mut results = Vec::new();
-        for version in versions {
+        for (package, version) in probes {
             let trace = self.trace_install(manager, package, version)?;
-            results.push((version.clone(), trace));
+            results.push(((package.clone(), version.clone()), trace));
         }
         Ok(results)
     }
@@ -87,123 +86,186 @@ struct DockerRunner;
 
 impl SandboxRunner for DockerRunner {
     fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String> {
-        let versions = vec![version.to_string()];
-        let mut batch = self.trace_install_batch(manager, package, &versions)?;
-        Ok(batch.remove(0).1)
+        let probes = vec![(package.to_string(), version.to_string())];
+        let mut results = self.trace_install_matrix(manager, &probes)?;
+        if results.is_empty() {
+            return Err("docker matrix tracing returned no results".to_string());
+        }
+        Ok(results.remove(0).1)
     }
 
-    fn trace_install_batch(
+    fn trace_install_matrix(
         &self,
         manager: &str,
-        package: &str,
-        versions: &[String],
-    ) -> Result<Vec<(String, String)>, String> {
-        if versions.is_empty() {
-            return Ok(Vec::new());
-        }
+        probes: &[(String, String)],
+    ) -> Result<Vec<((String, String), String)>, String> {
+        trace_install_docker_matrix(manager, probes)
+    }
 
-        let image = if manager == "npm" {
-            "node:22-bookworm-slim"
+}
+
+fn trace_install_docker_matrix(
+    manager: &str,
+    probes: &[(String, String)],
+) -> Result<Vec<((String, String), String)>, String> {
+    if probes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let image = if manager == "npm" {
+        "node:22-bookworm-slim"
+    } else {
+        "python:3.12-bookworm"
+    };
+
+    let out_dir = tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
+    let out_dir_path = out_dir.path().to_string_lossy().to_string();
+
+    let mut install_steps = Vec::new();
+    for (idx, (package, version)) in probes.iter().enumerate() {
+        let pkg_spec = if manager == "npm" {
+            format!("{}@{}", package, version)
         } else {
-            "python:3.12-bookworm"
+            format!("{}=={}", package, version)
         };
 
-        let mut install_steps = Vec::new();
-        for (idx, version) in versions.iter().enumerate() {
-            let pkg_spec = if manager == "npm" {
-                format!("{}@{}", package, version)
-            } else {
-                format!("{}=={}", package, version)
-            };
-            let run_cmd = if manager == "npm" {
-                format!(
-                    "strace -f -e trace=network,execve -o /tmp/gyrseek_trace_{}.log npm install {} --prefix /work --no-save >/dev/null 2>&1 || true",
-                    idx,
-                    shell_single_quoted(&pkg_spec)
-                )
-            } else {
-                format!(
-                    "strace -f -e trace=network,execve -o /tmp/gyrseek_trace_{}.log uv pip install {} --target /work --no-cache >/dev/null 2>&1 || true",
-                    idx,
-                    shell_single_quoted(&pkg_spec)
-                )
-            };
+        let run_cmd = if manager == "npm" {
+            format!(
+                "strace -f -e trace=network,execve -o /out/gyrseek_trace_{}.log npm install {} --prefix /work --no-save >/dev/null 2>&1 || true",
+                idx,
+                shell_single_quoted(&pkg_spec)
+            )
+        } else {
+            format!(
+                "strace -f -e trace=network,execve -o /out/gyrseek_trace_{}.log uv pip install {} --target /work --no-cache >/dev/null 2>&1 || true",
+                idx,
+                shell_single_quoted(&pkg_spec)
+            )
+        };
 
-            let emit_cmd = format!(
-                "echo __GYRSEEK_TRACE_BEGIN_{}__ 1>&2; cat /tmp/gyrseek_trace_{}.log 1>&2; echo __GYRSEEK_TRACE_END_{}__ 1>&2",
-                idx, idx, idx
-            );
-
-            install_steps.push(run_cmd);
-            install_steps.push(emit_cmd);
-        }
-
-        let mut setup_steps = vec![
-            "set -e".to_string(),
-            "apt-get update >/dev/null".to_string(),
-            "apt-get install -y --no-install-recommends strace ca-certificates >/dev/null".to_string(),
-        ];
-        if manager != "npm" {
-            setup_steps.push("python -m pip install --quiet uv >/dev/null".to_string());
-        }
-        setup_steps.extend(install_steps);
-
-        let script = setup_steps.join("; ");
-
-        let output = Command::new("docker")
-            .args([
-                "run",
-                "--rm",
-                "--network",
-                "bridge",
-                "--cap-drop",
-                "ALL",
-                "--security-opt",
-                "no-new-privileges",
-                "--pids-limit",
-                "256",
-                "--memory",
-                "512m",
-                "--cpus",
-                "1",
-                "--read-only",
-                "--tmpfs",
-                "/tmp:rw,noexec,nosuid,size=128m",
-                "--tmpfs",
-                "/work:rw,noexec,nosuid,size=512m",
-                "--workdir",
-                "/work",
-                image,
-                "sh",
-                "-lc",
-                &script,
-            ])
-            .stderr(Stdio::piped())
-            .stdout(Stdio::null())
-            .output()
-            .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
-
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let mut results = Vec::new();
-
-        for (idx, version) in versions.iter().enumerate() {
-            let begin = format!("__GYRSEEK_TRACE_BEGIN_{}__", idx);
-            let end = format!("__GYRSEEK_TRACE_END_{}__", idx);
-            let start_pos = stderr
-                .find(&begin)
-                .ok_or_else(|| format!("missing trace begin marker for version '{}'", version))?;
-            let trace_start = start_pos + begin.len();
-            let rel_end = stderr[trace_start..]
-                .find(&end)
-                .ok_or_else(|| format!("missing trace end marker for version '{}'", version))?;
-            let trace_end = trace_start + rel_end;
-
-            let trace = stderr[trace_start..trace_end].trim().to_string();
-            results.push((version.clone(), trace));
-        }
-
-        Ok(results)
+        install_steps.push(run_cmd);
     }
+
+    let mut setup_steps = vec![
+        "set -e".to_string(),
+        "apt-get -o APT::Sandbox::User=root update >/dev/null".to_string(),
+        "apt-get -o APT::Sandbox::User=root install -y --no-install-recommends strace ca-certificates >/dev/null".to_string(),
+    ];
+    if manager != "npm" {
+        setup_steps.push("python -m pip install --quiet uv >/dev/null".to_string());
+    }
+    setup_steps.extend(install_steps);
+    let script = setup_steps.join("; ");
+
+    let output = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--network",
+            "bridge",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "256",
+            "--memory",
+            "512m",
+            "--cpus",
+            "1",
+            "--user",
+            "root",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=128m",
+            "--tmpfs",
+            "/work:rw,noexec,nosuid,size=512m",
+            "-v",
+            &format!("{}:/out", out_dir_path),
+            "--workdir",
+            "/work",
+            image,
+            "sh",
+            "-lc",
+            &script,
+        ])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "docker sandbox command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let mut results = Vec::new();
+    for (idx, (package, version)) in probes.iter().enumerate() {
+        let trace_path = out_dir.path().join(format!("gyrseek_trace_{}.log", idx));
+        let trace = std::fs::read_to_string(&trace_path)
+            .unwrap_or_else(|_| trace_install_docker_single(manager, package, version).unwrap_or_default());
+        results.push(((package.clone(), version.clone()), trace));
+    }
+
+    Ok(results)
+}
+
+fn trace_install_docker_single(manager: &str, package: &str, version: &str) -> Result<String, String> {
+    let image = if manager == "npm" {
+        "node:22-bookworm-slim"
+    } else {
+        "python:3.12-bookworm"
+    };
+
+    let install_cmd = if manager == "npm" {
+        format!(
+            "strace -f -e trace=network,execve npm install {} --prefix /work --no-save",
+            shell_single_quoted(&format!("{}@{}", package, version))
+        )
+    } else {
+        format!(
+            "python -m pip install --quiet uv && strace -f -e trace=network,execve uv pip install {} --target /work --no-cache",
+            shell_single_quoted(&format!("{}=={}", package, version))
+        )
+    };
+
+    let script = format!(
+        "set -e; apt-get -o APT::Sandbox::User=root update >/dev/null; apt-get -o APT::Sandbox::User=root install -y --no-install-recommends strace ca-certificates >/dev/null; {}",
+        install_cmd
+    );
+
+    let output = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--network",
+            "bridge",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "256",
+            "--memory",
+            "512m",
+            "--cpus",
+            "1",
+            "--user",
+            "root",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=128m",
+            "--tmpfs",
+            "/work:rw,noexec,nosuid,size=512m",
+            "--workdir",
+            "/work",
+            image,
+            "sh",
+            "-lc",
+            &script,
+        ])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
+
+    Ok(String::from_utf8_lossy(&output.stderr).to_string())
 }
 
 fn docker_available() -> bool {

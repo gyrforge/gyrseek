@@ -20,7 +20,7 @@ pub use scanning::find_new_connections;
 
 use parsing::{parse_package_details, should_enforce_package_detection};
 use sandbox::{build_runner_from_env, SandboxRunner};
-use scanning::scan_package_versions;
+use scanning::{scan_package_versions, scan_packages_versions};
 
 pub struct GyrSeek {
     passthrough_args: Vec<String>,
@@ -129,6 +129,50 @@ async fn scan_with_cache(
     result
 }
 
+async fn scan_many_with_cache(
+    cache: &mut HashMap<String, bool>,
+    runner: &dyn SandboxRunner,
+    manager: &str,
+    targets: Vec<(String, String)>,
+) -> bool {
+    let mut uncached: Vec<(String, String)> = Vec::new();
+
+    for (pkg_name, tgt_version) in targets {
+        let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
+        if let Some(cached) = cache.get(&key) {
+            println!(
+                "🧠 [gyrseek] Cache hit for '{}@{}' in current run.",
+                pkg_name, tgt_version
+            );
+            if !cached {
+                return false;
+            }
+            continue;
+        }
+        uncached.push((pkg_name, tgt_version));
+    }
+
+    if uncached.is_empty() {
+        return true;
+    }
+
+    let batch_results = scan_packages_versions(runner, manager, &uncached).await;
+
+    for (pkg_name, tgt_version) in uncached {
+        let result = batch_results
+            .get(&format!("{}|{}", pkg_name, tgt_version))
+            .copied()
+            .unwrap_or(false);
+        let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
+        cache.insert(key, result);
+        if !result {
+            return false;
+        }
+    }
+
+    true
+}
+
 pub async fn run(args: Vec<String>) {
     let eye = GyrSeek::new(args);
     let mut scan_cache: HashMap<String, bool> = HashMap::new();
@@ -150,10 +194,12 @@ pub async fn run(args: Vec<String>) {
                 upgrade_packages.len()
             );
 
-            for pkg_name in upgrade_packages {
-                if !scan_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, &pkg_name, "latest").await {
-                    std::process::exit(1);
-                }
+            let targets: Vec<(String, String)> = upgrade_packages
+                .into_iter()
+                .map(|pkg_name| (pkg_name, "latest".to_string()))
+                .collect();
+            if !scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets).await {
+                std::process::exit(1);
             }
 
             println!("\n✅ [gyrseek] Clear behavioral report for uv lock update targets. Forwarding command safely...");
@@ -175,18 +221,8 @@ pub async fn run(args: Vec<String>) {
                 lock_packages.len()
             );
 
-            for (pkg_name, locked_version) in lock_packages {
-                if !scan_with_cache(
-                    &mut scan_cache,
-                    runner.as_ref(),
-                    &eye.manager,
-                    &pkg_name,
-                    &locked_version,
-                )
-                .await
-                {
-                    std::process::exit(1);
-                }
+            if !scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages).await {
+                std::process::exit(1);
             }
 
             println!("\n✅ [gyrseek] Clear behavioral report for uv lock upgrade set. Forwarding command safely...");
@@ -218,18 +254,8 @@ pub async fn run(args: Vec<String>) {
             lock_packages.len()
         );
 
-        for (pkg_name, locked_version) in lock_packages {
-            if !scan_with_cache(
-                &mut scan_cache,
-                runner.as_ref(),
-                &eye.manager,
-                &pkg_name,
-                &locked_version,
-            )
-            .await
-            {
-                std::process::exit(1);
-            }
+        if !scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages).await {
+            std::process::exit(1);
         }
 
         println!(
@@ -256,19 +282,14 @@ pub async fn run(args: Vec<String>) {
             sync_packages.len()
         );
 
-        for (pkg_name, maybe_version) in sync_packages {
-            let tgt_version = maybe_version.unwrap_or_else(|| "latest".to_string());
-            if !scan_with_cache(
-                &mut scan_cache,
-                runner.as_ref(),
-                &eye.manager,
-                &pkg_name,
-                &tgt_version,
-            )
-            .await
-            {
-                std::process::exit(1);
-            }
+        let targets: Vec<(String, String)> = sync_packages
+            .into_iter()
+            .map(|(pkg_name, maybe_version)| {
+                (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
+            })
+            .collect();
+        if !scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets).await {
+            std::process::exit(1);
         }
 
         println!("\n✅ [gyrseek] Clear behavioral report for sync package set. Forwarding command safely...");
@@ -290,18 +311,8 @@ pub async fn run(args: Vec<String>) {
             lock_packages.len()
         );
 
-        for (pkg_name, locked_version) in lock_packages {
-            if !scan_with_cache(
-                &mut scan_cache,
-                runner.as_ref(),
-                &eye.manager,
-                &pkg_name,
-                &locked_version,
-            )
-            .await
-            {
-                std::process::exit(1);
-            }
+        if !scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages).await {
+            std::process::exit(1);
         }
 
         println!("\n✅ [gyrseek] Clear behavioral report for all locked packages. Forwarding command safely...");
@@ -326,19 +337,14 @@ pub async fn run(args: Vec<String>) {
             pip_packages.len()
         );
 
-        for (pkg_name, maybe_version) in pip_packages {
-            let tgt_version = maybe_version.unwrap_or_else(|| "latest".to_string());
-            if !scan_with_cache(
-                &mut scan_cache,
-                runner.as_ref(),
-                &eye.manager,
-                &pkg_name,
-                &tgt_version,
-            )
-            .await
-            {
-                std::process::exit(1);
-            }
+        let targets: Vec<(String, String)> = pip_packages
+            .into_iter()
+            .map(|(pkg_name, maybe_version)| {
+                (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
+            })
+            .collect();
+        if !scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets).await {
+            std::process::exit(1);
         }
 
         println!("\n✅ [gyrseek] Clear behavioral report for pip package set. Forwarding command safely...");
@@ -366,19 +372,14 @@ pub async fn run(args: Vec<String>) {
             npm_packages.len()
         );
 
-        for (pkg_name, maybe_version) in npm_packages {
-            let tgt_version = maybe_version.unwrap_or_else(|| "latest".to_string());
-            if !scan_with_cache(
-                &mut scan_cache,
-                runner.as_ref(),
-                &eye.manager,
-                &pkg_name,
-                &tgt_version,
-            )
-            .await
-            {
-                std::process::exit(1);
-            }
+        let targets: Vec<(String, String)> = npm_packages
+            .into_iter()
+            .map(|(pkg_name, maybe_version)| {
+                (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
+            })
+            .collect();
+        if !scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets).await {
+            std::process::exit(1);
         }
 
         println!("\n✅ [gyrseek] Clear behavioral report for npm package set. Forwarding command safely...");

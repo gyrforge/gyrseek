@@ -30,7 +30,11 @@ This file stores persistent working memory and agent instructions for this repos
   - npm install/npm i/npm update scans multi-package inputs and package.json dependencies when no explicit package args are given
   - Sandbox execution mode is selected via GYRSEEK_SANDBOX (`docker` default, `host` fallback)
   - Sandbox initialization failures fail closed (non-zero exit)
-  - Docker sandbox batches current and baseline version probes for a package in one container session while preserving version-level attribution
+  - Docker sandbox batches package-version probe matrices (multiple packages and baselines) in one container session while preserving package-version attribution
+  - Docker runner currently avoids read-only rootfs because apt-based probe tooling setup requires writable root filesystem
+  - Docker runner executes setup as root and uses `APT::Sandbox::User=root` to avoid setgroups failures under capability restrictions
+  - Docker runner currently does not drop all Linux capabilities because apt-based setup fails under full capability drop
+  - README documents current Docker hardening limitations and the prebuilt-image path to restore stricter isolation controls
   - In-run cache reuses scan results for repeated manager/package/version probes within the same execution
   - Fail-closed when package detection is expected but missing
 
