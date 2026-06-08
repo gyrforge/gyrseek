@@ -286,6 +286,41 @@ pub fn parse_npm_install_packages_from_args(args: &[String]) -> Vec<(String, Opt
     Vec::new()
 }
 
+pub fn parse_uv_lock_upgrade_packages_from_args(args: &[String]) -> Vec<String> {
+    if args.first().map(String::as_str) != Some("uv") {
+        return Vec::new();
+    }
+    if args.get(1).map(String::as_str) != Some("lock") {
+        return Vec::new();
+    }
+
+    let mut packages = Vec::new();
+    let mut idx = 2;
+    while idx < args.len() {
+        let arg = &args[idx];
+
+        if arg == "-P" || arg == "--upgrade-package" {
+            if let Some(pkg) = args.get(idx + 1) {
+                if !pkg.starts_with('-') {
+                    packages.push(pkg.to_string());
+                }
+            }
+            idx += 2;
+            continue;
+        }
+
+        if let Some(pkg) = arg.strip_prefix("--upgrade-package=") {
+            if !pkg.is_empty() {
+                packages.push(pkg.to_string());
+            }
+        }
+
+        idx += 1;
+    }
+
+    packages
+}
+
 pub fn parse_package_details(manager: &str, args: &[String]) -> (Option<String>, Option<String>) {
     if manager == "uv" || manager == "pip" || manager == "pip3" || manager == "poetry" || manager == "npm" {
         let pkg_arg_start = if manager == "uv" {

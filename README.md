@@ -7,6 +7,7 @@ It currently supports:
 - `uv pip install`
 - `uv pip sync <SRC_FILE>...`
 - `uv sync`
+- `uv lock --upgrade` / `uv lock -P|--upgrade-package`
 - `pip install`
 - `pip3 install`
 - `poetry add|update|install`
@@ -95,6 +96,8 @@ cargo run -- uv pip install requests==2.31.0
 cargo run -- uv pip sync requirements.txt
 cargo run -- uv pip sync pylock.toml
 cargo run -- uv sync
+cargo run -- uv lock --upgrade
+cargo run -- uv lock -P pytest -P requests
 cargo run -- pip install flask
 cargo run -- pip3 install django==5.0.6
 cargo run -- pip3 install -r requirements.txt
@@ -118,8 +121,10 @@ cargo run -- npm install
 - `uv sync` scans all packages found in `uv.lock` before forwarding.
 - `uv pip sync` scans all parseable packages found in its source files before forwarding.
 - `uv pip sync` currently supports requirements-style files and dedicated `pylock.toml` parsing.
+- `uv lock --upgrade` scans all packages found in `uv.lock` before forwarding.
+- `uv lock -P/--upgrade-package` scans all explicitly targeted update packages before forwarding.
 - `pip install` and `pip3 install` scan all parseable package entries, including requirements files passed with `-r/--requirements`.
-- `poetry install` scans all packages found in `poetry.lock` before forwarding.
+- `poetry install` and `poetry update` scan all packages found in `poetry.lock` before forwarding.
 - `npm install` and `npm i` scan all explicit package targets; when no targets are provided, they scan dependencies declared in `package.json`.
 - Version selection is currently sorted lexicographically, not semantic-version aware.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.

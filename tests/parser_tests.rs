@@ -5,6 +5,7 @@ use gyrseek::{
     parse_poetry_lock_packages_from_content,
     parse_pylock_packages_from_content,
     parse_requirements_packages_from_content,
+    parse_uv_lock_upgrade_packages_from_args,
     parse_uv_lock_packages_from_content,
     GyrSeek,
 };
@@ -245,4 +246,19 @@ fn parses_npm_packages_from_package_json_content() {
             ("vitest".to_string(), None),
         ]
     );
+}
+
+#[test]
+fn parses_uv_lock_upgrade_packages_multi_targets() {
+    let args = vec![
+        "uv".to_string(),
+        "lock".to_string(),
+        "-P".to_string(),
+        "pytest".to_string(),
+        "--upgrade-package=requests".to_string(),
+        "--dry-run".to_string(),
+    ];
+
+    let parsed = parse_uv_lock_upgrade_packages_from_args(&args);
+    assert_eq!(parsed, vec!["pytest".to_string(), "requests".to_string()]);
 }

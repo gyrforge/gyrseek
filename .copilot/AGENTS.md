@@ -19,12 +19,13 @@ This file stores persistent working memory and agent instructions for this repos
   - docs/DEV_GUIDE.md
   - docs/ROADMAP.md
 - Current behavior highlights:
-  - Supports uv add, uv pip install, uv pip sync, uv sync, pip/pip3 install, poetry add/update/install, npm install/i
+  - Supports uv add, uv pip install, uv pip sync, uv sync, uv lock update flags, pip/pip3 install, poetry add/update/install, npm install/i
   - Behavioral anomaly detection compares observed network endpoints across versions
   - uv sync scans all packages from uv.lock
+  - uv lock --upgrade scans all packages from uv.lock, and -P/--upgrade-package scans explicit update targets
   - uv pip sync scans packages from requirements-style files and pylock.toml
   - pip/pip3 install scans multi-package inputs, including `-r/--requirements` files
-  - poetry install scans all locked packages from poetry.lock
+  - poetry install and poetry update scan all locked packages from poetry.lock
   - npm install/npm i scans multi-package inputs and package.json dependencies when no explicit package args are given
   - Fail-closed when package detection is expected but missing
 

@@ -11,6 +11,7 @@ pub use parsing::{
     parse_poetry_lock_packages_from_content,
     parse_pylock_packages_from_content,
     parse_requirements_packages_from_content,
+    parse_uv_lock_upgrade_packages_from_args,
     parse_uv_lock_packages_from_content,
 };
 pub use scanning::find_new_connections;
@@ -98,22 +99,82 @@ impl GyrSeek {
     fn parse_npm_install_packages(&self) -> Vec<(String, Option<String>)> {
         parse_npm_install_packages_from_args(&self.passthrough_args)
     }
+
+    fn parse_uv_lock_upgrade_packages(&self) -> Vec<String> {
+        parse_uv_lock_upgrade_packages_from_args(&self.passthrough_args)
+    }
 }
 
 pub async fn run(args: Vec<String>) {
     let eye = GyrSeek::new(args);
 
-    if eye.manager == "poetry" && eye.passthrough_args.get(1).map(String::as_str) == Some("install") {
+    if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("lock") {
+        let upgrade_packages = eye.parse_uv_lock_upgrade_packages();
+        let upgrade_all = eye.passthrough_args.iter().any(|arg| arg == "-U" || arg == "--upgrade");
+
+        if !upgrade_packages.is_empty() {
+            println!(
+                "🛡️ [gyrseek] 'uv lock' update detected. Testing {} target package(s)...",
+                upgrade_packages.len()
+            );
+
+            for pkg_name in upgrade_packages {
+                if !scan_package_versions(&eye.manager, &pkg_name, "latest").await {
+                    std::process::exit(1);
+                }
+            }
+
+            println!("\n✅ [gyrseek] Clear behavioral report for uv lock update targets. Forwarding command safely...");
+            eye.forward_original_command();
+            return;
+        }
+
+        if upgrade_all {
+            let lock_packages = eye.parse_uv_lock_packages();
+            if lock_packages.is_empty() {
+                println!(
+                    "❌ [gyrseek] 'uv lock --upgrade' detected but no packages found in uv.lock. Failing closed."
+                );
+                std::process::exit(1);
+            }
+
+            println!(
+                "🛡️ [gyrseek] 'uv lock --upgrade' detected. Testing {} locked package(s) from uv.lock...",
+                lock_packages.len()
+            );
+
+            for (pkg_name, locked_version) in lock_packages {
+                if !scan_package_versions(&eye.manager, &pkg_name, &locked_version).await {
+                    std::process::exit(1);
+                }
+            }
+
+            println!("\n✅ [gyrseek] Clear behavioral report for uv lock upgrade set. Forwarding command safely...");
+            eye.forward_original_command();
+            return;
+        }
+
+        eye.forward_original_command();
+        return;
+    }
+
+    if eye.manager == "poetry"
+        && (eye.passthrough_args.get(1).map(String::as_str) == Some("install")
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("update"))
+    {
+        let poetry_cmd = eye.passthrough_args.get(1).map(String::as_str).unwrap_or("install");
         let lock_packages = eye.parse_poetry_lock_packages();
         if lock_packages.is_empty() {
             println!(
-                "❌ [gyrseek] 'poetry install' detected but no packages found in poetry.lock. Failing closed."
+                "❌ [gyrseek] 'poetry {}' detected but no packages found in poetry.lock. Failing closed.",
+                poetry_cmd
             );
             std::process::exit(1);
         }
 
         println!(
-            "🛡️ [gyrseek] 'poetry install' detected. Testing {} locked package(s) from poetry.lock...",
+            "🛡️ [gyrseek] 'poetry {}' detected. Testing {} locked package(s) from poetry.lock...",
+            poetry_cmd,
             lock_packages.len()
         );
 
@@ -123,7 +184,9 @@ pub async fn run(args: Vec<String>) {
             }
         }
 
-        println!("\n✅ [gyrseek] Clear behavioral report for poetry lock package set. Forwarding command safely...");
+        println!(
+            "\n✅ [gyrseek] Clear behavioral report for poetry lock package set. Forwarding command safely..."
+        );
         eye.forward_original_command();
         return;
     }
