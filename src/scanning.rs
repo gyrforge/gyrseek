@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 
+use dns_lookup::lookup_addr;
 use regex::Regex;
 use serde::Deserialize;
 
@@ -27,6 +29,41 @@ struct NpmResponse {
 /// Returns connections present in the current version but absent in baseline versions.
 pub fn find_new_connections(ips_curr: &HashSet<String>, baseline_ips: &HashSet<String>) -> Vec<String> {
     ips_curr.difference(baseline_ips).cloned().collect()
+}
+
+fn reverse_dns_domain(ip: &str) -> Option<String> {
+    let addr: IpAddr = ip.parse().ok()?;
+    lookup_addr(&addr).ok()
+}
+
+pub fn enrich_new_connection_domains_with<F>(
+    new_connections: &[String],
+    baseline_ips: &HashSet<String>,
+    resolver: F,
+) -> (Vec<String>, Vec<String>)
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut baseline_domains = HashSet::new();
+    for ip in baseline_ips {
+        if let Some(domain) = resolver(ip) {
+            baseline_domains.insert(domain);
+        }
+    }
+
+    let mut new_ip_domain_matches = Vec::new();
+    let mut new_ip_domain_context = Vec::new();
+
+    for ip in new_connections {
+        if let Some(domain) = resolver(ip) {
+            new_ip_domain_context.push(format!("{} -> {}", ip, domain));
+            if baseline_domains.contains(&domain) {
+                new_ip_domain_matches.push(format!("{} -> {}", ip, domain));
+            }
+        }
+    }
+
+    (new_ip_domain_context, new_ip_domain_matches)
 }
 
 pub async fn fetch_history(manager: &str, package: &str, target_v: &str) -> (String, Option<String>, Option<String>) {
@@ -214,11 +251,27 @@ pub async fn scan_packages_versions(
         if !new_connections.is_empty() {
             let baseline_m1 = plan.baseline_m1.clone().unwrap_or_else(|| "n/a".to_string());
             let baseline_m2 = plan.baseline_m2.clone().unwrap_or_else(|| "n/a".to_string());
+
+            let (new_ip_domain_context, new_ip_domain_matches) =
+                enrich_new_connection_domains_with(&new_connections, &baseline_ips, reverse_dns_domain);
+
             println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
             println!(
                 "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({} and {}): {:?}",
                 plan.package, plan.current, baseline_m1, baseline_m2, new_connections
             );
+            if !new_ip_domain_context.is_empty() {
+                println!(
+                    "ℹ️ [gyrseek] Reverse DNS context for new IPs (informational only): {:?}",
+                    new_ip_domain_context
+                );
+            }
+            if !new_ip_domain_matches.is_empty() {
+                println!(
+                    "ℹ️ [gyrseek] Some new IPs map to domains seen in baseline traffic: {:?}",
+                    new_ip_domain_matches
+                );
+            }
             println!("Aborting host operation securely.");
             results.insert(key, false);
             continue;

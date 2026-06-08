@@ -22,6 +22,8 @@ This file stores persistent working memory and agent instructions for this repos
 - Current behavior highlights:
   - Supports uv add, uv pip install, uv pip sync, uv sync, uv lock update flags, pip/pip3 install, poetry add/update/install, npm install/i/update
   - Behavioral anomaly detection compares observed network endpoints across versions
+  - New IPs remain fail-closed anomalies; warning output now includes reverse-DNS domain context as informational enrichment
+  - Behavior tests include deterministic DNS-enrichment coverage (match and unresolved lookup paths)
   - uv sync scans all packages from uv.lock
   - uv lock parsing excludes local editable/path/workspace project entries to avoid scanning the application under development
   - uv lock --upgrade scans all packages from uv.lock, and -P/--upgrade-package scans explicit update targets
@@ -38,6 +40,7 @@ This file stores persistent working memory and agent instructions for this repos
   - GYRSEEK_NPM_SCANNER_IMAGE and GYRSEEK_PY_SCANNER_IMAGE override scanner images; prebuilt fast path can be enabled via GYRSEEK_PREBUILT_SCANNER_IMAGES or per-manager prebuilt env vars
   - README includes step-by-step Dockerfile/build/use guidance for prebuilt npm and python scanner images
   - README includes digest-pinning examples for scanner images to avoid tag drift and improve reproducibility
+  - Roadmap now includes staged no-execution-first milestones (artifact fetch/unpack, static diff scoring, pre-runtime policy gate)
   - MicroVM mode requires a Linux environment with a MicroVM-capable Docker runtime; macOS Docker Desktop typically does not expose Kata runtime directly
   - README includes a platform support matrix for `docker`, `host`, and `microvm` modes across macOS and Linux
   - Sandbox initialization failures fail closed (non-zero exit)

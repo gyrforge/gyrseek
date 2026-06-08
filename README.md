@@ -43,6 +43,8 @@ It currently supports:
    - current version endpoints
    - baseline endpoints from previous versions
 - Any endpoint that appears only in the current version is treated as a behavioral anomaly.
+- New IPs are always treated as anomalies (fail-closed), even if reverse DNS suggests domain overlap.
+- Reverse DNS domain context is included in warning output as informational enrichment to help triage IP-rotation cases.
 
 This gives you a behavioral signal rather than relying only on package metadata.
 
@@ -313,6 +315,8 @@ Recommended hardening direction:
 - After prebuilt images are in place, re-enable non-root runtime, read-only rootfs, and full capability drop.
 - Add seccomp/apparmor policies and image digest pinning.
 - Consider tighter egress controls (allowlist or proxy model) for stronger containment.
+- Add no-execution-first checks (artifact diff/static heuristics/provenance gates) before runtime execution paths.
+- Evolve no-execution-first checks in phases: artifact fetch/unpack, static diff scoring, then pre-runtime policy gating.
 
 ## Manual Test Runs
 
@@ -342,6 +346,8 @@ Show test output (`println!`) while running tests:
 ```bash
 cargo test -- --nocapture
 ```
+
+Behavior test coverage includes deterministic DNS-enrichment checks for reverse-DNS context handling (including unresolved-IP scenarios).
 
 ## Collaboration and Handoff
 

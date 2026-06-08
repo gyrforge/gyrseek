@@ -17,6 +17,7 @@ pub use parsing::{
     parse_uv_lock_packages_from_content,
 };
 pub use scanning::find_new_connections;
+pub use scanning::enrich_new_connection_domains_with;
 
 use parsing::{parse_package_details, should_enforce_package_detection};
 use sandbox::{build_runner_from_env, list_docker_runtimes, SandboxRunner};
