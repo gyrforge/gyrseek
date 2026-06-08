@@ -50,6 +50,8 @@ struct GyrseekConfig {
     release_burst_threshold: Option<usize>,
     #[serde(default)]
     release_burst_window_hours: Option<usize>,
+    #[serde(default)]
+    minimum_release_age_package: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -105,6 +107,7 @@ fn load_policy_config(
         HashSet<String>,
         Option<usize>,
         usize,
+        Option<usize>,
     ),
     String,
 > {
@@ -120,6 +123,7 @@ fn load_policy_config(
                 HashSet::new(),
                 None,
                 24,
+                None,
             ));
         }
         Err(e) => {
@@ -229,6 +233,17 @@ fn load_policy_config(
         None => 24,
     };
 
+    let minimum_release_age_package = match cfg.minimum_release_age_package {
+        Some(0) => {
+            println!(
+                "⚠️ [gyrseek] Ignoring invalid minimum_release_age_package=0; disabling minimum release age check"
+            );
+            None
+        }
+        Some(v) => Some(v),
+        None => None,
+    };
+
     Ok((
         set,
         domain_set,
@@ -238,6 +253,7 @@ fn load_policy_config(
         new_package_exemptions,
         release_burst_threshold,
         release_burst_window_hours,
+        minimum_release_age_package,
     ))
 }
 
@@ -282,6 +298,7 @@ mod config_tests {
             new_package_exemptions,
             release_burst_threshold,
             release_burst_window_hours,
+            minimum_release_age_package,
         ) =
             load_policy_config(missing, false).expect("missing default should be allowed");
         assert!(ip_allowlist.is_empty());
@@ -292,6 +309,7 @@ mod config_tests {
         assert!(new_package_exemptions.is_empty());
         assert!(release_burst_threshold.is_none());
         assert_eq!(release_burst_window_hours, 24);
+        assert!(minimum_release_age_package.is_none());
     }
 
     #[test]
@@ -319,6 +337,7 @@ mod config_tests {
             new_package_exemptions,
             release_burst_threshold,
             release_burst_window_hours,
+            minimum_release_age_package,
         ) =
             load_policy_config(
             file.path().to_str().expect("path should be utf8"),
@@ -346,6 +365,7 @@ mod config_tests {
         assert!(new_package_exemptions.is_empty());
         assert!(release_burst_threshold.is_none());
         assert_eq!(release_burst_window_hours, 24);
+        assert!(minimum_release_age_package.is_none());
     }
 
     #[test]
@@ -353,7 +373,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "baseline_count: 4").expect("config should be written");
 
-        let (_, _, _, baseline_count, _, _, _, _) = load_policy_config(
+        let (_, _, _, baseline_count, _, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -371,7 +391,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, _, _, min_baseline_age_hours, _, _, _) = load_policy_config(
+        let (_, _, _, _, min_baseline_age_hours, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -391,7 +411,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, _, _, _, new_package_exemptions, _, _) = load_policy_config(
+        let (_, _, _, _, _, new_package_exemptions, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -407,7 +427,17 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_threshold: 3").expect("config should be written");
 
-        let (_, _, _, _, _, _, release_burst_threshold, release_burst_window_hours) = load_policy_config(
+        let (
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            release_burst_threshold,
+            release_burst_window_hours,
+            minimum_release_age_package,
+        ) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -415,6 +445,7 @@ mod config_tests {
 
         assert_eq!(release_burst_threshold, Some(3));
         assert_eq!(release_burst_window_hours, 24);
+        assert!(minimum_release_age_package.is_none());
     }
 
     #[test]
@@ -422,7 +453,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_threshold: 0").expect("config should be written");
 
-        let (_, _, _, _, _, _, release_burst_threshold, _) = load_policy_config(
+        let (_, _, _, _, _, _, release_burst_threshold, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -436,7 +467,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "baseline_count: 0").expect("config should be written");
 
-        let (_, _, _, baseline_count, _, _, _, _) = load_policy_config(
+        let (_, _, _, baseline_count, _, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -454,7 +485,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, baseline_overrides, _, min_baseline_age_hours, _, _, _) = load_policy_config(
+        let (_, _, baseline_overrides, _, min_baseline_age_hours, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -472,7 +503,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_window_hours: 12").expect("config should be written");
 
-        let (_, _, _, _, _, _, _, release_burst_window_hours) = load_policy_config(
+        let (_, _, _, _, _, _, _, release_burst_window_hours, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -486,13 +517,41 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_window_hours: 0").expect("config should be written");
 
-        let (_, _, _, _, _, _, _, release_burst_window_hours) = load_policy_config(
+        let (_, _, _, _, _, _, _, release_burst_window_hours, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
         .expect("config should parse");
 
         assert_eq!(release_burst_window_hours, 24);
+    }
+
+    #[test]
+    fn parses_minimum_release_age_package_override() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "minimum_release_age_package: 7").expect("config should be written");
+
+        let (_, _, _, _, _, _, _, _, minimum_release_age_package) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert_eq!(minimum_release_age_package, Some(7));
+    }
+
+    #[test]
+    fn minimum_release_age_package_zero_disables_policy() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "minimum_release_age_package: 0").expect("config should be written");
+
+        let (_, _, _, _, _, _, _, _, minimum_release_age_package) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert!(minimum_release_age_package.is_none());
     }
 }
 
@@ -604,6 +663,7 @@ async fn scan_with_cache(
     new_package_exemptions: &HashSet<String>,
     release_burst_threshold: Option<usize>,
     release_burst_window_hours: usize,
+    minimum_release_age_package: Option<usize>,
 ) -> bool {
     let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
     if let Some(cached) = cache.get(&key) {
@@ -628,6 +688,7 @@ async fn scan_with_cache(
             new_package_exemptions,
             release_burst_threshold,
             release_burst_window_hours,
+            minimum_release_age_package,
         )
         .await;
     cache.insert(key, result);
@@ -647,6 +708,7 @@ async fn scan_many_with_cache(
     new_package_exemptions: &HashSet<String>,
     release_burst_threshold: Option<usize>,
     release_burst_window_hours: usize,
+    minimum_release_age_package: Option<usize>,
 ) -> bool {
     let mut uncached: Vec<(String, String)> = Vec::new();
 
@@ -681,6 +743,7 @@ async fn scan_many_with_cache(
         new_package_exemptions,
         release_burst_threshold,
         release_burst_window_hours,
+        minimum_release_age_package,
     )
     .await;
 
@@ -717,6 +780,7 @@ pub async fn run(args: Vec<String>) {
         new_package_exemptions,
         release_burst_threshold,
         release_burst_window_hours,
+        minimum_release_age_package,
     ) = match load_policy_config(&config_path, config_explicit) {
         Ok(v) => v,
         Err(e) => {
@@ -764,6 +828,12 @@ pub async fn run(args: Vec<String>) {
             "ℹ️ [gyrseek] Release burst checker enabled (threshold={} releases/{}h)",
             threshold,
             release_burst_window_hours
+        );
+    }
+    if let Some(days) = minimum_release_age_package {
+        println!(
+            "ℹ️ [gyrseek] Minimum release age policy enabled (minimum_release_age_package={} day(s))",
+            days
         );
     }
 
@@ -826,6 +896,7 @@ pub async fn run(args: Vec<String>) {
                 &new_package_exemptions,
                 release_burst_threshold,
                 release_burst_window_hours,
+                minimum_release_age_package,
             )
             .await
             {
@@ -864,6 +935,7 @@ pub async fn run(args: Vec<String>) {
                 &new_package_exemptions,
                 release_burst_threshold,
                 release_burst_window_hours,
+                minimum_release_age_package,
             )
             .await
             {
@@ -912,6 +984,7 @@ pub async fn run(args: Vec<String>) {
             &new_package_exemptions,
             release_burst_threshold,
             release_burst_window_hours,
+            minimum_release_age_package,
         )
         .await
         {
@@ -961,6 +1034,7 @@ pub async fn run(args: Vec<String>) {
             &new_package_exemptions,
             release_burst_threshold,
             release_burst_window_hours,
+            minimum_release_age_package,
         )
         .await
         {
@@ -999,6 +1073,7 @@ pub async fn run(args: Vec<String>) {
             &new_package_exemptions,
             release_burst_threshold,
             release_burst_window_hours,
+            minimum_release_age_package,
         )
         .await
         {
@@ -1046,6 +1121,7 @@ pub async fn run(args: Vec<String>) {
             &new_package_exemptions,
             release_burst_threshold,
             release_burst_window_hours,
+            minimum_release_age_package,
         )
         .await
         {
@@ -1096,6 +1172,7 @@ pub async fn run(args: Vec<String>) {
             &new_package_exemptions,
             release_burst_threshold,
             release_burst_window_hours,
+            minimum_release_age_package,
         )
         .await
         {
@@ -1137,6 +1214,7 @@ pub async fn run(args: Vec<String>) {
         &new_package_exemptions,
         release_burst_threshold,
         release_burst_window_hours,
+        minimum_release_age_package,
     )
     .await
     {

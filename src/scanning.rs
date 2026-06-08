@@ -152,11 +152,20 @@ pub async fn fetch_history_with_baselines(
     baseline_count: usize,
     min_baseline_age_hours: i64,
     release_burst_window_hours: i64,
-) -> (String, Vec<String>, usize) {
-    if let Ok(forced) = std::env::var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H") {
-        if let Ok(v) = forced.parse::<usize>() {
-            return (target_v.to_string(), Vec::new(), v);
-        }
+) -> (String, Vec<String>, usize, Option<i64>) {
+    let forced_releases_last_24h = std::env::var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok());
+    let forced_current_release_age_days = std::env::var("GYRSEEK_TEST_FORCE_CURRENT_RELEASE_AGE_DAYS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok());
+    if forced_releases_last_24h.is_some() || forced_current_release_age_days.is_some() {
+        return (
+            target_v.to_string(),
+            Vec::new(),
+            forced_releases_last_24h.unwrap_or(0),
+            forced_current_release_age_days,
+        );
     }
 
     println!("🔍 [gyrseek] Fetching version matrix from registry for '{}'...", package);
@@ -191,10 +200,13 @@ pub async fn fetch_history_with_baselines(
                         now - Duration::hours(release_burst_window_hours.max(1)),
                         now,
                     );
+                    let current_release_age_days = published_at
+                        .get(&current)
+                        .map(|ts| (now - *ts).num_days());
                     let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
                     let baselines =
                         select_age_eligible_baselines(candidates, &published_at, cutoff, baseline_count);
-                    return (current, baselines, releases_last_24h);
+                    return (current, baselines, releases_last_24h, current_release_age_days);
                 }
             }
         }
@@ -242,17 +254,20 @@ pub async fn fetch_history_with_baselines(
                         now - Duration::hours(release_burst_window_hours.max(1)),
                         now,
                     );
+                    let current_release_age_days = published_at
+                        .get(&current)
+                        .map(|ts| (now - *ts).num_days());
 
                     let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
                     let baselines =
                         select_age_eligible_baselines(candidates, &published_at, cutoff, baseline_count);
-                    return (current, baselines, releases_last_24h);
+                    return (current, baselines, releases_last_24h, current_release_age_days);
                 }
             }
         }
     }
 
-    (target_v.to_string(), Vec::new(), 0)
+    (target_v.to_string(), Vec::new(), 0, None)
 }
 
 pub fn trace_sandbox_install_matrix(
@@ -374,6 +389,32 @@ fn burst_policy_warning(
     ))
 }
 
+fn minimum_release_age_policy_warning(
+    package: &str,
+    current_release_age_days: Option<i64>,
+    minimum_release_age_package: Option<usize>,
+) -> Option<String> {
+    let required_days = minimum_release_age_package?;
+
+    let Some(age_days) = current_release_age_days else {
+        return Some(format!(
+            "⚠️ [gyrseek] minimum_release_age_package triggered for '{}': unable to determine current release age in days.",
+            package
+        ));
+    };
+
+    if age_days < required_days as i64 {
+        return Some(format!(
+            "⚠️ [gyrseek] minimum_release_age_package triggered for '{}': current release age is {} day(s), required >= {} day(s).",
+            package,
+            age_days,
+            required_days
+        ));
+    }
+
+    None
+}
+
 fn exemption_behavior(new_package_exempt: bool, eligible_baseline_versions: usize) -> (bool, bool) {
     if !new_package_exempt {
         return (false, false);
@@ -396,6 +437,7 @@ pub async fn scan_packages_versions(
     new_package_exemptions: &HashSet<String>,
     release_burst_threshold: Option<usize>,
     release_burst_window_hours: usize,
+    minimum_release_age_package: Option<usize>,
 ) -> HashMap<String, bool> {
     let mut results = HashMap::new();
     if pkg_targets.is_empty() {
@@ -410,7 +452,7 @@ pub async fn scan_packages_versions(
             .unwrap_or(DEFAULT_MIN_BASELINE_AGE_HOURS as usize) as i64;
 
         let fetch_count = baseline_count.max(2);
-        let (v_curr, fetched_baselines, releases_last_24h) =
+        let (v_curr, fetched_baselines, releases_last_24h, current_release_age_days) =
             fetch_history_with_baselines(
                 manager,
                 pkg_name,
@@ -420,6 +462,17 @@ pub async fn scan_packages_versions(
                 release_burst_window_hours as i64,
             )
             .await;
+
+        if let Some(warning) = minimum_release_age_policy_warning(
+            pkg_name,
+            current_release_age_days,
+            minimum_release_age_package,
+        ) {
+            println!("{}", warning);
+            println!("Aborting host operation securely.");
+            results.insert(format!("{}|{}", pkg_name, tgt_version), false);
+            continue;
+        }
 
         if let Some(warning) = burst_policy_warning(
             pkg_name,
@@ -616,7 +669,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{
-        burst_policy_warning, burst_triggered, exemption_behavior, select_age_eligible_baselines,
+        burst_policy_warning, burst_triggered, exemption_behavior,
+        minimum_release_age_policy_warning, select_age_eligible_baselines,
         select_effective_baselines,
     };
 
@@ -818,6 +872,25 @@ mod tests {
         assert!(burst_policy_warning("requests", 2, Some(3), 24).is_none());
         assert!(burst_policy_warning("requests", 100, None, 24).is_none());
     }
+
+    #[test]
+    fn minimum_release_age_policy_warns_when_release_is_too_new() {
+        let warning = minimum_release_age_policy_warning("requests", Some(1), Some(3));
+        assert!(warning.is_some());
+        let text = warning.unwrap_or_default();
+        assert!(text.contains("minimum_release_age_package triggered"));
+        assert!(text.contains("required >= 3"));
+    }
+
+    #[test]
+    fn minimum_release_age_policy_has_no_warning_when_release_is_old_enough() {
+        assert!(minimum_release_age_policy_warning("requests", Some(5), Some(3)).is_none());
+    }
+
+    #[test]
+    fn minimum_release_age_policy_disabled_by_default() {
+        assert!(minimum_release_age_policy_warning("requests", Some(0), None).is_none());
+    }
 }
 
 pub async fn scan_package_versions(
@@ -833,6 +906,7 @@ pub async fn scan_package_versions(
     new_package_exemptions: &HashSet<String>,
     release_burst_threshold: Option<usize>,
     release_burst_window_hours: usize,
+    minimum_release_age_package: Option<usize>,
 ) -> bool {
     let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
     let outcome = scan_packages_versions(
@@ -847,6 +921,7 @@ pub async fn scan_package_versions(
         new_package_exemptions,
         release_burst_threshold,
         release_burst_window_hours,
+        minimum_release_age_package,
     )
     .await;
     outcome

@@ -79,6 +79,7 @@ min_baseline_age_hours:
    lodash: 12
 new_package_exemptions:
    - newly-published-package
+minimum_release_age_package: 3
 release_burst_threshold: 3
 release_burst_window_hours: 24
 ```
@@ -110,10 +111,14 @@ Behavior:
 - `min_baseline_age_hours` lets you override that age gate per package (package not listed uses the default `2` hours).
 - `new_package_exemptions` lets you exempt specific new packages when fewer than 2 eligible baseline versions exist.
 - If an exempted package later has 2 or more eligible baseline versions, `gyrseek` warns so you can remove the exemption.
-- `release_burst_threshold` enables an optional burst checker for release churn.
+- `minimum_release_age_package` enables an optional minimum release age policy in days.
+- Default behavior does nothing unless `minimum_release_age_package` is set.
+- When enabled, this check runs before burst and anomaly checks; if the current release age is less than the configured days, `gyrseek` fails closed for that package.
+- `release_burst_threshold` enables an optional burst checker for package version churn.
 - `release_burst_window_hours` sets the burst lookback window in hours; default is `24`.
 - Default behavior does nothing (burst checker disabled) unless `release_burst_threshold` is set.
-- When enabled, if a package has at least the configured number of releases within the configured window, `gyrseek` fails closed for that package.
+- When enabled, `gyrseek` counts how many versions of the same package were published within the configured window.
+- If that version publish count is at least `release_burst_threshold`, `gyrseek` fails closed for that package.
 
 ## Git Clone Behavior
 
