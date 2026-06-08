@@ -152,6 +152,7 @@ Behavior:
 - If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
 - Docker mode is intended as the safer default.
 - Host mode exists for local development or environments without Docker.
+- ⚠️ Host mode is fast, but it does not provide meaningful isolation: if the latest package is malicious, you are effectively running that potentially infected package directly on your laptop and only getting a warning signal from `gyrseek`.
 - MicroVM mode is implemented through Docker runtime selection and requires a MicroVM-capable Docker runtime.
 
 MicroVM configuration:

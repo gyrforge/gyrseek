@@ -35,6 +35,7 @@ This file stores persistent working memory and agent instructions for this repos
   - npm install/npm i/npm update scans multi-package inputs and package.json dependencies when no explicit package args are given
   - npm package.json fallback excludes local/non-registry dependency specs (file/workspace/git/url/link) from scanning
   - Sandbox execution mode is selected via GYRSEEK_SANDBOX (`docker` default, `host` fallback)
+  - Host sandbox mode prioritizes speed over isolation; a malicious latest package can execute on the host while gyrseek only emits warnings/signals
   - GYRSEEK_SANDBOX supports `microvm` mode via Docker runtime selection
   - GYRSEEK_MICROVM_RUNTIME selects the runtime for microvm mode (default `kata-runtime`), and initialization fails closed if runtime is unavailable
   - `cargo run -- sandbox runtimes` lists Docker runtimes to help choose GYRSEEK_MICROVM_RUNTIME
