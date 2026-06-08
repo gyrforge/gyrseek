@@ -9,6 +9,11 @@ struct PyPiResponse {
     releases: std::collections::HashMap<String, serde_json::Value>,
 }
 
+#[derive(Deserialize, Debug)]
+struct NpmResponse {
+    versions: std::collections::HashMap<String, serde_json::Value>,
+}
+
 pub struct GyrSeek {
     passthrough_args: Vec<String>,
     manager: String,
@@ -17,6 +22,29 @@ pub struct GyrSeek {
 /// Returns connections present in the current version but absent in baseline versions.
 pub fn find_new_connections(ips_curr: &HashSet<String>, baseline_ips: &HashSet<String>) -> Vec<String> {
     ips_curr.difference(baseline_ips).cloned().collect()
+}
+
+fn parse_npm_spec(arg: &str) -> (String, Option<String>) {
+    if arg.starts_with('@') {
+        if let Some(idx) = arg.rfind('@') {
+            if idx > 0 {
+                let name = &arg[..idx];
+                let version = &arg[idx + 1..];
+                if !version.is_empty() && name.contains('/') {
+                    return (name.to_string(), Some(version.to_string()));
+                }
+            }
+        }
+        return (arg.to_string(), None);
+    }
+
+    if let Some((name, version)) = arg.rsplit_once('@') {
+        if !name.is_empty() && !version.is_empty() {
+            return (name.to_string(), Some(version.to_string()));
+        }
+    }
+
+    (arg.to_string(), None)
 }
 
 impl GyrSeek {
@@ -31,7 +59,12 @@ impl GyrSeek {
     /// Extracts package names and explicit versions from commands
     /// like: uv pip install requests==2.31.0
     pub fn parse_package_details(&self) -> (Option<String>, Option<String>) {
-        if self.manager == "uv" || self.manager == "pip" || self.manager == "pip3" || self.manager == "poetry" {
+        if self.manager == "uv"
+            || self.manager == "pip"
+            || self.manager == "pip3"
+            || self.manager == "poetry"
+            || self.manager == "npm"
+        {
             let pkg_arg_start = if self.manager == "uv" {
                 if self.passthrough_args.get(1).map(String::as_str) == Some("add") {
                     Some(2)
@@ -51,6 +84,14 @@ impl GyrSeek {
                 } else {
                     None
                 }
+            } else if self.manager == "npm" {
+                if self.passthrough_args.get(1).map(String::as_str) == Some("install")
+                    || self.passthrough_args.get(1).map(String::as_str) == Some("i")
+                {
+                    Some(2)
+                } else {
+                    None
+                }
             } else if self.passthrough_args.get(1).map(String::as_str) == Some("install") {
                 Some(2)
             } else {
@@ -61,6 +102,11 @@ impl GyrSeek {
                 for arg in self.passthrough_args.iter().skip(start) {
                     if arg.starts_with('-') {
                         continue;
+                    }
+
+                    if self.manager == "npm" {
+                        let (name, version) = parse_npm_spec(arg);
+                        return (Some(name), version);
                     }
 
                     if arg.contains("==") {
@@ -80,25 +126,49 @@ impl GyrSeek {
     /// Queries registries asynchronously to pull target, v-1, and v-2 versions
     pub async fn fetch_history(&self, package: &str, target_v: &str) -> (String, Option<String>, Option<String>) {
         println!("🔍 [gyrseek] Fetching version matrix from registry for '{}'...", package);
-        let url = format!("https://pypi.org/pypi/{}/json", package);
         let client = reqwest::Client::new();
 
-        if let Ok(res) = client.get(&url).send().await {
-            if let Ok(data) = res.json::<PyPiResponse>().await {
-                let mut versions: Vec<String> = data.releases.keys().cloned().collect();
-                // Basic sorting (for production, use a semantic versioning crate like 'semver')
-                versions.sort();
+        if self.manager == "npm" {
+            let encoded = package.replace('/', "%2f");
+            let url = format!("https://registry.npmjs.org/{}", encoded);
+            if let Ok(res) = client.get(&url).send().await {
+                if let Ok(data) = res.json::<NpmResponse>().await {
+                    let mut versions: Vec<String> = data.versions.keys().cloned().collect();
+                    // Basic sorting (for production, use a semantic versioning crate like 'semver')
+                    versions.sort();
 
-                let current = if target_v == "latest" {
-                    versions.last().cloned().unwrap_or_else(|| target_v.to_string())
-                } else {
-                    target_v.to_string()
-                };
+                    let current = if target_v == "latest" {
+                        versions.last().cloned().unwrap_or_else(|| target_v.to_string())
+                    } else {
+                        target_v.to_string()
+                    };
 
-                if let Some(idx) = versions.iter().position(|v| v == &current) {
-                    let v_m1 = if idx > 0 { Some(versions[idx - 1].clone()) } else { None };
-                    let v_m2 = if idx > 1 { Some(versions[idx - 2].clone()) } else { None };
-                    return (current, v_m1, v_m2);
+                    if let Some(idx) = versions.iter().position(|v| v == &current) {
+                        let v_m1 = if idx > 0 { Some(versions[idx - 1].clone()) } else { None };
+                        let v_m2 = if idx > 1 { Some(versions[idx - 2].clone()) } else { None };
+                        return (current, v_m1, v_m2);
+                    }
+                }
+            }
+        } else {
+            let url = format!("https://pypi.org/pypi/{}/json", package);
+            if let Ok(res) = client.get(&url).send().await {
+                if let Ok(data) = res.json::<PyPiResponse>().await {
+                    let mut versions: Vec<String> = data.releases.keys().cloned().collect();
+                    // Basic sorting (for production, use a semantic versioning crate like 'semver')
+                    versions.sort();
+
+                    let current = if target_v == "latest" {
+                        versions.last().cloned().unwrap_or_else(|| target_v.to_string())
+                    } else {
+                        target_v.to_string()
+                    };
+
+                    if let Some(idx) = versions.iter().position(|v| v == &current) {
+                        let v_m1 = if idx > 0 { Some(versions[idx - 1].clone()) } else { None };
+                        let v_m2 = if idx > 1 { Some(versions[idx - 2].clone()) } else { None };
+                        return (current, v_m1, v_m2);
+                    }
                 }
             }
         }
@@ -111,19 +181,33 @@ impl GyrSeek {
         let temp_dir = tempfile::tempdir().unwrap();
         let target_path = temp_dir.path().to_str().unwrap();
 
-        // Build owned args to avoid borrowing temporary formatted strings.
-        let cmd_args = vec![
-            "-f".to_string(),
-            "-e".to_string(),
-            "trace=network,execve".to_string(),
-            "uv".to_string(),
-            "pip".to_string(),
-            "install".to_string(),
-            format!("{}=={}", package, version),
-            "--target".to_string(),
-            target_path.to_string(),
-            "--no-cache".to_string(),
-        ];
+        let cmd_args = if self.manager == "npm" {
+            vec![
+                "-f".to_string(),
+                "-e".to_string(),
+                "trace=network,execve".to_string(),
+                "npm".to_string(),
+                "install".to_string(),
+                format!("{}@{}", package, version),
+                "--prefix".to_string(),
+                target_path.to_string(),
+                "--no-save".to_string(),
+            ]
+        } else {
+            // Build owned args to avoid borrowing temporary formatted strings.
+            vec![
+                "-f".to_string(),
+                "-e".to_string(),
+                "trace=network,execve".to_string(),
+                "uv".to_string(),
+                "pip".to_string(),
+                "install".to_string(),
+                format!("{}=={}", package, version),
+                "--target".to_string(),
+                target_path.to_string(),
+                "--no-cache".to_string(),
+            ]
+        };
 
         let output = Command::new("strace")
             .args(&cmd_args)
