@@ -151,7 +151,14 @@ pub async fn fetch_history_with_baselines(
     target_v: &str,
     baseline_count: usize,
     min_baseline_age_hours: i64,
-) -> (String, Vec<String>) {
+    release_burst_window_hours: i64,
+) -> (String, Vec<String>, usize) {
+    if let Ok(forced) = std::env::var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H") {
+        if let Ok(v) = forced.parse::<usize>() {
+            return (target_v.to_string(), Vec::new(), v);
+        }
+    }
+
     println!("🔍 [gyrseek] Fetching version matrix from registry for '{}'...", package);
     let client = reqwest::Client::new();
 
@@ -171,17 +178,23 @@ pub async fn fetch_history_with_baselines(
                 };
 
                 if let Some(idx) = versions.iter().position(|v| v == &current) {
-                    let cutoff = Utc::now() - Duration::hours(min_baseline_age_hours.max(0));
+                    let now = Utc::now();
+                    let cutoff = now - Duration::hours(min_baseline_age_hours.max(0));
                     let mut published_at: HashMap<String, DateTime<Utc>> = HashMap::new();
                     for (version, ts) in data.time {
                         if let Ok(dt) = DateTime::parse_from_rfc3339(&ts) {
                             published_at.insert(version, dt.with_timezone(&Utc));
                         }
                     }
+                    let releases_last_24h = count_releases_in_window(
+                        &published_at,
+                        now - Duration::hours(release_burst_window_hours.max(1)),
+                        now,
+                    );
                     let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
                     let baselines =
                         select_age_eligible_baselines(candidates, &published_at, cutoff, baseline_count);
-                    return (current, baselines);
+                    return (current, baselines, releases_last_24h);
                 }
             }
         }
@@ -200,7 +213,8 @@ pub async fn fetch_history_with_baselines(
                 };
 
                 if let Some(idx) = versions.iter().position(|v| v == &current) {
-                    let cutoff = Utc::now() - Duration::hours(min_baseline_age_hours.max(0));
+                    let now = Utc::now();
+                    let cutoff = now - Duration::hours(min_baseline_age_hours.max(0));
                     let mut published_at: HashMap<String, DateTime<Utc>> = HashMap::new();
 
                     for (version, files) in data.releases {
@@ -223,17 +237,22 @@ pub async fn fetch_history_with_baselines(
                             published_at.insert(version, ts);
                         }
                     }
+                    let releases_last_24h = count_releases_in_window(
+                        &published_at,
+                        now - Duration::hours(release_burst_window_hours.max(1)),
+                        now,
+                    );
 
                     let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
                     let baselines =
                         select_age_eligible_baselines(candidates, &published_at, cutoff, baseline_count);
-                    return (current, baselines);
+                    return (current, baselines, releases_last_24h);
                 }
             }
         }
     }
 
-    (target_v.to_string(), Vec::new())
+    (target_v.to_string(), Vec::new(), 0)
 }
 
 pub fn trace_sandbox_install_matrix(
@@ -318,6 +337,43 @@ fn select_age_eligible_baselines(
     selected
 }
 
+fn count_releases_in_window(
+    published_at: &HashMap<String, DateTime<Utc>>,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+) -> usize {
+    published_at
+        .values()
+        .filter(|ts| **ts >= window_start && **ts <= window_end)
+        .count()
+}
+
+fn burst_triggered(releases_in_window: usize, release_burst_threshold: Option<usize>) -> bool {
+    match release_burst_threshold {
+        Some(threshold) if threshold > 0 => releases_in_window >= threshold,
+        _ => false,
+    }
+}
+
+fn burst_policy_warning(
+    package: &str,
+    releases_in_window: usize,
+    release_burst_threshold: Option<usize>,
+    release_burst_window_hours: usize,
+) -> Option<String> {
+    if !burst_triggered(releases_in_window, release_burst_threshold) {
+        return None;
+    }
+
+    Some(format!(
+        "⚠️ [gyrseek] Release burst threshold triggered for '{}': {} release(s) in last {}h (threshold={}).",
+        package,
+        releases_in_window,
+        release_burst_window_hours,
+        release_burst_threshold.unwrap_or(0)
+    ))
+}
+
 fn exemption_behavior(new_package_exempt: bool, eligible_baseline_versions: usize) -> (bool, bool) {
     if !new_package_exempt {
         return (false, false);
@@ -338,6 +394,8 @@ pub async fn scan_packages_versions(
     baseline_count: usize,
     min_baseline_age_hours_by_package: &HashMap<String, usize>,
     new_package_exemptions: &HashSet<String>,
+    release_burst_threshold: Option<usize>,
+    release_burst_window_hours: usize,
 ) -> HashMap<String, bool> {
     let mut results = HashMap::new();
     if pkg_targets.is_empty() {
@@ -352,15 +410,29 @@ pub async fn scan_packages_versions(
             .unwrap_or(DEFAULT_MIN_BASELINE_AGE_HOURS as usize) as i64;
 
         let fetch_count = baseline_count.max(2);
-        let (v_curr, fetched_baselines) =
+        let (v_curr, fetched_baselines, releases_last_24h) =
             fetch_history_with_baselines(
                 manager,
                 pkg_name,
                 tgt_version,
                 fetch_count,
                 min_baseline_age_hours,
+                release_burst_window_hours as i64,
             )
             .await;
+
+        if let Some(warning) = burst_policy_warning(
+            pkg_name,
+            releases_last_24h,
+            release_burst_threshold,
+            release_burst_window_hours,
+        ) {
+            println!("{}", warning);
+            println!("Aborting host operation securely.");
+            results.insert(format!("{}|{}", pkg_name, tgt_version), false);
+            continue;
+        }
+
         let eligible_baseline_versions = fetched_baselines.len();
 
         let baselines = select_effective_baselines(
@@ -543,7 +615,10 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
 
-    use super::{exemption_behavior, select_age_eligible_baselines, select_effective_baselines};
+    use super::{
+        burst_policy_warning, burst_triggered, exemption_behavior, select_age_eligible_baselines,
+        select_effective_baselines,
+    };
 
     #[test]
     fn baseline_count_limits_fetched_baselines_without_overrides() {
@@ -715,6 +790,34 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn burst_threshold_disabled_by_default() {
+        assert!(!burst_triggered(100, None));
+    }
+
+    #[test]
+    fn burst_threshold_triggers_at_or_above_threshold() {
+        assert!(!burst_triggered(2, Some(3)));
+        assert!(burst_triggered(3, Some(3)));
+        assert!(burst_triggered(4, Some(3)));
+    }
+
+    #[test]
+    fn burst_policy_emits_warning_when_triggered() {
+        let warning = burst_policy_warning("requests", 3, Some(3), 12);
+        assert!(warning.is_some());
+        let text = warning.unwrap_or_default();
+        assert!(text.contains("Release burst threshold triggered"));
+        assert!(text.contains("requests"));
+        assert!(text.contains("last 12h"));
+    }
+
+    #[test]
+    fn burst_policy_has_no_warning_when_not_triggered() {
+        assert!(burst_policy_warning("requests", 2, Some(3), 24).is_none());
+        assert!(burst_policy_warning("requests", 100, None, 24).is_none());
+    }
 }
 
 pub async fn scan_package_versions(
@@ -728,6 +831,8 @@ pub async fn scan_package_versions(
     baseline_count: usize,
     min_baseline_age_hours_by_package: &HashMap<String, usize>,
     new_package_exemptions: &HashSet<String>,
+    release_burst_threshold: Option<usize>,
+    release_burst_window_hours: usize,
 ) -> bool {
     let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
     let outcome = scan_packages_versions(
@@ -740,6 +845,8 @@ pub async fn scan_package_versions(
         baseline_count,
         min_baseline_age_hours_by_package,
         new_package_exemptions,
+        release_burst_threshold,
+        release_burst_window_hours,
     )
     .await;
     outcome

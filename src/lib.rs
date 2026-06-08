@@ -46,6 +46,10 @@ struct GyrseekConfig {
     min_baseline_age_hours: HashMap<String, usize>,
     #[serde(default)]
     new_package_exemptions: Vec<String>,
+    #[serde(default)]
+    release_burst_threshold: Option<usize>,
+    #[serde(default)]
+    release_burst_window_hours: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -99,6 +103,8 @@ fn load_policy_config(
         usize,
         HashMap<String, usize>,
         HashSet<String>,
+        Option<usize>,
+        usize,
     ),
     String,
 > {
@@ -112,6 +118,8 @@ fn load_policy_config(
                 2,
                 HashMap::new(),
                 HashSet::new(),
+                None,
+                24,
             ));
         }
         Err(e) => {
@@ -203,6 +211,24 @@ fn load_policy_config(
         new_package_exemptions.insert(package);
     }
 
+    let release_burst_threshold = match cfg.release_burst_threshold {
+        Some(0) => {
+            println!("⚠️ [gyrseek] Ignoring invalid release_burst_threshold=0; disabling burst checker");
+            None
+        }
+        Some(v) => Some(v),
+        None => None,
+    };
+
+    let release_burst_window_hours = match cfg.release_burst_window_hours {
+        Some(0) => {
+            println!("⚠️ [gyrseek] Ignoring invalid release_burst_window_hours=0; using default 24");
+            24
+        }
+        Some(v) => v,
+        None => 24,
+    };
+
     Ok((
         set,
         domain_set,
@@ -210,6 +236,8 @@ fn load_policy_config(
         baseline_count,
         min_baseline_age_hours,
         new_package_exemptions,
+        release_burst_threshold,
+        release_burst_window_hours,
     ))
 }
 
@@ -252,6 +280,8 @@ mod config_tests {
             baseline_count,
             min_baseline_age_hours,
             new_package_exemptions,
+            release_burst_threshold,
+            release_burst_window_hours,
         ) =
             load_policy_config(missing, false).expect("missing default should be allowed");
         assert!(ip_allowlist.is_empty());
@@ -260,6 +290,8 @@ mod config_tests {
         assert_eq!(baseline_count, 2);
         assert!(min_baseline_age_hours.is_empty());
         assert!(new_package_exemptions.is_empty());
+        assert!(release_burst_threshold.is_none());
+        assert_eq!(release_burst_window_hours, 24);
     }
 
     #[test]
@@ -285,6 +317,8 @@ mod config_tests {
             baseline_count,
             min_baseline_age_hours,
             new_package_exemptions,
+            release_burst_threshold,
+            release_burst_window_hours,
         ) =
             load_policy_config(
             file.path().to_str().expect("path should be utf8"),
@@ -310,6 +344,8 @@ mod config_tests {
         assert_eq!(baseline_count, 2);
         assert!(min_baseline_age_hours.is_empty());
         assert!(new_package_exemptions.is_empty());
+        assert!(release_burst_threshold.is_none());
+        assert_eq!(release_burst_window_hours, 24);
     }
 
     #[test]
@@ -317,7 +353,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "baseline_count: 4").expect("config should be written");
 
-        let (_, _, _, baseline_count, _, _) = load_policy_config(
+        let (_, _, _, baseline_count, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -335,7 +371,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, _, _, min_baseline_age_hours, _) = load_policy_config(
+        let (_, _, _, _, min_baseline_age_hours, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -355,7 +391,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, _, _, _, new_package_exemptions) = load_policy_config(
+        let (_, _, _, _, _, new_package_exemptions, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -367,11 +403,40 @@ mod config_tests {
     }
 
     #[test]
+    fn parses_release_burst_threshold_override() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "release_burst_threshold: 3").expect("config should be written");
+
+        let (_, _, _, _, _, _, release_burst_threshold, release_burst_window_hours) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert_eq!(release_burst_threshold, Some(3));
+        assert_eq!(release_burst_window_hours, 24);
+    }
+
+    #[test]
+    fn release_burst_threshold_zero_disables_checker() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "release_burst_threshold: 0").expect("config should be written");
+
+        let (_, _, _, _, _, _, release_burst_threshold, _) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert!(release_burst_threshold.is_none());
+    }
+
+    #[test]
     fn baseline_count_zero_falls_back_to_default_two() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "baseline_count: 0").expect("config should be written");
 
-        let (_, _, _, baseline_count, _, _) = load_policy_config(
+        let (_, _, _, baseline_count, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -389,7 +454,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, baseline_overrides, _, min_baseline_age_hours, _) = load_policy_config(
+        let (_, _, baseline_overrides, _, min_baseline_age_hours, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -401,11 +466,47 @@ mod config_tests {
         );
         assert_eq!(min_baseline_age_hours.get("requests"), Some(&6));
     }
+
+    #[test]
+    fn parses_release_burst_window_hours_override() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "release_burst_window_hours: 12").expect("config should be written");
+
+        let (_, _, _, _, _, _, _, release_burst_window_hours) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert_eq!(release_burst_window_hours, 12);
+    }
+
+    #[test]
+    fn release_burst_window_hours_zero_falls_back_to_24() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "release_burst_window_hours: 0").expect("config should be written");
+
+        let (_, _, _, _, _, _, _, release_burst_window_hours) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert_eq!(release_burst_window_hours, 24);
+    }
 }
 
 pub struct GyrSeek {
     passthrough_args: Vec<String>,
     manager: String,
+}
+
+struct NoopRunner;
+
+impl SandboxRunner for NoopRunner {
+    fn trace_install(&self, _manager: &str, _package: &str, _version: &str) -> Result<String, String> {
+        Err("noop runner invoked".to_string())
+    }
 }
 
 impl GyrSeek {
@@ -501,6 +602,8 @@ async fn scan_with_cache(
     baseline_count: usize,
     min_baseline_age_hours_by_package: &HashMap<String, usize>,
     new_package_exemptions: &HashSet<String>,
+    release_burst_threshold: Option<usize>,
+    release_burst_window_hours: usize,
 ) -> bool {
     let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
     if let Some(cached) = cache.get(&key) {
@@ -523,6 +626,8 @@ async fn scan_with_cache(
             baseline_count,
             min_baseline_age_hours_by_package,
             new_package_exemptions,
+            release_burst_threshold,
+            release_burst_window_hours,
         )
         .await;
     cache.insert(key, result);
@@ -540,6 +645,8 @@ async fn scan_many_with_cache(
     baseline_count: usize,
     min_baseline_age_hours_by_package: &HashMap<String, usize>,
     new_package_exemptions: &HashSet<String>,
+    release_burst_threshold: Option<usize>,
+    release_burst_window_hours: usize,
 ) -> bool {
     let mut uncached: Vec<(String, String)> = Vec::new();
 
@@ -572,6 +679,8 @@ async fn scan_many_with_cache(
         baseline_count,
         min_baseline_age_hours_by_package,
         new_package_exemptions,
+        release_burst_threshold,
+        release_burst_window_hours,
     )
     .await;
 
@@ -606,6 +715,8 @@ pub async fn run(args: Vec<String>) {
         baseline_count,
         min_baseline_age_hours_by_package,
         new_package_exemptions,
+        release_burst_threshold,
+        release_burst_window_hours,
     ) = match load_policy_config(&config_path, config_explicit) {
         Ok(v) => v,
         Err(e) => {
@@ -648,6 +759,13 @@ pub async fn run(args: Vec<String>) {
             new_package_exemptions.len()
         );
     }
+    if let Some(threshold) = release_burst_threshold {
+        println!(
+            "ℹ️ [gyrseek] Release burst checker enabled (threshold={} releases/{}h)",
+            threshold,
+            release_burst_window_hours
+        );
+    }
 
     let eye = GyrSeek::new(args);
 
@@ -669,11 +787,15 @@ pub async fn run(args: Vec<String>) {
     }
 
     let mut scan_cache: HashMap<String, bool> = HashMap::new();
-    let runner = match build_runner_from_env() {
-        Ok(r) => r,
-        Err(e) => {
-            println!("❌ [gyrseek] Sandbox initialization failed: {}", e);
-            std::process::exit(1);
+    let runner = if env::var("GYRSEEK_TEST_BYPASS_RUNNER_INIT").ok().as_deref() == Some("1") {
+        Box::new(NoopRunner) as Box<dyn SandboxRunner>
+    } else {
+        match build_runner_from_env() {
+            Ok(r) => r,
+            Err(e) => {
+                println!("❌ [gyrseek] Sandbox initialization failed: {}", e);
+                std::process::exit(1);
+            }
         }
     };
 
@@ -702,6 +824,8 @@ pub async fn run(args: Vec<String>) {
                 baseline_count,
                 &min_baseline_age_hours_by_package,
                 &new_package_exemptions,
+                release_burst_threshold,
+                release_burst_window_hours,
             )
             .await
             {
@@ -738,6 +862,8 @@ pub async fn run(args: Vec<String>) {
                 baseline_count,
                 &min_baseline_age_hours_by_package,
                 &new_package_exemptions,
+                release_burst_threshold,
+                release_burst_window_hours,
             )
             .await
             {
@@ -784,6 +910,8 @@ pub async fn run(args: Vec<String>) {
             baseline_count,
             &min_baseline_age_hours_by_package,
             &new_package_exemptions,
+            release_burst_threshold,
+            release_burst_window_hours,
         )
         .await
         {
@@ -831,6 +959,8 @@ pub async fn run(args: Vec<String>) {
             baseline_count,
             &min_baseline_age_hours_by_package,
             &new_package_exemptions,
+            release_burst_threshold,
+            release_burst_window_hours,
         )
         .await
         {
@@ -867,6 +997,8 @@ pub async fn run(args: Vec<String>) {
             baseline_count,
             &min_baseline_age_hours_by_package,
             &new_package_exemptions,
+            release_burst_threshold,
+            release_burst_window_hours,
         )
         .await
         {
@@ -912,6 +1044,8 @@ pub async fn run(args: Vec<String>) {
             baseline_count,
             &min_baseline_age_hours_by_package,
             &new_package_exemptions,
+            release_burst_threshold,
+            release_burst_window_hours,
         )
         .await
         {
@@ -960,6 +1094,8 @@ pub async fn run(args: Vec<String>) {
             baseline_count,
             &min_baseline_age_hours_by_package,
             &new_package_exemptions,
+            release_burst_threshold,
+            release_burst_window_hours,
         )
         .await
         {
@@ -999,6 +1135,8 @@ pub async fn run(args: Vec<String>) {
         baseline_count,
         &min_baseline_age_hours_by_package,
         &new_package_exemptions,
+        release_burst_threshold,
+        release_burst_window_hours,
     )
     .await
     {
