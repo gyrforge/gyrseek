@@ -104,6 +104,28 @@ version = "9.0.1"
 }
 
 #[test]
+fn skips_local_project_package_from_uv_lock_scanning() {
+    let lock = r#"
+version = 1
+
+[[package]]
+name = "test"
+version = "0.1.0"
+source = { editable = "." }
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+"#;
+
+    let parsed = parse_uv_lock_packages_from_content(lock);
+    assert_eq!(
+        parsed,
+        vec![("requests".to_string(), "2.31.0".to_string())]
+    );
+}
+
+#[test]
 fn parses_requirements_packages_for_uv_pip_sync() {
     let requirements = r#"
 # comment
@@ -203,6 +225,30 @@ version = "2.31.0"
 }
 
 #[test]
+fn skips_local_project_package_from_poetry_lock_scanning() {
+    let lock = r#"
+[[package]]
+name = "test"
+version = "0.1.0"
+develop = true
+
+[package.source]
+type = "directory"
+url = "."
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+"#;
+
+    let parsed = parse_poetry_lock_packages_from_content(lock);
+    assert_eq!(
+        parsed,
+        vec![("requests".to_string(), "2.31.0".to_string())]
+    );
+}
+
+#[test]
 fn parses_npm_install_multi_packages_from_args() {
     let args = vec![
         "npm".to_string(),
@@ -265,6 +311,25 @@ fn parses_npm_packages_from_package_json_content() {
             ("vitest".to_string(), None),
         ]
     );
+}
+
+#[test]
+fn skips_local_source_npm_dependencies_from_package_json_content() {
+        let package_json = r#"
+{
+    "name": "demo",
+    "dependencies": {
+        "local-file": "file:../local-file",
+        "local-workspace": "workspace:*",
+        "git-dep": "git+https://github.com/example/repo.git",
+        "url-dep": "https://example.com/pkg.tgz",
+        "axios": "1.8.2"
+    }
+}
+"#;
+
+        let parsed = parse_npm_packages_from_package_json_content(package_json);
+        assert_eq!(parsed, vec![("axios".to_string(), Some("1.8.2".to_string()))]);
 }
 
 #[test]

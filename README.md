@@ -70,6 +70,7 @@ Current scope:
 `gyrseek` now runs scan probes through a `SandboxRunner` backend selected by environment variable:
 
 - Default: `GYRSEEK_SANDBOX=docker`
+- MicroVM runtime mode: `GYRSEEK_SANDBOX=microvm`
 - Alternative (reduced safety): `GYRSEEK_SANDBOX=host`
 
 Behavior:
@@ -77,6 +78,120 @@ Behavior:
 - If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
 - Docker mode is intended as the safer default.
 - Host mode exists for local development or environments without Docker.
+- MicroVM mode is implemented through Docker runtime selection and requires a MicroVM-capable Docker runtime.
+
+MicroVM configuration:
+
+- `GYRSEEK_MICROVM_RUNTIME` selects the Docker runtime used for MicroVM mode.
+- Default runtime: `kata-runtime`.
+- If the configured runtime is not available in `docker info`, startup fails closed with an explicit message.
+- To inspect available runtimes quickly, run: `cargo run -- sandbox runtimes`
+- MicroVM mode requires a Linux environment where the selected runtime is installed and exposed through Docker runtimes.
+- On macOS Docker Desktop, MicroVM runtimes like Kata are typically not available directly; use a Linux VM or Linux host.
+
+Scanner image configuration (Docker and MicroVM modes):
+
+- `GYRSEEK_NPM_SCANNER_IMAGE` overrides the npm scanner image (default: `node:22-bookworm-slim`).
+- `GYRSEEK_PY_SCANNER_IMAGE` overrides the Python scanner image (default: `python:3.12-bookworm`).
+- `GYRSEEK_PREBUILT_SCANNER_IMAGES=true` enables prebuilt fast path for both managers.
+- `GYRSEEK_NPM_SCANNER_PREBUILT=true` and `GYRSEEK_PY_SCANNER_PREBUILT=true` can override prebuilt mode per manager.
+- In prebuilt mode, runtime setup (`apt-get` and Python `uv` bootstrapping) is skipped to reduce hot-path latency.
+
+### Prebuild Scanner Images (Recommended)
+
+If you want faster probe startup and fewer runtime setup failures, prebuild scanner images with required tools already installed.
+
+#### 1) Build an npm scanner image
+
+Create a Dockerfile, for example `Dockerfile.npm-scanner`:
+
+```dockerfile
+FROM node:22-bookworm-slim
+RUN apt-get update \
+   && apt-get install -y --no-install-recommends strace ca-certificates \
+   && rm -rf /var/lib/apt/lists/*
+```
+
+Build it:
+
+```bash
+docker build -f Dockerfile.npm-scanner -t gyrseek/npm-scanner:latest .
+```
+
+Use it:
+
+```bash
+GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
+GYRSEEK_NPM_SCANNER_PREBUILT=true \
+cargo run -- npm update
+```
+
+#### 2) Build a Python scanner image
+
+Create a Dockerfile, for example `Dockerfile.py-scanner`:
+
+```dockerfile
+FROM python:3.12-bookworm
+RUN apt-get update \
+   && apt-get install -y --no-install-recommends strace ca-certificates \
+   && rm -rf /var/lib/apt/lists/*
+RUN python -m pip install --no-cache-dir uv
+```
+
+Build it:
+
+```bash
+docker build -f Dockerfile.py-scanner -t gyrseek/py-scanner:latest .
+```
+
+Use it:
+
+```bash
+GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
+GYRSEEK_PY_SCANNER_PREBUILT=true \
+cargo run -- uv sync
+```
+
+#### 3) Enable prebuilt mode globally (optional)
+
+If both scanner images are prebuilt, you can enable one global toggle:
+
+```bash
+GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
+GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
+GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
+cargo run -- npm update
+```
+
+#### 4) Verify images are usable
+
+Quick checks:
+
+```bash
+docker run --rm gyrseek/npm-scanner:latest sh -lc 'strace -V'
+docker run --rm gyrseek/py-scanner:latest sh -lc 'strace -V && uv --version'
+```
+
+If these checks pass, `GYRSEEK_*_SCANNER_PREBUILT=true` should work without runtime tool installation.
+
+#### 5) Use pinned image digests (recommended for reproducibility)
+
+To avoid tag drift, pin scanner images by digest.
+
+Example (replace digest values with real ones from your registry):
+
+```bash
+GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
+GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
+GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
+cargo run -- npm update
+```
+
+Tip:
+
+- Build and push your scanner images once in CI.
+- Resolve and publish immutable digests.
+- Reference only digest-pinned images in production or shared CI environments.
 
 Examples:
 
@@ -84,6 +199,14 @@ Examples:
 GYRSEEK_SANDBOX=docker cargo run -- npm install
 GYRSEEK_SANDBOX=host cargo run -- pip3 install -r requirements.txt
 ```
+
+### Platform Support Matrix
+
+| Mode | macOS (Docker Desktop) | Linux host/VM |
+| --- | --- | --- |
+| `docker` | Supported | Supported |
+| `host` | Supported (requires local `strace`) | Supported (requires local `strace`) |
+| `microvm` | Usually unavailable (Kata/runtime typically not exposed) | Supported when a MicroVM-capable Docker runtime is installed |
 
 ## Build
 
@@ -149,13 +272,16 @@ cargo run -- npm update lodash typescript
 - Docker setup currently runs as root in-container with apt sandbox user disabled to allow installing probe tooling under restrictive container flags.
 - For tools like `poetry` or `npm`, run it inside a project directory containing the expected project files (`pyproject.toml`, `package.json`, etc.).
 - `uv sync` scans all packages found in `uv.lock` before forwarding.
+- `uv sync` and `uv lock --upgrade` exclude local project entries (for example editable/path/workspace package blocks) from anomaly comparison.
 - `uv pip sync` scans all parseable packages found in its source files before forwarding.
 - `uv pip sync` currently supports requirements-style files and dedicated `pylock.toml` parsing.
 - `uv lock --upgrade` scans all packages found in `uv.lock` before forwarding.
 - `uv lock -P/--upgrade-package` scans all explicitly targeted update packages before forwarding.
 - `pip install` and `pip3 install` scan all parseable package entries, including requirements files passed with `-r/--requirements`.
 - `poetry install` and `poetry update` scan all packages found in `poetry.lock` before forwarding.
+- `poetry install` and `poetry update` exclude local project entries (for example directory/path/editable source blocks) from anomaly comparison.
 - `npm install`, `npm i`, and `npm update` scan all explicit package targets; when no targets are provided, they scan dependencies declared in `package.json`.
+- For npm package.json fallback scanning, local source dependencies (`file:`, `workspace:`, `git+`, direct URL/link sources) are excluded from anomaly comparison.
 - Version selection is currently sorted lexicographically, not semantic-version aware.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
 - For supported install/sync command paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
@@ -171,6 +297,10 @@ Current limitations:
 - Full `--read-only` rootfs is not enabled in this mode.
 - Full capability dropping is not enabled in this mode.
 - Outbound network remains generally available so package manager traffic can proceed.
+
+Performance note:
+
+- You can avoid runtime setup overhead by using prebuilt scanner images and enabling prebuilt mode (`GYRSEEK_PREBUILT_SCANNER_IMAGES=true` or per-manager prebuilt env vars).
 
 Why these limits currently exist:
 

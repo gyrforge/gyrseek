@@ -19,7 +19,7 @@ pub use parsing::{
 pub use scanning::find_new_connections;
 
 use parsing::{parse_package_details, should_enforce_package_detection};
-use sandbox::{build_runner_from_env, SandboxRunner};
+use sandbox::{build_runner_from_env, list_docker_runtimes, SandboxRunner};
 use scanning::{scan_package_versions, scan_packages_versions};
 
 pub struct GyrSeek {
@@ -175,6 +175,24 @@ async fn scan_many_with_cache(
 
 pub async fn run(args: Vec<String>) {
     let eye = GyrSeek::new(args);
+
+    if eye.manager == "sandbox" && eye.passthrough_args.get(1).map(String::as_str) == Some("runtimes") {
+        match list_docker_runtimes() {
+            Ok(runtimes) => {
+                if runtimes.is_empty() {
+                    println!("ℹ️ [gyrseek] Docker reports no configured runtimes.");
+                } else {
+                    println!("ℹ️ [gyrseek] Detected Docker runtimes: {}", runtimes.join(", "));
+                }
+            }
+            Err(e) => {
+                println!("❌ [gyrseek] Failed to list Docker runtimes: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     let mut scan_cache: HashMap<String, bool> = HashMap::new();
     let runner = match build_runner_from_env() {
         Ok(r) => r,

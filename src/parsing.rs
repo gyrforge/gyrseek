@@ -12,17 +12,29 @@ pub fn parse_uv_lock_packages_from_content(content: &str) -> Vec<(String, String
     let mut in_package = false;
     let mut name: Option<String> = None;
     let mut version: Option<String> = None;
+    let mut local_source = false;
+
+    let finalize_package = |packages: &mut Vec<(String, String)>, name: &mut Option<String>, version: &mut Option<String>, local_source: &mut bool| {
+        if !*local_source {
+            if let (Some(n), Some(v)) = (name.take(), version.take()) {
+                packages.push((n, v));
+            }
+        } else {
+            name.take();
+            version.take();
+        }
+        *local_source = false;
+    };
 
     for raw_line in content.lines() {
         let line = raw_line.trim();
 
         if line == "[[package]]" {
-            if let (Some(n), Some(v)) = (name.take(), version.take()) {
-                packages.push((n, v));
-            }
+            finalize_package(&mut packages, &mut name, &mut version, &mut local_source);
             in_package = true;
             name = None;
             version = None;
+            local_source = false;
             continue;
         }
 
@@ -31,11 +43,18 @@ pub fn parse_uv_lock_packages_from_content(content: &str) -> Vec<(String, String
         }
 
         if line.starts_with("[[") && line != "[[package]]" {
-            if let (Some(n), Some(v)) = (name.take(), version.take()) {
-                packages.push((n, v));
-            }
+            finalize_package(&mut packages, &mut name, &mut version, &mut local_source);
             in_package = false;
             continue;
+        }
+
+        if line.starts_with("source")
+            && (line.contains("editable = \".\"")
+                || line.contains("path = \".")
+                || line.contains("workspace = true")
+                || line.contains("virtual = \".\""))
+        {
+            local_source = true;
         }
 
         if name.is_none() {
@@ -48,15 +67,175 @@ pub fn parse_uv_lock_packages_from_content(content: &str) -> Vec<(String, String
         }
     }
 
-    if let (Some(n), Some(v)) = (name, version) {
-        packages.push((n, v));
-    }
+    finalize_package(&mut packages, &mut name, &mut version, &mut local_source);
 
     packages
 }
 
 pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, String)> {
-    parse_uv_lock_packages_from_content(content)
+    let mut packages = Vec::new();
+    let mut in_package = false;
+    let mut in_package_source = false;
+
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut local_source = false;
+    let mut source_type: Option<String> = None;
+    let mut source_url: Option<String> = None;
+    let mut source_path: Option<String> = None;
+    let mut develop = false;
+
+    let is_local_location = |value: &str| {
+        value == "." || value.starts_with("./") || value.starts_with("../") || value.starts_with('/')
+    };
+
+    let finalize_package = |
+        packages: &mut Vec<(String, String)>,
+        name: &mut Option<String>,
+        version: &mut Option<String>,
+        local_source: &mut bool,
+        source_type: &mut Option<String>,
+        source_url: &mut Option<String>,
+        source_path: &mut Option<String>,
+        develop: &mut bool,
+    | {
+        let directory_local = source_type.as_deref() == Some("directory")
+            && (source_url
+                .as_deref()
+                .map(is_local_location)
+                .unwrap_or(false)
+                || source_path
+                    .as_deref()
+                    .map(is_local_location)
+                    .unwrap_or(false));
+
+        if !*local_source && !(directory_local && *develop) {
+            if let (Some(n), Some(v)) = (name.take(), version.take()) {
+                packages.push((n, v));
+            }
+        } else {
+            name.take();
+            version.take();
+        }
+
+        *local_source = false;
+        *source_type = None;
+        *source_url = None;
+        *source_path = None;
+        *develop = false;
+    };
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+
+        if line == "[[package]]" {
+            finalize_package(
+                &mut packages,
+                &mut name,
+                &mut version,
+                &mut local_source,
+                &mut source_type,
+                &mut source_url,
+                &mut source_path,
+                &mut develop,
+            );
+            in_package = true;
+            in_package_source = false;
+            continue;
+        }
+
+        if !in_package {
+            continue;
+        }
+
+        if line.starts_with("[[") && line != "[[package]]" {
+            finalize_package(
+                &mut packages,
+                &mut name,
+                &mut version,
+                &mut local_source,
+                &mut source_type,
+                &mut source_url,
+                &mut source_path,
+                &mut develop,
+            );
+            in_package = false;
+            in_package_source = false;
+            continue;
+        }
+
+        if line.starts_with('[') && !line.starts_with("[[") {
+            in_package_source = line == "[package.source]";
+            continue;
+        }
+
+        if line.starts_with("source")
+            && (line.contains("editable = \".\"")
+                || line.contains("path = \".")
+                || line.contains("workspace = true")
+                || line.contains("virtual = \".\"")
+                || (line.contains("type = \"directory\"")
+                    && (line.contains("url = \".\"")
+                        || line.contains("url = \"./")
+                        || line.contains("url = \"../")
+                        || line.contains("path = \".")
+                        || line.contains("path = \"./")
+                        || line.contains("path = \"../"))))
+        {
+            local_source = true;
+        }
+
+        if line.starts_with("develop") && line.contains("true") {
+            develop = true;
+        }
+
+        if in_package_source {
+            if source_type.is_none() {
+                source_type = parse_toml_quoted_value(line, "type");
+            }
+            if source_url.is_none() {
+                source_url = parse_toml_quoted_value(line, "url");
+            }
+            if source_path.is_none() {
+                source_path = parse_toml_quoted_value(line, "path");
+            }
+
+            if source_type.as_deref() == Some("directory")
+                && (source_url
+                    .as_deref()
+                    .map(is_local_location)
+                    .unwrap_or(false)
+                    || source_path
+                        .as_deref()
+                        .map(is_local_location)
+                        .unwrap_or(false))
+            {
+                local_source = true;
+            }
+        }
+
+        if name.is_none() {
+            name = parse_toml_quoted_value(line, "name");
+            continue;
+        }
+
+        if version.is_none() {
+            version = parse_toml_quoted_value(line, "version");
+        }
+    }
+
+    finalize_package(
+        &mut packages,
+        &mut name,
+        &mut version,
+        &mut local_source,
+        &mut source_type,
+        &mut source_url,
+        &mut source_path,
+        &mut develop,
+    );
+
+    packages
 }
 
 pub fn parse_pylock_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
@@ -238,6 +417,16 @@ fn normalize_npm_version_spec(spec: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
+fn is_non_registry_npm_spec(spec: &str) -> bool {
+    let trimmed = spec.trim();
+    trimmed.starts_with("file:")
+        || trimmed.starts_with("git+")
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("workspace:")
+        || trimmed.starts_with("link:")
+}
+
 pub fn parse_npm_packages_from_package_json_content(content: &str) -> Vec<(String, Option<String>)> {
     let mut packages = Vec::new();
     let parsed: serde_json::Value = match serde_json::from_str(content) {
@@ -249,6 +438,9 @@ pub fn parse_npm_packages_from_package_json_content(content: &str) -> Vec<(Strin
         if let Some(obj) = parsed.get(section).and_then(serde_json::Value::as_object) {
             for (name, version_val) in obj {
                 if let Some(spec) = version_val.as_str() {
+                    if is_non_registry_npm_spec(spec) {
+                        continue;
+                    }
                     packages.push((name.to_string(), normalize_npm_version_spec(spec)));
                 }
             }
