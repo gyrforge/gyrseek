@@ -211,6 +211,7 @@ pub async fn scan_packages_versions(
     pkg_targets: &[(String, String)],
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
+    baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
 ) -> HashMap<String, bool> {
     let mut results = HashMap::new();
     if pkg_targets.is_empty() {
@@ -219,7 +220,21 @@ pub async fn scan_packages_versions(
 
     let mut plans = Vec::new();
     for (pkg_name, tgt_version) in pkg_targets {
-        let (v_curr, v_m1, v_m2) = fetch_history(manager, pkg_name, tgt_version).await;
+        let (v_curr, mut v_m1, mut v_m2) = fetch_history(manager, pkg_name, tgt_version).await;
+        if let Some((override_m1, override_m2)) = baseline_overrides.get(pkg_name) {
+            if let Some(v) = override_m1.clone() {
+                v_m1 = Some(v);
+            }
+            if let Some(v) = override_m2.clone() {
+                v_m2 = Some(v);
+            }
+            println!(
+                "ℹ️ [gyrseek] Applying baseline override(s) for '{}': baseline-1={} baseline-2={}",
+                pkg_name,
+                v_m1.clone().unwrap_or_else(|| "n/a".to_string()),
+                v_m2.clone().unwrap_or_else(|| "n/a".to_string())
+            );
+        }
         let baseline_m1 = v_m1.clone().unwrap_or_else(|| "n/a".to_string());
         let baseline_m2 = v_m2.clone().unwrap_or_else(|| "n/a".to_string());
         println!(
@@ -380,9 +395,18 @@ pub async fn scan_package_versions(
     tgt_version: &str,
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
+    baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
 ) -> bool {
     let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
-    let outcome = scan_packages_versions(runner, manager, &targets, ip_allowlist, domain_allowlist).await;
+    let outcome = scan_packages_versions(
+        runner,
+        manager,
+        &targets,
+        ip_allowlist,
+        domain_allowlist,
+        baseline_overrides,
+    )
+    .await;
     outcome
         .get(&format!("{}|{}", pkg_name, tgt_version))
         .copied()

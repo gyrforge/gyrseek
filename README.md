@@ -67,6 +67,12 @@ ip_allowlist:
 domain_allowlist:
    - pypi.org
    - files.pythonhosted.org
+baseline_overrides:
+   requests:
+      baseline-1: "2.30.0"
+      baseline-2: "2.29.0"
+   lodash:
+      baseline-1: "4.17.20"
 ```
 
 Override config path:
@@ -89,6 +95,8 @@ Behavior:
 - `ip_allowlist` entries are canonicalized (for example, equivalent IPv6 forms normalize to the same value).
 - `domain_allowlist` entries are normalized to lowercase and trailing `.` is removed.
 - Subdomains match allowlisted parent domains (for example, `cdn.example.com` matches `example.com`).
+- `baseline_overrides` is optional and lets you pin baseline versions per package.
+- Each package can set either or both `baseline-1` and `baseline-2`; missing keys continue using registry-derived baselines.
 
 ## Git Clone Behavior
 

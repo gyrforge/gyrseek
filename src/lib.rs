@@ -38,6 +38,16 @@ struct GyrseekConfig {
     ip_allowlist: Vec<String>,
     #[serde(default)]
     domain_allowlist: Vec<String>,
+    #[serde(default)]
+    baseline_overrides: HashMap<String, BaselineOverrideConfig>,
+}
+
+#[derive(Deserialize, Default)]
+struct BaselineOverrideConfig {
+    #[serde(default, rename = "baseline-1")]
+    baseline_1: Option<String>,
+    #[serde(default, rename = "baseline-2")]
+    baseline_2: Option<String>,
 }
 
 fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool), String> {
@@ -72,11 +82,21 @@ fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool)
     Ok((args[idx..].to_vec(), cfg_path, cfg_explicit))
 }
 
-fn load_allowlists(path: &str, explicit: bool) -> Result<(HashSet<String>, HashSet<String>), String> {
+fn load_policy_config(
+    path: &str,
+    explicit: bool,
+) -> Result<
+    (
+        HashSet<String>,
+        HashSet<String>,
+        HashMap<String, (Option<String>, Option<String>)>,
+    ),
+    String,
+> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) if !explicit && e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((HashSet::new(), HashSet::new()));
+            return Ok((HashSet::new(), HashSet::new(), HashMap::new()));
         }
         Err(e) => {
             return Err(format!("Failed to read config file '{}': {}", path, e));
@@ -110,12 +130,35 @@ fn load_allowlists(path: &str, explicit: bool) -> Result<(HashSet<String>, HashS
         domain_set.insert(normalized);
     }
 
-    Ok((set, domain_set))
+    let mut baseline_overrides = HashMap::new();
+    for (package, cfg) in cfg.baseline_overrides {
+        let package = package.trim().to_string();
+        if package.is_empty() {
+            continue;
+        }
+
+        let baseline_1 = cfg
+            .baseline_1
+            .as_ref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let baseline_2 = cfg
+            .baseline_2
+            .as_ref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+
+        if baseline_1.is_some() || baseline_2.is_some() {
+            baseline_overrides.insert(package, (baseline_1, baseline_2));
+        }
+    }
+
+    Ok((set, domain_set, baseline_overrides))
 }
 
 #[cfg(test)]
 mod config_tests {
-    use super::{load_allowlists, parse_global_options};
+    use super::{load_policy_config, parse_global_options};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -145,29 +188,30 @@ mod config_tests {
     #[test]
     fn missing_default_config_returns_empty_allowlist() {
         let missing = "gyrseek-config-does-not-exist.yaml";
-        let (ip_allowlist, domain_allowlist) =
-            load_allowlists(missing, false).expect("missing default should be allowed");
+        let (ip_allowlist, domain_allowlist, baseline_overrides) =
+            load_policy_config(missing, false).expect("missing default should be allowed");
         assert!(ip_allowlist.is_empty());
         assert!(domain_allowlist.is_empty());
+        assert!(baseline_overrides.is_empty());
     }
 
     #[test]
     fn missing_explicit_config_fails_closed() {
         let missing = "gyrseek-config-does-not-exist.yaml";
-        let err = load_allowlists(missing, true).expect_err("explicit config missing should fail");
+        let err = load_policy_config(missing, true).expect_err("explicit config missing should fail");
         assert!(err.contains("Failed to read config file"));
     }
 
     #[test]
-    fn parses_allowlists_and_ignores_invalid_ip_entries() {
+    fn parses_allowlists_and_baseline_overrides() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(
             file,
-            "ip_allowlist:\n  - 1.1.1.1\n  - invalid-entry\n  - 8.8.8.8\n  - 2001:0db8:0000:0000:0000:ff00:0042:8329\ndomain_allowlist:\n  -  Example.COM.  \n  - sub.safe.net"
+            "ip_allowlist:\n  - 1.1.1.1\n  - invalid-entry\n  - 8.8.8.8\n  - 2001:0db8:0000:0000:0000:ff00:0042:8329\ndomain_allowlist:\n  -  Example.COM.  \n  - sub.safe.net\nbaseline_overrides:\n  requests:\n    baseline-1: \"2.30.0\"\n    baseline-2: \"2.29.0\"\n  lodash:\n    baseline-1: \"4.17.20\""
         )
         .expect("config should be written");
 
-        let (ip_allowlist, domain_allowlist) = load_allowlists(
+        let (ip_allowlist, domain_allowlist, baseline_overrides) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -179,6 +223,15 @@ mod config_tests {
         assert!(ip_allowlist.contains("2001:db8::ff00:42:8329"));
         assert!(domain_allowlist.contains("example.com"));
         assert!(domain_allowlist.contains("sub.safe.net"));
+        assert_eq!(baseline_overrides.len(), 2);
+        assert_eq!(
+            baseline_overrides.get("requests"),
+            Some(&(Some("2.30.0".to_string()), Some("2.29.0".to_string())))
+        );
+        assert_eq!(
+            baseline_overrides.get("lodash"),
+            Some(&(Some("4.17.20".to_string()), None))
+        );
     }
 }
 
@@ -276,6 +329,7 @@ async fn scan_with_cache(
     tgt_version: &str,
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
+    baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
 ) -> bool {
     let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
     if let Some(cached) = cache.get(&key) {
@@ -287,7 +341,16 @@ async fn scan_with_cache(
     }
 
     let result =
-        scan_package_versions(runner, manager, pkg_name, tgt_version, ip_allowlist, domain_allowlist).await;
+        scan_package_versions(
+            runner,
+            manager,
+            pkg_name,
+            tgt_version,
+            ip_allowlist,
+            domain_allowlist,
+            baseline_overrides,
+        )
+        .await;
     cache.insert(key, result);
     result
 }
@@ -299,6 +362,7 @@ async fn scan_many_with_cache(
     targets: Vec<(String, String)>,
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
+    baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
 ) -> bool {
     let mut uncached: Vec<(String, String)> = Vec::new();
 
@@ -321,7 +385,15 @@ async fn scan_many_with_cache(
         return true;
     }
 
-    let batch_results = scan_packages_versions(runner, manager, &uncached, ip_allowlist, domain_allowlist).await;
+    let batch_results = scan_packages_versions(
+        runner,
+        manager,
+        &uncached,
+        ip_allowlist,
+        domain_allowlist,
+        baseline_overrides,
+    )
+    .await;
 
     for (pkg_name, tgt_version) in uncached {
         let result = batch_results
@@ -347,7 +419,8 @@ pub async fn run(args: Vec<String>) {
         }
     };
 
-    let (ip_allowlist, domain_allowlist) = match load_allowlists(&config_path, config_explicit) {
+    let (ip_allowlist, domain_allowlist, baseline_overrides) =
+        match load_policy_config(&config_path, config_explicit) {
         Ok(v) => v,
         Err(e) => {
             println!("❌ [gyrseek] {}", e);
@@ -366,6 +439,13 @@ pub async fn run(args: Vec<String>) {
         println!(
             "ℹ️ [gyrseek] Loaded {} allowlisted domain(s) from {}",
             domain_allowlist.len(),
+            config_path
+        );
+    }
+    if !baseline_overrides.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] Loaded {} baseline override package(s) from {}",
+            baseline_overrides.len(),
             config_path
         );
     }
@@ -419,6 +499,7 @@ pub async fn run(args: Vec<String>) {
                 targets,
                 &ip_allowlist,
                 &domain_allowlist,
+                &baseline_overrides,
             )
             .await
             {
@@ -451,6 +532,7 @@ pub async fn run(args: Vec<String>) {
                 lock_packages,
                 &ip_allowlist,
                 &domain_allowlist,
+                &baseline_overrides,
             )
             .await
             {
@@ -493,6 +575,7 @@ pub async fn run(args: Vec<String>) {
             lock_packages,
             &ip_allowlist,
             &domain_allowlist,
+            &baseline_overrides,
         )
         .await
         {
@@ -536,6 +619,7 @@ pub async fn run(args: Vec<String>) {
             targets,
             &ip_allowlist,
             &domain_allowlist,
+            &baseline_overrides,
         )
         .await
         {
@@ -568,6 +652,7 @@ pub async fn run(args: Vec<String>) {
             lock_packages,
             &ip_allowlist,
             &domain_allowlist,
+            &baseline_overrides,
         )
         .await
         {
@@ -609,6 +694,7 @@ pub async fn run(args: Vec<String>) {
             targets,
             &ip_allowlist,
             &domain_allowlist,
+            &baseline_overrides,
         )
         .await
         {
@@ -653,6 +739,7 @@ pub async fn run(args: Vec<String>) {
             targets,
             &ip_allowlist,
             &domain_allowlist,
+            &baseline_overrides,
         )
         .await
         {
@@ -688,6 +775,7 @@ pub async fn run(args: Vec<String>) {
         &tgt_version,
         &ip_allowlist,
         &domain_allowlist,
+        &baseline_overrides,
     )
     .await
     {
