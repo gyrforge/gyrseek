@@ -46,6 +46,8 @@ This file stores persistent working memory and agent instructions for this repos
   - README includes step-by-step Dockerfile/build/use guidance for prebuilt npm and python scanner images
   - README includes digest-pinning examples for scanner images to avoid tag drift and improve reproducibility
   - Roadmap now includes staged no-execution-first milestones (artifact fetch/unpack, static diff scoring, pre-runtime policy gate)
+  - Roadmap now explicitly tracks direct `git clone` runtime interception phases (parser, interception pipeline, policy gates, and integration tests)
+  - Roadmap now includes generated-file comparison phases across package versions (inventory diff, hash first-pass, normalization, semantic diff, and policy gating)
   - MicroVM mode requires a Linux environment with a MicroVM-capable Docker runtime; macOS Docker Desktop typically does not expose Kata runtime directly
   - README includes a platform support matrix for `docker`, `host`, and `microvm` modes across macOS and Linux
   - Sandbox initialization failures fail closed (non-zero exit)
