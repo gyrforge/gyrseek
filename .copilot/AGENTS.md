@@ -24,6 +24,7 @@ This file stores persistent working memory and agent instructions for this repos
   - Behavioral anomaly detection compares observed network endpoints across versions
   - New IPs remain fail-closed anomalies; warning output now includes reverse-DNS domain context as informational enrichment
   - Behavior tests include deterministic DNS-enrichment coverage (match and unresolved lookup paths)
+  - YAML allowlists are supported (`gyrseek.yaml` by default, overridable via `--config` or `GYRSEEK_CONFIG`) using `ip_allowlist` and `domain_allowlist` to ignore known stable endpoints before anomaly blocking; IPs are canonicalized so equivalent IPv6 representations match
   - uv sync scans all packages from uv.lock
   - uv lock parsing excludes local editable/path/workspace project entries to avoid scanning the application under development
   - uv lock --upgrade scans all packages from uv.lock, and -P/--upgrade-package scans explicit update targets

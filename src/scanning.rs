@@ -31,6 +31,73 @@ pub fn find_new_connections(ips_curr: &HashSet<String>, baseline_ips: &HashSet<S
     ips_curr.difference(baseline_ips).cloned().collect()
 }
 
+pub fn filter_allowlisted_new_connections(
+    new_connections: Vec<String>,
+    ip_allowlist: &HashSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    let mut remaining = Vec::new();
+    let mut allowlisted = Vec::new();
+
+    let canonical_allowlist: HashSet<String> = ip_allowlist
+        .iter()
+        .filter_map(|ip| ip.parse::<IpAddr>().ok().map(|addr| addr.to_string()))
+        .collect();
+
+    for ip in new_connections {
+        match ip.parse::<IpAddr>() {
+            Ok(addr) => {
+                let canonical = addr.to_string();
+                if canonical_allowlist.contains(&canonical) {
+                    allowlisted.push(ip);
+                } else {
+                    remaining.push(ip);
+                }
+            }
+            Err(_) => remaining.push(ip),
+        }
+    }
+
+    (remaining, allowlisted)
+}
+
+fn normalize_domain(domain: &str) -> String {
+    domain.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn domain_is_allowlisted(domain: &str, domain_allowlist: &HashSet<String>) -> bool {
+    let normalized = normalize_domain(domain);
+    for allowed in domain_allowlist {
+        let allowed = normalize_domain(allowed);
+        if normalized == allowed || normalized.ends_with(&format!(".{}", allowed)) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn filter_domain_allowlisted_new_connections_with<F>(
+    new_connections: Vec<String>,
+    domain_allowlist: &HashSet<String>,
+    resolver: F,
+) -> (Vec<String>, Vec<String>)
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut remaining = Vec::new();
+    let mut allowlisted = Vec::new();
+
+    for ip in new_connections {
+        match resolver(&ip) {
+            Some(domain) if domain_is_allowlisted(&domain, domain_allowlist) => {
+                allowlisted.push(format!("{} -> {}", ip, domain));
+            }
+            _ => remaining.push(ip),
+        }
+    }
+
+    (remaining, allowlisted)
+}
+
 fn reverse_dns_domain(ip: &str) -> Option<String> {
     let addr: IpAddr = ip.parse().ok()?;
     lookup_addr(&addr).ok()
@@ -142,6 +209,8 @@ pub async fn scan_packages_versions(
     runner: &dyn SandboxRunner,
     manager: &str,
     pkg_targets: &[(String, String)],
+    ip_allowlist: &HashSet<String>,
+    domain_allowlist: &HashSet<String>,
 ) -> HashMap<String, bool> {
     let mut results = HashMap::new();
     if pkg_targets.is_empty() {
@@ -248,6 +317,27 @@ pub async fn scan_packages_versions(
         }
 
         let new_connections = find_new_connections(&ips_curr, &baseline_ips);
+        let (new_connections, allowlisted_connections) =
+            filter_allowlisted_new_connections(new_connections, ip_allowlist);
+        let (new_connections, allowlisted_domain_connections) = filter_domain_allowlisted_new_connections_with(
+            new_connections,
+            domain_allowlist,
+            reverse_dns_domain,
+        );
+
+        if !allowlisted_connections.is_empty() {
+            println!(
+                "ℹ️ [gyrseek] IP allowlist ignored new endpoint(s) for '{}': {:?}",
+                plan.package, allowlisted_connections
+            );
+        }
+        if !allowlisted_domain_connections.is_empty() {
+            println!(
+                "ℹ️ [gyrseek] Domain allowlist ignored new endpoint(s) for '{}': {:?}",
+                plan.package, allowlisted_domain_connections
+            );
+        }
+
         if !new_connections.is_empty() {
             let baseline_m1 = plan.baseline_m1.clone().unwrap_or_else(|| "n/a".to_string());
             let baseline_m2 = plan.baseline_m2.clone().unwrap_or_else(|| "n/a".to_string());
@@ -283,9 +373,16 @@ pub async fn scan_packages_versions(
     results
 }
 
-pub async fn scan_package_versions(runner: &dyn SandboxRunner, manager: &str, pkg_name: &str, tgt_version: &str) -> bool {
+pub async fn scan_package_versions(
+    runner: &dyn SandboxRunner,
+    manager: &str,
+    pkg_name: &str,
+    tgt_version: &str,
+    ip_allowlist: &HashSet<String>,
+    domain_allowlist: &HashSet<String>,
+) -> bool {
     let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
-    let outcome = scan_packages_versions(runner, manager, &targets).await;
+    let outcome = scan_packages_versions(runner, manager, &targets, ip_allowlist, domain_allowlist).await;
     outcome
         .get(&format!("{}|{}", pkg_name, tgt_version))
         .copied()

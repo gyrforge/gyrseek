@@ -48,6 +48,48 @@ It currently supports:
 
 This gives you a behavioral signal rather than relying only on package metadata.
 
+## Stable Allowlist Config
+
+You can define allowlisted IPs and domains that should be ignored before anomaly blocking.
+
+Default config file path:
+
+```text
+gyrseek.yaml
+```
+
+Config format:
+
+```yaml
+ip_allowlist:
+   - 151.101.0.223
+   - 151.101.64.223
+domain_allowlist:
+   - pypi.org
+   - files.pythonhosted.org
+```
+
+Override config path:
+
+```bash
+cargo run -- --config ./security-policy.yaml npm install
+```
+
+You can also set an environment variable:
+
+```bash
+GYRSEEK_CONFIG=./security-policy.yaml cargo run -- npm install
+```
+
+Behavior:
+
+- If `gyrseek.yaml` is missing, `gyrseek` runs with an empty allowlist.
+- If a custom config path is provided and cannot be read, `gyrseek` fails closed.
+- Invalid `ip_allowlist` entries are ignored with a warning.
+- `ip_allowlist` entries are canonicalized (for example, equivalent IPv6 forms normalize to the same value).
+- `domain_allowlist` entries are normalized to lowercase and trailing `.` is removed.
+- Subdomains match allowlisted parent domains (for example, `cdn.example.com` matches `example.com`).
+
 ## Git Clone Behavior
 
 The repository includes safe simulation tests for git clone-style network anomaly detection in:
