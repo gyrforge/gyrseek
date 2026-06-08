@@ -14,6 +14,7 @@ This file stores persistent working memory and agent instructions for this repos
   - src/sandbox.rs (sandbox runner backends and mode selection)
 - Test strategy:
   - Integration tests under tests/
+  - Prefer placing new tests under tests/ rather than src/
   - Run with cargo test
 - Collaboration docs:
   - docs/ARCHITECTURE.md
@@ -22,9 +23,11 @@ This file stores persistent working memory and agent instructions for this repos
 - Current behavior highlights:
   - Supports uv add, uv pip install, uv pip sync, uv sync, uv lock update flags, pip/pip3 install, poetry add/update/install, npm install/i/update
   - Behavioral anomaly detection compares observed network endpoints across versions
+  - Behavioral anomaly detection also compares install-time git clone command signatures across versions and fails closed when new clone behavior appears
+  - Install-time git clone behavior comparison is covered by integration tests in tests/git_clone_scan_tests.rs
   - New IPs remain fail-closed anomalies; warning output now includes reverse-DNS domain context as informational enrichment
   - Behavior tests include deterministic DNS-enrichment coverage (match and unresolved lookup paths)
-  - YAML policy config is supported (`gyrseek.yaml` by default, overridable via `--config` or `GYRSEEK_CONFIG`) using `ip_allowlist`, `domain_allowlist`, optional package `baseline_overrides` (`baseline-1`/`baseline-2`), `baseline_count` (default 2), per-package `min_baseline_age_hours` (default effective age gate 2 hours), `new_package_exemptions` (temporary bypass when <2 eligible baselines), optional `minimum_release_age_package` (disabled by default; when set, fails closed if current release age in days is below threshold), optional `release_burst_threshold` (disabled by default), and optional `release_burst_window_hours` (default 24h; when threshold is set, fails closed if version publish count in the configured window meets threshold); IPs are canonicalized so equivalent IPv6 representations match
+  - YAML policy config is supported (`gyrseek.yaml` by default, overridable via `--config` or `GYRSEEK_CONFIG`) using `ip_allowlist`, `domain_allowlist`, `git_clone_allowlist` (allowlist for install-time git clone targets), optional package `baseline_overrides` (`baseline-1`/`baseline-2`), `baseline_count` (default 2), per-package `min_baseline_age_hours` (default effective age gate 2 hours), `new_package_exemptions` (temporary bypass when <2 eligible baselines), optional `minimum_release_age_package` (disabled by default; when set, fails closed if current release age in days is below threshold), optional `release_burst_threshold` (disabled by default), and optional `release_burst_window_hours` (default 24h; when threshold is set, fails closed if version publish count in the configured window meets threshold); IPs are canonicalized so equivalent IPv6 representations match
   - uv sync scans all packages from uv.lock
   - uv lock parsing excludes local editable/path/workspace project entries to avoid scanning the application under development
   - uv lock --upgrade scans all packages from uv.lock, and -P/--upgrade-package scans explicit update targets

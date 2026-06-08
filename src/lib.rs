@@ -25,10 +25,12 @@ pub use scanning::find_new_connections;
 pub use scanning::enrich_new_connection_domains_with;
 pub use scanning::filter_allowlisted_new_connections;
 pub use scanning::filter_domain_allowlisted_new_connections_with;
+pub use scanning::scan_packages_versions;
+pub use sandbox::SandboxRunner;
 
 use parsing::{parse_package_details, should_enforce_package_detection};
-use sandbox::{build_runner_from_env, list_docker_runtimes, SandboxRunner};
-use scanning::{scan_package_versions, scan_packages_versions};
+use sandbox::{build_runner_from_env, list_docker_runtimes};
+use scanning::scan_package_versions;
 
 const DEFAULT_CONFIG_PATH: &str = "gyrseek.yaml";
 
@@ -38,6 +40,8 @@ struct GyrseekConfig {
     ip_allowlist: Vec<String>,
     #[serde(default)]
     domain_allowlist: Vec<String>,
+    #[serde(default)]
+    git_clone_allowlist: Vec<String>,
     #[serde(default)]
     baseline_overrides: HashMap<String, BaselineOverrideConfig>,
     #[serde(default)]
@@ -108,6 +112,7 @@ fn load_policy_config(
         Option<usize>,
         usize,
         Option<usize>,
+        HashSet<String>,
     ),
     String,
 > {
@@ -124,6 +129,7 @@ fn load_policy_config(
                 None,
                 24,
                 None,
+                HashSet::new(),
             ));
         }
         Err(e) => {
@@ -156,6 +162,15 @@ fn load_policy_config(
             continue;
         }
         domain_set.insert(normalized);
+    }
+
+    let mut git_clone_allowlist = HashSet::new();
+    for entry in cfg.git_clone_allowlist {
+        let normalized = entry.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            continue;
+        }
+        git_clone_allowlist.insert(normalized);
     }
 
     let mut baseline_overrides = HashMap::new();
@@ -254,6 +269,7 @@ fn load_policy_config(
         release_burst_threshold,
         release_burst_window_hours,
         minimum_release_age_package,
+        git_clone_allowlist,
     ))
 }
 
@@ -299,6 +315,7 @@ mod config_tests {
             release_burst_threshold,
             release_burst_window_hours,
             minimum_release_age_package,
+            git_clone_allowlist,
         ) =
             load_policy_config(missing, false).expect("missing default should be allowed");
         assert!(ip_allowlist.is_empty());
@@ -310,6 +327,7 @@ mod config_tests {
         assert!(release_burst_threshold.is_none());
         assert_eq!(release_burst_window_hours, 24);
         assert!(minimum_release_age_package.is_none());
+        assert!(git_clone_allowlist.is_empty());
     }
 
     #[test]
@@ -338,6 +356,7 @@ mod config_tests {
             release_burst_threshold,
             release_burst_window_hours,
             minimum_release_age_package,
+            git_clone_allowlist,
         ) =
             load_policy_config(
             file.path().to_str().expect("path should be utf8"),
@@ -366,6 +385,7 @@ mod config_tests {
         assert!(release_burst_threshold.is_none());
         assert_eq!(release_burst_window_hours, 24);
         assert!(minimum_release_age_package.is_none());
+        assert!(git_clone_allowlist.is_empty());
     }
 
     #[test]
@@ -373,7 +393,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "baseline_count: 4").expect("config should be written");
 
-        let (_, _, _, baseline_count, _, _, _, _, _) = load_policy_config(
+        let (_, _, _, baseline_count, _, _, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -391,7 +411,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, _, _, min_baseline_age_hours, _, _, _, _) = load_policy_config(
+        let (_, _, _, _, min_baseline_age_hours, _, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -411,7 +431,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, _, _, _, new_package_exemptions, _, _, _) = load_policy_config(
+        let (_, _, _, _, _, new_package_exemptions, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -437,6 +457,7 @@ mod config_tests {
             release_burst_threshold,
             release_burst_window_hours,
             minimum_release_age_package,
+            git_clone_allowlist,
         ) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
@@ -446,6 +467,7 @@ mod config_tests {
         assert_eq!(release_burst_threshold, Some(3));
         assert_eq!(release_burst_window_hours, 24);
         assert!(minimum_release_age_package.is_none());
+        assert!(git_clone_allowlist.is_empty());
     }
 
     #[test]
@@ -453,7 +475,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_threshold: 0").expect("config should be written");
 
-        let (_, _, _, _, _, _, release_burst_threshold, _, _) = load_policy_config(
+        let (_, _, _, _, _, _, release_burst_threshold, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -467,7 +489,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "baseline_count: 0").expect("config should be written");
 
-        let (_, _, _, baseline_count, _, _, _, _, _) = load_policy_config(
+        let (_, _, _, baseline_count, _, _, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -485,7 +507,7 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, baseline_overrides, _, min_baseline_age_hours, _, _, _, _) = load_policy_config(
+        let (_, _, baseline_overrides, _, min_baseline_age_hours, _, _, _, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -503,7 +525,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_window_hours: 12").expect("config should be written");
 
-        let (_, _, _, _, _, _, _, release_burst_window_hours, _) = load_policy_config(
+        let (_, _, _, _, _, _, _, release_burst_window_hours, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -517,7 +539,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_window_hours: 0").expect("config should be written");
 
-        let (_, _, _, _, _, _, _, release_burst_window_hours, _) = load_policy_config(
+        let (_, _, _, _, _, _, _, release_burst_window_hours, _, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -531,7 +553,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "minimum_release_age_package: 7").expect("config should be written");
 
-        let (_, _, _, _, _, _, _, _, minimum_release_age_package) = load_policy_config(
+        let (_, _, _, _, _, _, _, _, minimum_release_age_package, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
@@ -545,13 +567,28 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "minimum_release_age_package: 0").expect("config should be written");
 
-        let (_, _, _, _, _, _, _, _, minimum_release_age_package) = load_policy_config(
+        let (_, _, _, _, _, _, _, _, minimum_release_age_package, _) = load_policy_config(
             file.path().to_str().expect("path should be utf8"),
             true,
         )
         .expect("config should parse");
 
         assert!(minimum_release_age_package.is_none());
+    }
+
+    #[test]
+    fn parses_git_clone_allowlist() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "git_clone_allowlist:\n  - https://github.com/acme/repo.git\n  - '  '").expect("config should be written");
+
+        let (_, _, _, _, _, _, _, _, _, git_clone_allowlist) = load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse");
+
+        assert!(git_clone_allowlist.contains("https://github.com/acme/repo.git"));
+        assert_eq!(git_clone_allowlist.len(), 1);
     }
 }
 
@@ -657,6 +694,7 @@ async fn scan_with_cache(
     tgt_version: &str,
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
+    git_clone_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
     baseline_count: usize,
     min_baseline_age_hours_by_package: &HashMap<String, usize>,
@@ -682,6 +720,7 @@ async fn scan_with_cache(
             tgt_version,
             ip_allowlist,
             domain_allowlist,
+            git_clone_allowlist,
             baseline_overrides,
             baseline_count,
             min_baseline_age_hours_by_package,
@@ -702,6 +741,7 @@ async fn scan_many_with_cache(
     targets: Vec<(String, String)>,
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
+    git_clone_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
     baseline_count: usize,
     min_baseline_age_hours_by_package: &HashMap<String, usize>,
@@ -737,6 +777,7 @@ async fn scan_many_with_cache(
         &uncached,
         ip_allowlist,
         domain_allowlist,
+        git_clone_allowlist,
         baseline_overrides,
         baseline_count,
         min_baseline_age_hours_by_package,
@@ -781,6 +822,7 @@ pub async fn run(args: Vec<String>) {
         release_burst_threshold,
         release_burst_window_hours,
         minimum_release_age_package,
+        git_clone_allowlist,
     ) = match load_policy_config(&config_path, config_explicit) {
         Ok(v) => v,
         Err(e) => {
@@ -800,6 +842,13 @@ pub async fn run(args: Vec<String>) {
         println!(
             "ℹ️ [gyrseek] Loaded {} allowlisted domain(s) from {}",
             domain_allowlist.len(),
+            config_path
+        );
+    }
+    if !git_clone_allowlist.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] Loaded {} allowlisted git clone target(s) from {}",
+            git_clone_allowlist.len(),
             config_path
         );
     }
@@ -890,6 +939,7 @@ pub async fn run(args: Vec<String>) {
                 targets,
                 &ip_allowlist,
                 &domain_allowlist,
+                &git_clone_allowlist,
                 &baseline_overrides,
                 baseline_count,
                 &min_baseline_age_hours_by_package,
@@ -929,6 +979,7 @@ pub async fn run(args: Vec<String>) {
                 lock_packages,
                 &ip_allowlist,
                 &domain_allowlist,
+                &git_clone_allowlist,
                 &baseline_overrides,
                 baseline_count,
                 &min_baseline_age_hours_by_package,
@@ -978,6 +1029,7 @@ pub async fn run(args: Vec<String>) {
             lock_packages,
             &ip_allowlist,
             &domain_allowlist,
+            &git_clone_allowlist,
             &baseline_overrides,
             baseline_count,
             &min_baseline_age_hours_by_package,
@@ -1028,6 +1080,7 @@ pub async fn run(args: Vec<String>) {
             targets,
             &ip_allowlist,
             &domain_allowlist,
+            &git_clone_allowlist,
             &baseline_overrides,
             baseline_count,
             &min_baseline_age_hours_by_package,
@@ -1067,6 +1120,7 @@ pub async fn run(args: Vec<String>) {
             lock_packages,
             &ip_allowlist,
             &domain_allowlist,
+            &git_clone_allowlist,
             &baseline_overrides,
             baseline_count,
             &min_baseline_age_hours_by_package,
@@ -1115,6 +1169,7 @@ pub async fn run(args: Vec<String>) {
             targets,
             &ip_allowlist,
             &domain_allowlist,
+            &git_clone_allowlist,
             &baseline_overrides,
             baseline_count,
             &min_baseline_age_hours_by_package,
@@ -1166,6 +1221,7 @@ pub async fn run(args: Vec<String>) {
             targets,
             &ip_allowlist,
             &domain_allowlist,
+            &git_clone_allowlist,
             &baseline_overrides,
             baseline_count,
             &min_baseline_age_hours_by_package,
@@ -1208,6 +1264,7 @@ pub async fn run(args: Vec<String>) {
         &tgt_version,
         &ip_allowlist,
         &domain_allowlist,
+        &git_clone_allowlist,
         &baseline_overrides,
         baseline_count,
         &min_baseline_age_hours_by_package,

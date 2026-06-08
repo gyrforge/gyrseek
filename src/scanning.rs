@@ -8,6 +8,12 @@ use serde::Deserialize;
 
 use crate::sandbox::SandboxRunner;
 
+#[derive(Default, Clone)]
+struct TraceSignals {
+    ips: HashSet<String>,
+    git_clone_signatures: HashSet<String>,
+}
+
 #[derive(Clone)]
 struct VersionPlan {
     package: String,
@@ -270,24 +276,119 @@ pub async fn fetch_history_with_baselines(
     (target_v.to_string(), Vec::new(), 0, None)
 }
 
-pub fn trace_sandbox_install_matrix(
+fn trace_sandbox_install_matrix(
     runner: &dyn SandboxRunner,
     manager: &str,
     probes: &[(String, String)],
-) -> Result<HashMap<(String, String), HashSet<String>>, String> {
+) -> Result<HashMap<(String, String), TraceSignals>, String> {
     let traces = runner.trace_install_matrix(manager, probes)?;
     let re = Regex::new(r#"sin_addr=inet_addr\("([\d.]+)"\)"#).unwrap();
-    let mut by_probe: HashMap<(String, String), HashSet<String>> = HashMap::new();
+    let mut by_probe: HashMap<(String, String), TraceSignals> = HashMap::new();
 
     for ((package, version), stderr_str) in traces {
-        let mut ips = HashSet::new();
+        let mut signals = TraceSignals::default();
         for cap in re.captures_iter(&stderr_str) {
-            ips.insert(cap[1].to_string());
+            signals.ips.insert(cap[1].to_string());
         }
-        by_probe.insert((package, version), ips);
+        signals.git_clone_signatures = extract_git_clone_signatures(&stderr_str);
+        by_probe.insert((package, version), signals);
     }
 
     Ok(by_probe)
+}
+
+fn extract_git_clone_signatures(trace: &str) -> HashSet<String> {
+    let execve_re = Regex::new(r#"execve\([^,]+,\s*\[(?P<argv>[^\]]*)\]"#).unwrap();
+    let quoted_arg_re = Regex::new(r#"\"((?:\\.|[^\"])*)\""#).unwrap();
+    let mut signatures = HashSet::new();
+
+    for cap in execve_re.captures_iter(trace) {
+        let argv = cap.name("argv").map(|m| m.as_str()).unwrap_or("");
+        let mut args: Vec<String> = quoted_arg_re
+            .captures_iter(argv)
+            .filter_map(|m| m.get(1).map(|x| x.as_str().replace("\\\"", "\"")))
+            .collect();
+
+        if args.is_empty() {
+            continue;
+        }
+
+        // strace argv usually starts with executable name as argv[0].
+        let first = args.remove(0);
+        let first_lower = first.to_ascii_lowercase();
+        let first_is_git = first_lower == "git" || first_lower.ends_with("/git");
+        if !first_is_git {
+            continue;
+        }
+
+        let clone_pos = args.iter().position(|a| a == "clone");
+        let Some(clone_pos) = clone_pos else {
+            continue;
+        };
+
+        let post_clone = &args[(clone_pos + 1)..];
+        let mut target: Option<String> = None;
+        for token in post_clone {
+            if token.starts_with('-') {
+                continue;
+            }
+            target = Some(token.to_string());
+            break;
+        }
+
+        let recursive = post_clone
+            .iter()
+            .any(|a| a == "--recursive" || a == "--recurse-submodules");
+        let target = target.unwrap_or_else(|| "unknown-target".to_string());
+        let signature = if recursive {
+            format!("{}|recursive", target)
+        } else {
+            format!("{}|non-recursive", target)
+        };
+        signatures.insert(signature);
+    }
+
+    signatures
+}
+
+fn find_new_git_clone_signatures(
+    current: &HashSet<String>,
+    baseline: &HashSet<String>,
+) -> Vec<String> {
+    let mut out: Vec<String> = current.difference(baseline).cloned().collect();
+    out.sort();
+    out
+}
+
+fn filter_allowlisted_git_clone_signatures(
+    signatures: Vec<String>,
+    git_clone_allowlist: &HashSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    let mut remaining = Vec::new();
+    let mut allowlisted = Vec::new();
+
+    let normalized_allowlist: HashSet<String> = git_clone_allowlist
+        .iter()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .collect();
+
+    for signature in signatures {
+        let target = signature
+            .split('|')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+
+        if !target.is_empty() && normalized_allowlist.contains(&target) {
+            allowlisted.push(signature);
+        } else {
+            remaining.push(signature);
+        }
+    }
+
+    (remaining, allowlisted)
 }
 
 fn select_effective_baselines(
@@ -431,6 +532,7 @@ pub async fn scan_packages_versions(
     pkg_targets: &[(String, String)],
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
+    git_clone_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
     baseline_count: usize,
     min_baseline_age_hours_by_package: &HashMap<String, usize>,
@@ -557,7 +659,7 @@ pub async fn scan_packages_versions(
     for plan in plans {
         let key = format!("{}|{}", plan.package, plan.target_version);
         let current_key = (plan.package.clone(), plan.current.clone());
-        let ips_curr = match traces_by_probe.get(&current_key) {
+        let current_signals = match traces_by_probe.get(&current_key) {
             Some(v) => v.clone(),
             None => {
                 println!(
@@ -568,14 +670,21 @@ pub async fn scan_packages_versions(
                 continue;
             }
         };
+        let ips_curr = current_signals.ips;
+        let git_curr = current_signals.git_clone_signatures;
 
         let mut baseline_ips = HashSet::new();
+        let mut baseline_git_clone_signatures = HashSet::new();
         let mut missing = false;
 
         for v in &plan.baselines {
             let k = (plan.package.clone(), v.clone());
             match traces_by_probe.get(&k) {
-                Some(found) => baseline_ips.extend(found.iter().cloned()),
+                Some(found) => {
+                    baseline_ips.extend(found.ips.iter().cloned());
+                    baseline_git_clone_signatures
+                        .extend(found.git_clone_signatures.iter().cloned());
+                }
                 None => {
                     println!(
                         "❌ [gyrseek] Sandbox trace missing for baseline '{}@{}'.",
@@ -599,6 +708,35 @@ pub async fn scan_packages_versions(
                 plan.package, plan.eligible_baseline_versions
             );
             results.insert(key, true);
+            continue;
+        }
+
+        let new_git_clone_signatures =
+            find_new_git_clone_signatures(&git_curr, &baseline_git_clone_signatures);
+        let (new_git_clone_signatures, allowlisted_git_clone_signatures) =
+            filter_allowlisted_git_clone_signatures(new_git_clone_signatures, git_clone_allowlist);
+
+        if !allowlisted_git_clone_signatures.is_empty() {
+            println!(
+                "ℹ️ [gyrseek] git_clone_allowlist ignored new git clone behavior for '{}': {:?}",
+                plan.package, allowlisted_git_clone_signatures
+            );
+        }
+
+        if !new_git_clone_signatures.is_empty() {
+            let baseline_label = if plan.baselines.is_empty() {
+                "n/a".to_string()
+            } else {
+                plan.baselines.join(", ")
+            };
+
+            println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
+            println!(
+                "Package '{}', version '{}' introduced new git clone behavior not seen in baseline versions ({}): {:?}",
+                plan.package, plan.current, baseline_label, new_git_clone_signatures
+            );
+            println!("Aborting host operation securely.");
+            results.insert(key, false);
             continue;
         }
 
@@ -670,8 +808,7 @@ mod tests {
 
     use super::{
         burst_policy_warning, burst_triggered, exemption_behavior,
-        minimum_release_age_policy_warning, select_age_eligible_baselines,
-        select_effective_baselines,
+        minimum_release_age_policy_warning, select_age_eligible_baselines, select_effective_baselines,
     };
 
     #[test]
@@ -891,6 +1028,7 @@ mod tests {
     fn minimum_release_age_policy_disabled_by_default() {
         assert!(minimum_release_age_policy_warning("requests", Some(0), None).is_none());
     }
+
 }
 
 pub async fn scan_package_versions(
@@ -900,6 +1038,7 @@ pub async fn scan_package_versions(
     tgt_version: &str,
     ip_allowlist: &HashSet<String>,
     domain_allowlist: &HashSet<String>,
+    git_clone_allowlist: &HashSet<String>,
     baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
     baseline_count: usize,
     min_baseline_age_hours_by_package: &HashMap<String, usize>,
@@ -915,6 +1054,7 @@ pub async fn scan_package_versions(
         &targets,
         ip_allowlist,
         domain_allowlist,
+        git_clone_allowlist,
         baseline_overrides,
         baseline_count,
         min_baseline_age_hours_by_package,

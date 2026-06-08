@@ -13,7 +13,7 @@ It currently supports:
 - `poetry add|update|install`
 - `npm install` / `npm i`
 - `npm update`
-- git clone behavior simulation tests
+- git clone behavior simulation tests (runtime interception not yet enabled)
 
 ## How It Works
 
@@ -28,9 +28,11 @@ It currently supports:
    - two versions back (`baseline-2`)
    - probes may run in one sandbox session across multiple packages and versions, while preserving package-version trace attribution
    - for bulk commands (`uv sync`, `uv pip sync`), apply this per detected package
-5. Compare observed network endpoints:
-   - New endpoints found: block and exit with error
-   - No new endpoints: forward your original command
+5. Compare observed behavior signals:
+   - Package install/update path: compare observed network endpoints across versions.
+   - Git clone path: compare clone endpoint behavior in simulation tests (runtime interception is not enabled yet).
+   - New endpoints/behaviors found: block and exit with error.
+   - No new endpoints/behaviors: forward your original command.
 6. Fail-closed behavior:
    - if package detection is expected but no package entries are detected, block and exit
 
@@ -43,6 +45,7 @@ It currently supports:
    - current version endpoints
    - baseline endpoints from previous versions
 - Any endpoint that appears only in the current version is treated as a behavioral anomaly.
+- Install-time `git clone` command signatures (for example clone target and recursive clone usage) are also compared between current and baseline versions.
 - New IPs are always treated as anomalies (fail-closed), even if reverse DNS suggests domain overlap.
 - Reverse DNS domain context is included in warning output as informational enrichment to help triage IP-rotation cases.
 
@@ -57,7 +60,15 @@ Package 'left-pad', version '1.3.0' contacted new endpoints not seen in baseline
 Aborting host operation securely.
 ```
 
-## Stable Allowlist Config
+Example warning output when a new hidden install-time git clone behavior is detected:
+
+```text
+❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
+Package 'left-pad', version '1.3.0' introduced new git clone behavior not seen in baseline versions (1.2.0, 1.1.3): ["https://github.com/unknown/repo.git|non-recursive"]
+Aborting host operation securely.
+```
+
+## Policy Config (Allowlist + Release Gates)
 
 You can define allowlisted IPs and domains that should be ignored before anomaly blocking.
 
@@ -76,6 +87,8 @@ ip_allowlist:
 domain_allowlist:
    - pypi.org
    - files.pythonhosted.org
+git_clone_allowlist:
+   - https://github.com/acme/approved-build-scripts.git
 baseline_overrides:
    requests:
       baseline-1: "2.30.0"
@@ -113,6 +126,8 @@ Behavior:
 - `ip_allowlist` entries are canonicalized (for example, equivalent IPv6 forms normalize to the same value).
 - `domain_allowlist` entries are normalized to lowercase and trailing `.` is removed.
 - Subdomains match allowlisted parent domains (for example, `cdn.example.com` matches `example.com`).
+- `git_clone_allowlist` lets you allow specific git clone targets when new install-time git clone behavior appears.
+- `git_clone_allowlist` entries are compared against the detected clone target URL (case-insensitive exact match).
 - `baseline_overrides` is optional and lets you pin baseline versions per package.
 - Each package can set either or both `baseline-1` and `baseline-2`; missing keys continue using registry-derived baselines.
 - `baseline_count` controls how many historical baselines are compared; default is `2`.
@@ -137,8 +152,9 @@ The repository includes safe simulation tests for git clone-style network anomal
 
 Current scope:
 
-- You can test detection logic for clone scenarios through integration tests.
-- Runtime command interception for `git clone ...` is not enabled yet in the CLI command parser.
+- Install-time git clone command behavior (for example hidden clone calls inside package scripts) is compared across package versions during scanning.
+- You can also test clone detection logic for standalone clone scenarios through integration tests.
+- Runtime command interception for direct `git clone ...` shell commands is not enabled yet in the CLI command parser.
 
 Example warning output for abnormal git clone behavior (simulation/test context):
 
@@ -421,7 +437,9 @@ Run one integration test file:
 ```bash
 cargo test --test parser_tests
 cargo test --test behavior_tests
+cargo test --test cli_burst_exit_tests
 cargo test --test git_clone_behavior_tests
+cargo test --test git_clone_scan_tests
 ```
 
 Run one specific test case:
@@ -446,9 +464,9 @@ For multi-developer and multi-LLM collaboration, use these docs together:
 - docs/ARCHITECTURE.md: control-flow and component map
 - docs/DEV_GUIDE.md: contributor workflow and change hygiene
 - docs/ROADMAP.md: planned improvements and known next steps
-- .copilot/Agents.md: repository memory and mandatory update policy
+- .copilot/AGENTS.md: repository memory and mandatory update policy
 
-Repository policy: after each change, update both `.copilot/Agents.md` and `README.md`.
+Repository policy: after each change, update both `.copilot/AGENTS.md` and `README.md`.
 
 ## Project Layout
 
