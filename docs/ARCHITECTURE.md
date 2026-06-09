@@ -54,7 +54,11 @@ For each scanned package:
 6. If non-allowlisted differences remain, block command.
 
 ## Fail-Closed Policy
-gyrseek blocks instead of passthrough when package detection is expected for supported install or sync flows but no package entries are detected.
+gyrseek fails closed in the following situations:
+- Unrecognized manager: the first argument is not one of `pip`, `pip3`, `uv`, `poetry`, `npm`. Any other value (e.g. `ls`, `curl`, `sh`) exits 1 with a diagnostic. The only built-in exception is `sandbox runtimes`. Previously, unrecognized managers were silently forwarded unscanned, which violated the tool's "I scanned this before forwarding it" contract.
+- Package detection is expected for a supported install or sync flow but no package entries are detected.
+- Trace is empty or missing (strace produced no output — e.g. ptrace blocked).
+- Sandbox initialization fails.
 
 ## Current Limitations
 - Version ordering is semantic-version aware (semver for npm, PEP 440 for Python); unparseable versions fall back to sorting below parseable ones.

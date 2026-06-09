@@ -762,7 +762,23 @@ pub async fn run(args: Vec<String>) {
 
     let eye = GyrSeek::new(args);
 
-    if eye.manager == "sandbox" && eye.passthrough_args.get(1).map(String::as_str) == Some("runtimes") {
+    // Fail closed for unrecognized managers. gyrseek's contract is "I scanned
+    // this before forwarding it" — silently forwarding an unscanned command
+    // violates that contract and provides false assurance in a security pipeline.
+    // The only built-in exception is the `sandbox runtimes` diagnostic subcommand.
+    const SUPPORTED_MANAGERS: &[&str] = &["pip", "pip3", "uv", "poetry", "npm"];
+    let is_sandbox_runtimes = eye.manager == "sandbox"
+        && eye.passthrough_args.get(1).map(String::as_str) == Some("runtimes");
+    if !SUPPORTED_MANAGERS.contains(&eye.manager.as_str()) && !is_sandbox_runtimes {
+        println!(
+            "❌ [gyrseek] Unrecognized manager '{}'. Supported managers: {}. Failing closed.",
+            eye.manager,
+            SUPPORTED_MANAGERS.join(", ")
+        );
+        std::process::exit(1);
+    }
+
+    if is_sandbox_runtimes {
         match list_docker_runtimes() {
             Ok(runtimes) => {
                 if runtimes.is_empty() {
