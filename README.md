@@ -195,7 +195,7 @@ Some supply-chain attacks don't assume a runtime is present — they **download 
 
 `gyrseek` watches for execution of risky runtimes during the sandbox install and diffs those invocations against the baseline versions. By default it watches **`bun`** and **`deno`** — runtimes that essentially never appear in a normal `npm`/`pip` install, so flagging a newly introduced invocation has a very low false-positive rate. (Common interpreters like `node`, `sh`, and `python` are intentionally _not_ watched, since they appear constantly in legitimate installs.)
 
-> **`bun` and `deno` are detection targets, not supported package managers.** gyrseek watches for them being _executed inside a scanned install_ (e.g. `gyrseek npm install some-pkg`, where the package secretly runs `bun`). You **cannot** wrap them directly — `gyrseek deno ...` or `gyrseek bun ...` is not supported and the command would simply be forwarded unscanned. The package managers gyrseek actually wraps are listed under [Supported Commands](#supported-commands): `uv`, `pip`/`pip3`, `poetry`, and `npm`.
+> **`bun` and `deno` are detection targets, not supported package managers.** gyrseek watches for them being _executed inside a scanned install_ (e.g. `gyrseek npm install some-pkg`, where the package secretly runs `bun`). You **cannot** wrap them directly — `gyrseek deno ...` or `gyrseek bun ...` will be **rejected with a non-zero exit** because gyrseek only accepts the managers it can actually scan. The package managers gyrseek wraps are listed under [Supported Commands](#supported-commands): `uv`, `pip`/`pip3`, `poetry`, and `npm`.
 
 Two cases are detected:
 
@@ -430,6 +430,7 @@ Details worth knowing once you're past the basics.
 
 **Fail-closed guarantees**
 
+- **Unrecognized manager:** any first argument other than `pip`, `pip3`, `uv`, `poetry`, or `npm` is rejected with a non-zero exit and a clear error message listing the supported managers. The only exception is `sandbox runtimes` (a built-in diagnostic). Previously, unrecognized managers were silently forwarded unscanned.
 - For supported install/sync paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
 - If the host command itself cannot be launched after a clean scan, `gyrseek` also fails closed.
 - A sandbox probe that produces an **empty/whitespace trace** (e.g. `strace` could not attach) is a hard error: every package in that batch is blocked. Blank traces are never interpreted as clean.
