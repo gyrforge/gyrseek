@@ -1,0 +1,11 @@
+#!/bin/bash
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+cd tests/pip
+python3 -m venv .venv
+source .venv/bin/activate
+../../target/release/gyrseek pip3 install black
+../../target/release/gyrseek pip3 install -r ./requirements.txt
+../../target/release/gyrseek pip3 install --upgrade pip

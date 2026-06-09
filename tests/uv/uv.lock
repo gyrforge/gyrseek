@@ -154,6 +154,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "black", specifier = ">=26.5.1" },
+    { name = "black", specifier = "==26.5.1" },
     { name = "pytest", specifier = ">=9.0.3" },
 ]
