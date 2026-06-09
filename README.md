@@ -6,7 +6,7 @@ Think of it as a behavioral diff between "the version you're about to install" a
 
 ```bash
 # Instead of:        npm install lodash
-# You run:           cargo run -- npm install lodash
+# You run:           ./target/release/gyrseek npm install lodash
 ```
 
 If nothing suspicious is found, your original command is forwarded and runs normally. If something new shows up, `gyrseek` aborts and tells you why.
@@ -15,6 +15,7 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 
 - [Introduction](#introduction)
 - [Quick Start](#quick-start)
+- [Scripts](#scripts)
 - [Supported Commands](#supported-commands)
 - [How It Works](#how-it-works)
 - [Usage](#usage)
@@ -53,7 +54,7 @@ We welcome feedback and suggestions to this repository.
 ### 2. Build
 
 ```bash
-cargo build --release
+./auto/cargo-build
 # binary is produced at: target/release/gyrseek
 ```
 
@@ -61,13 +62,41 @@ cargo build --release
 
 ```bash
 # Scan + (if clean) install lodash via npm:
-cargo run -- npm install lodash
-
-# Or with the release binary:
 ./target/release/gyrseek npm install lodash
 ```
 
 That's it. `gyrseek` resolves the version, runs the sandbox behavioral diff, and either forwards your command or blocks it with an explanation.
+
+## Scripts
+
+The `auto/` directory contains convenience scripts for common tasks. All scripts run from the repo root regardless of where you call them from.
+
+| Script | What it does |
+|---|---|
+| `./auto/cargo-build` | Builds the release binary (`target/release/gyrseek`). |
+| `./auto/cargo-checks` | Runs `cargo check`, `cargo clippy`, and `cargo test`. Use this before committing. |
+| `./auto/cargo-test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Requires the release binary to be built first. |
+| `./auto/cargo-test-pip` | End-to-end test: creates a venv, then scans and installs `black` and the packages from `tests/pip/requirements.txt` via `pip3`. |
+| `./auto/cargo-test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, and `poetry update` from the `tests/poetry/` fixture. |
+| `./auto/cargo-test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, and `uv sync` from the `tests/uv/` fixture. |
+
+**Typical workflow:**
+
+```bash
+# Build once
+./auto/cargo-build
+
+# Check everything is healthy before pushing
+./auto/cargo-checks
+
+# Run a live end-to-end test for the manager you changed
+./auto/cargo-test-npm
+./auto/cargo-test-pip
+./auto/cargo-test-uv
+./auto/cargo-test-poetry
+```
+
+> The end-to-end scripts use `GYRSEEK_SANDBOX=docker` by default (inherited from your environment). Make sure Docker is running before executing them.
 
 ## Supported Commands
 
@@ -110,7 +139,7 @@ This gives you a _behavioral_ signal, rather than relying only on package metada
 General pattern:
 
 ```bash
-cargo run -- <manager> <subcommand> <package>
+./target/release/gyrseek <manager> <subcommand> <package>
 # or, with the release binary:
 ./target/release/gyrseek <manager> <subcommand> <package>
 ```
@@ -118,29 +147,29 @@ cargo run -- <manager> <subcommand> <package>
 ### Python examples
 
 ```bash
-cargo run -- uv add pytest
-cargo run -- uv pip install requests==2.31.0
-cargo run -- uv pip sync requirements.txt
-cargo run -- uv pip sync pylock.toml
-cargo run -- uv sync
-cargo run -- uv lock --upgrade
-cargo run -- uv lock -P pytest -P requests
-cargo run -- pip install flask
-cargo run -- pip3 install django==5.0.6
-cargo run -- pip3 install -r requirements.txt
-cargo run -- poetry install
-cargo run -- poetry update pytest
+./target/release/gyrseek uv add pytest
+./target/release/gyrseek uv pip install requests==2.31.0
+./target/release/gyrseek uv pip sync requirements.txt
+./target/release/gyrseek uv pip sync pylock.toml
+./target/release/gyrseek uv sync
+./target/release/gyrseek uv lock --upgrade
+./target/release/gyrseek uv lock -P pytest -P requests
+./target/release/gyrseek pip install flask
+./target/release/gyrseek pip3 install django==5.0.6
+./target/release/gyrseek pip3 install -r requirements.txt
+./target/release/gyrseek poetry install
+./target/release/gyrseek poetry update pytest
 ```
 
 ### npm examples
 
 ```bash
-cargo run -- npm install lodash
-cargo run -- npm install lodash express
-cargo run -- npm i lodash@4.17.21
-cargo run -- npm install
-cargo run -- npm update
-cargo run -- npm update lodash typescript
+./target/release/gyrseek npm install lodash
+./target/release/gyrseek npm install lodash express
+./target/release/gyrseek npm i lodash@4.17.21
+./target/release/gyrseek npm install
+./target/release/gyrseek npm update
+./target/release/gyrseek npm update lodash typescript
 ```
 
 > For project-aware tools like `poetry` or `npm`, run inside a directory containing the expected project files (`pyproject.toml`, `package.json`, etc.).
@@ -222,8 +251,8 @@ Tune this with the `watched_executables` and `process_exec_allowlist` config key
 **Config path:** defaults to `gyrseek.yaml` in the working directory. Override it with `--config` or the `GYRSEEK_CONFIG` environment variable:
 
 ```bash
-cargo run -- --config ./security-policy.yaml npm install
-GYRSEEK_CONFIG=./security-policy.yaml cargo run -- npm install
+./target/release/gyrseek --config ./security-policy.yaml npm install
+GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 ```
 
 ### Config keys
@@ -295,8 +324,8 @@ process_exec_allowlist:
 | **Host**             | `host`            | Fastest, **reduced safety** — see warning below.                     |
 
 ```bash
-GYRSEEK_SANDBOX=docker cargo run -- npm install
-GYRSEEK_SANDBOX=host  cargo run -- pip3 install -r requirements.txt
+GYRSEEK_SANDBOX=docker ./target/release/gyrseek npm install
+GYRSEEK_SANDBOX=host  ./target/release/gyrseek pip3 install -r requirements.txt
 ```
 
 - If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
@@ -306,7 +335,7 @@ GYRSEEK_SANDBOX=host  cargo run -- pip3 install -r requirements.txt
 
 - `GYRSEEK_MICROVM_RUNTIME` selects the Docker runtime (default: `kata-runtime`).
 - If the runtime isn't present in `docker info`, startup fails closed with an explicit message.
-- List available runtimes: `cargo run -- sandbox runtimes`
+- List available runtimes: `./target/release/gyrseek sandbox runtimes`
 - Requires a Linux environment with the runtime installed and exposed through Docker. On macOS Docker Desktop, Kata-style runtimes are typically unavailable — use a Linux VM or host.
 
 ### Platform support matrix
@@ -348,7 +377,7 @@ docker build -f Dockerfile.npm-scanner -t gyrseek/npm-scanner:latest .
 
 GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
 GYRSEEK_NPM_SCANNER_PREBUILT=true \
-cargo run -- npm update
+./target/release/gyrseek npm update
 ```
 
 ### 2) Build a Python scanner image
@@ -368,7 +397,7 @@ docker build -f Dockerfile.py-scanner -t gyrseek/py-scanner:latest .
 
 GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
 GYRSEEK_PY_SCANNER_PREBUILT=true \
-cargo run -- uv sync
+./target/release/gyrseek uv sync
 ```
 
 ### 3) Enable prebuilt mode globally (optional)
@@ -377,7 +406,7 @@ cargo run -- uv sync
 GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
 GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
 GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
-cargo run -- npm update
+./target/release/gyrseek npm update
 ```
 
 ### 4) Verify images are usable
@@ -397,7 +426,7 @@ To avoid tag drift, pin scanner images by digest (replace with real digests from
 GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
 GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
 GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
-cargo run -- npm update
+./target/release/gyrseek npm update
 ```
 
 > **Tip:** Build and push scanner images once in CI, resolve immutable digests, and reference only digest-pinned images in production or shared CI.
@@ -464,8 +493,13 @@ The Docker sandbox is currently tuned for practical compatibility and throughput
 
 ## Testing
 
+**Unit and integration tests** (no Docker required):
+
 ```bash
 # Run everything
+./auto/cargo-checks
+
+# Or directly:
 cargo test
 
 # Run one integration test file
@@ -484,6 +518,16 @@ cargo test detects_anomalous_new_connection
 cargo test -- --nocapture
 ```
 
+**End-to-end tests** (requires Docker and the release binary):
+
+```bash
+./auto/cargo-build          # build first
+./auto/cargo-test-npm
+./auto/cargo-test-pip
+./auto/cargo-test-uv
+./auto/cargo-test-poetry
+```
+
 Behavior test coverage includes deterministic DNS-enrichment checks for reverse-DNS context handling (including unresolved-IP scenarios).
 
 ## Project Layout & Docs
@@ -500,6 +544,12 @@ Behavior test coverage includes deterministic DNS-enrichment checks for reverse-
 - `tests/git_clone_behavior_tests.rs` — git clone behavior simulation tests
 - `tests/git_clone_scan_tests.rs` — install-time git-clone signature diff tests
 - `tests/bun_exec_scan_tests.rs` — watched-process (bun/deno) execution diff tests
+
+**Scripts**
+
+- `auto/cargo-build` — release build
+- `auto/cargo-checks` — check + lint + test
+- `auto/cargo-test-{npm,pip,uv,poetry}` — end-to-end tests per manager
 
 **Collaboration docs** (for multi-developer / multi-LLM work)
 

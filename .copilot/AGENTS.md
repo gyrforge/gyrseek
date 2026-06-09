@@ -12,10 +12,14 @@ This file stores persistent working memory and agent instructions for this repos
   - src/parsing.rs (parsing helpers)
   - src/scanning.rs (registry lookup and anomaly scanning)
   - src/sandbox.rs (sandbox runner backends and mode selection)
+- Build and scripts:
+  - auto/cargo-build — release build (cargo build --release)
+  - auto/cargo-checks — cargo check + clippy + test; run before committing
+  - auto/cargo-test-{npm,pip,uv,poetry} — end-to-end tests per manager using the release binary; require Docker
 - Test strategy:
   - Integration tests under tests/ (preferred for command-path coverage and anything observable only from outside the process)
   - Pure-function unit tests live inline in src/ modules (src/scanning.rs, src/sandbox.rs, src/parsing.rs) where they cover internal, non-exported helpers (Rust convention: `#[cfg(test)] mod tests` can see private items)
-  - Run with cargo test
+  - Run with cargo test or ./auto/cargo-checks
   - tests/behavior_tests.rs — network anomaly detection, DNS enrichment, IP/domain allowlist filtering
   - tests/bun_exec_scan_tests.rs — watched-process (bun/deno) detection and allowlisting
   - tests/cli_burst_exit_tests.rs — release burst threshold and minimum_release_age_package CLI exit-code behavior

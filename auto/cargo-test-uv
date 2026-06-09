@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+cd tests/uv
+../../target/release/gyrseek uv add black
+../../target/release/gyrseek uv pip install -r ./pyproject.toml
+../../target/release/gyrseek uv sync

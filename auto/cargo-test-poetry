@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+cd tests/poetry
+../../target/release/gyrseek poetry add black
+../../target/release/gyrseek poetry install --no-root
+../../target/release/gyrseek poetry update
