@@ -20,7 +20,7 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 - [How It Works](#how-it-works)
 - [Usage](#usage)
 - [Network Behavior Detection](#network-behavior-detection)
-- [Git Clone Behavior](#git-clone-behavior)
+- [Git Clone Behavior Detection](#git-clone-behavior-detection)
 - [Watched-Process Detection (Shai-Hulud / Bun)](#watched-process-detection-shai-hulud--bun)
   - [Shai-Hulud detection coverage](#shai-hulud-detection-coverage)
 - [Configuration](#configuration)
@@ -205,7 +205,7 @@ Package 'left-pad', version '1.3.0' introduced new git clone behavior not seen i
 Aborting host operation securely.
 ```
 
-## Git Clone Behavior
+## Git Clone Behavior Detection
 
 - **Install-time clones** (e.g. hidden `git clone` calls inside package scripts) are compared across package versions during scanning, and new behavior is fail-closed unless allowlisted.
 - Clone-detection logic can also be exercised for standalone scenarios via integration tests (`tests/git_clone_behavior_tests.rs`).
@@ -250,16 +250,31 @@ The Shai-Hulud campaign has produced several named attack waves across different
 
 > **Key:** ✅ Caught during install · ❌ Missed (deferred or out of scope) · ⚠️ Partial
 
-| Attack wave | Ecosystem | Execution technique | gyrseek | IoCs gyrseek captures (✅) / Why missed (❌) |
+| Attack wave | Ecosystem | Technique | gyrseek | IoCs gyrseek captures (✅) / Why missed (❌) |
 |---|---|---|---|---|
-| **Hades / Miasma PyPI wave** | PyPI | `*-setup.pth` auto-executes on next Python startup | ❌ | Fires outside the install window — `.pth` is written to disk during install but not executed until the next interpreter invocation. gyrseek sees no anomalous network or execve during `pip install`. |
-| **Bioinformatics & MCP wave** | PyPI | `__init__.py` import hook; compiled `.abi3.so` side-effect; split loader/payload across two packages | ❌ | All three variants defer execution to import or interpreter startup — outside the sandbox window. |
-| **gpt-pilot GitHub source compromise** | Python (source repo) | Injected telemetry `__init__.py` spawns daemon on import | ❌ | Fires on application import, not `pip install`. The registry wheel is clean; the compromise is in the source tree. |
-| **Red Hat Cloud Services npm** | npm | `preinstall` hook runs `node index.js` during `npm install` | ✅ | **Network:** new connection to GitHub Releases (`github.com/oven-sh/bun/releases`) to download `bun-linux-x64.zip`. **Bun execve:** `bun\|run\|_index.js`. Both are flagged vs. baseline. |
-| **@antv ecosystem worm** (639 versions, 323 packages) | npm | `preinstall` hook; worm republishes via stolen tokens | ✅ | Same IoCs as Red Hat wave. The worm-republished package's `npm install` triggers the hook inside the sandbox — **network:** GitHub Releases IPs; **bun execve:** `bun\|run\|_index.js`. The downstream worm propagation via stolen tokens is not blocked. |
-| **Intercom npm compromise** | npm | `preinstall` runs `node setup.mjs`, downloads `router_runtime.js` | ✅ | **Network:** new connection to GitHub Releases for `bun-linux-x64.zip`. **Bun execve:** `bun\|run\|router_runtime.js`. |
-| **Intercom PHP / Packagist** | PHP | Composer plugin `post-install-cmd` runs shell script, downloads Bun | ❌ | PHP/Packagist is not a supported manager. Outside gyrseek's scope. **Network IoC if it were in scope:** connection to `zero.masscan.cloud:443`. |
-| **Post-compromise activity** (CI injection, C2, wiper, persistence, lateral movement) | Any | All techniques fire after credential harvest — GitHub Actions injection, steganographic C2, systemd/LaunchAgent, SSH crawl, `~/` wiper on token revoke | ❌ | These techniques operate after the malicious package has already run on the host. gyrseek's scope is the install window. |
+| **Hades / Miasma PyPI wave** | PyPI | T1: `*-setup.pth` auto-executes on next Python startup | ❌ | Fires outside the install window — `.pth` is written to disk during `pip install` but not executed until the next interpreter invocation. No anomalous network or execve during install. |
+| **Bioinformatics & MCP wave** | PyPI | T2: `__init__.py` import hook fires on package import | ❌ | Deferred to import — outside the sandbox window. |
+| | PyPI | T3: compiled `.abi3.so` executes payload via `dlopen()` on import | ❌ | Deferred to import — outside the sandbox window. |
+| | PyPI | T4: split loader/payload across two packages, both needed at Python startup | ❌ | Neither package alone triggers during install; deferred like T1. |
+| **gpt-pilot GitHub source compromise** | Python (source repo) | T8: injected telemetry `__init__.py` spawns daemon on application import | ❌ | Fires on import, not `pip install`. The registry wheel is clean; the malicious code is in the source tree. |
+| **Red Hat Cloud Services npm** | npm | T5: `preinstall` hook runs `node index.js` during `npm install` | ✅ | **Network:** new outbound connection to `github.com/oven-sh/bun/releases` (Bun download). **Bun execve:** `bun\|run\|_index.js`. Both flagged vs. baseline. |
+| | npm | T13: fake `api.anthropic.com` traffic during exfiltration | ✅ | If exfiltration fires during the `npm install` step, the new IP is flagged as a new network connection. |
+| | npm | T21: LLM prompt injection in `_index.js` to defeat static scanners | ✅ (unaffected) | gyrseek uses runtime behavioral diffing, not LLM analysis — prompt injection in the payload has no effect on gyrseek's detection. |
+| **@antv ecosystem worm** (639 versions, 323 packages) | npm | T5: `preinstall` hook on each worm-republished package | ✅ | **Network:** new outbound connection to `github.com/oven-sh/bun/releases`. **Bun execve:** `bun\|run\|_index.js`. Each worm-injected package triggers the same signals inside the sandbox. |
+| | npm | T15: worm self-propagation via stolen npm tokens (republishes 639 versions) | ⚠️ | The initial install of any worm-injected package is caught (T5 above). The downstream worm propagation — using stolen tokens to republish further packages — is not blocked by gyrseek. **Release burst signal:** 639 versions published in 60 minutes would trip `release_burst_threshold` if configured. |
+| **Intercom npm compromise** | npm | T6: `preinstall` runs `node setup.mjs`, downloads `router_runtime.js` | ✅ | **Network:** new outbound connection to `github.com/oven-sh/bun/releases` for `bun-linux-x64.zip`. **Bun execve:** `bun\|run\|router_runtime.js`. |
+| | npm | T22: git tag force-update — malicious commit pushed under existing version tag | ⚠️ | If the force-pushed tag introduces new behavioral signals (network, bun execve), the diff catches them. A tag update with no install-time behavioral change is not caught. |
+| **Intercom PHP / Packagist** | PHP | T7: Composer plugin `post-install-cmd` runs shell script, downloads Bun | ❌ | PHP/Packagist is not a supported manager. Outside gyrseek's scope. Network IoC if it were in scope: `zero.masscan.cloud:443`. |
+| **Post-compromise — CI/CD** | Any | T9: GitHub Actions workflow injection (push-triggered) | ❌ | Fires after the malicious package already ran. Outside gyrseek's install-window scope. |
+| | Any | T10: GitHub Actions workflow injection (deployment API, no `workflow` scope needed) | ❌ | Same — post-compromise CI/CD persistence. |
+| **Post-compromise — C2 & exfiltration** | Any | T11: steganographic C2 via GitHub commit messages (RSA-PSS signed commands) | ❌ | Post-compromise polling — not install-time. |
+| | Any | T12: GitHub repo dead-drop exfiltration (encrypted credentials committed to attacker repo) | ❌ | Post-compromise — not install-time. |
+| | Any | T14: cross-platform process memory scraping (`/proc/mem`, Mach APIs, `ReadProcessMemory`) | ❌ | Payload runs outside the sandbox window. |
+| **Post-compromise — persistence** | Any | T16: IDE/AI tool config hijacking (`.claude/settings.json`, `.vscode/tasks.json`, Cursor, Copilot) | ❌ | Fires on workspace/session open — post-compromise persistence. |
+| | Any | T17: systemd / LaunchAgent persistence (`update-monitor.service`, `gh-token-monitor.service`) | ❌ | OS-level persistence installed post-compromise. |
+| | Any | T19: SSH lateral movement via `~/.ssh/known_hosts` | ❌ | Post-compromise — not install-time. |
+| **Post-compromise — anti-forensics** | Any | T18: wiper (`rm -rf ~/`) triggered on token revocation | ❌ | Retaliatory destruction fires when incident responders revoke the token — post-compromise. |
+| **Trust-chain bypass** | npm / PyPI | T20: SLSA provenance forgery via Sigstore/OIDC (attacker mints valid BL3 attestations) | ❌ | Trust-chain bypass — not a behavioral signal. gyrseek's sandbox diffing is independent of provenance metadata. |
 
 **What gyrseek catches, stated plainly**
 
