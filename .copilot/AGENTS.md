@@ -16,6 +16,13 @@ This file stores persistent working memory and agent instructions for this repos
   - Integration tests under tests/ (preferred for command-path and behavior coverage)
   - Pure-function unit tests live inline in src/ modules (src/scanning.rs, src/sandbox.rs) where they cover internal, non-exported helpers
   - Run with cargo test
+  - tests/behavior_tests.rs — network anomaly detection, DNS enrichment, IP/domain allowlist filtering
+  - tests/bun_exec_scan_tests.rs — watched-process (bun/deno) detection and allowlisting
+  - tests/cli_burst_exit_tests.rs — release burst threshold and minimum_release_age_package CLI exit-code behavior
+  - tests/forward_fail_closed_tests.rs — fail-closed behavior when forwarding to a missing host binary
+  - tests/git_clone_behavior_tests.rs — network anomaly detection in git-clone simulation (uses find_new_connections)
+  - tests/git_clone_scan_tests.rs — install-time git clone signature diffing and allowlisting
+  - tests/parser_tests.rs — parsing helpers: rewrite_args_with_pinned_versions, parse_package_details, lockfile/requirements parsing for all managers
 - Collaboration docs:
   - docs/ARCHITECTURE.md
   - docs/DEV_GUIDE.md
