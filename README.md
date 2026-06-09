@@ -186,7 +186,7 @@ Aborting host operation securely.
 
 ## Watched-Process Detection (Shai-Hulud / Bun)
 
-Some supply-chain attacks don't assume a runtime is present — they **download one and use it to run the payload**. The [Shai-Hulud "Hades/miasma" PyPI wave](https://socket.dev/blog/shai-hulud-descends-to-hades-miasma-pypi-wave) downloads the **Bun** JavaScript runtime during install/startup and runs an obfuscated stealer with `bun run _index.js`.
+Some supply-chain attacks don't assume a runtime is present — they **download one and use it to run the payload**. The Shai-Hulud "Hades/miasma" PyPI wave downloads the **Bun** JavaScript runtime during install/startup and runs an obfuscated stealer with `bun run _index.js`.
 
 `gyrseek` watches for execution of risky runtimes during the sandbox install and diffs those invocations against the baseline versions. By default it watches **`bun`** and **`deno`** — runtimes that essentially never appear in a normal `npm`/`pip` install, so flagging a newly introduced invocation has a very low false-positive rate. (Common interpreters like `node`, `sh`, and `python` are intentionally *not* watched, since they appear constantly in legitimate installs.)
 
