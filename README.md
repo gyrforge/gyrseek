@@ -13,12 +13,14 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 
 ## Table of Contents
 
+- [Introduction](#introduction)
 - [Quick Start](#quick-start)
 - [Supported Commands](#supported-commands)
 - [How It Works](#how-it-works)
 - [Usage](#usage)
 - [Network Behavior Detection](#network-behavior-detection)
 - [Git Clone Behavior](#git-clone-behavior)
+- [Watched-Process Detection (Shai-Hulud / Bun)](#watched-process-detection-shai-hulud--bun)
 - [Configuration](#configuration)
 - [Sandbox Modes](#sandbox-modes)
 - [Prebuilt Scanner Images](#prebuilt-scanner-images)
@@ -27,6 +29,16 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 - [Testing](#testing)
 - [Project Layout & Docs](#project-layout--docs)
 - [License](#license)
+
+## Introduction
+
+This tool was created by [Brandon Chuah](https://www.linkedin.com/in/brandonccl/) and [David Craggs](https://www.linkedin.com/in/david-craggs-37851793/), who were working in internal product security roles when we began building this open source CLI.
+
+Our goal is not to compete with existing vendors. Instead, we want to give open source maintainers and small businesses—especially those that cannot afford expensive commercial software supply chain tooling—a practical way to address the kinds of supply chain issues highlighted by incidents such as Shai-Hulud. 
+
+The tool works out of the box and requires no proxy configuration, as long as Docker is installed. It can be run in host mode, but it is primarily intended for isolated sandbox environments where secrets and environment variables are not present, making it better suited for testing and validation.
+
+We welcome feedback and suggestions to this repository. 
 
 ## Quick Start
 
@@ -81,6 +93,7 @@ That's it. `gyrseek` resolves the version, runs the sandbox behavioral diff, and
 4. **Compare behavior signals** between the target and its baselines:
    - **Network**: endpoints contacted during install.
    - **Git clone**: install-time `git clone` command signatures.
+   - **Watched-process execution**: invocations of risky runtimes like `bun`/`deno` during install (see [Watched-Process Detection](#watched-process-detection-shai-hulud--bun)).
 5. **Decide**:
    - New endpoint or clone behavior found → **block and exit non-zero**.
    - Nothing new → **forward your original command**.
@@ -136,6 +149,7 @@ cargo run -- npm update lodash typescript
 - It computes the difference between **current version endpoints** and **baseline endpoints** from previous versions.
 - Any endpoint that appears *only* in the current version is treated as a behavioral anomaly.
 - Install-time `git clone` command signatures (e.g. clone target and recursive-clone usage) are also diffed across versions.
+- Install-time execution of watched runtimes (`bun`, `deno` by default) is diffed across versions to catch download-and-run payloads — see [Watched-Process Detection](#watched-process-detection-shai-hulud--bun).
 - New IPs are **always** treated as anomalies (fail-closed), even if reverse DNS suggests domain overlap.
 - Reverse DNS context is included in warnings as informational enrichment to help triage IP-rotation cases.
 
@@ -170,6 +184,32 @@ git clone simulation contacted new endpoints not seen in baseline clone behavior
 Aborting host operation securely.
 ```
 
+## Watched-Process Detection (Shai-Hulud / Bun)
+
+Some supply-chain attacks don't assume a runtime is present — they **download one and use it to run the payload**. The [Shai-Hulud "Hades/miasma" PyPI wave](https://socket.dev/blog/shai-hulud-descends-to-hades-miasma-pypi-wave) downloads the **Bun** JavaScript runtime during install/startup and runs an obfuscated stealer with `bun run _index.js`.
+
+`gyrseek` watches for execution of risky runtimes during the sandbox install and diffs those invocations against the baseline versions. By default it watches **`bun`** and **`deno`** — runtimes that essentially never appear in a normal `npm`/`pip` install, so flagging a newly introduced invocation has a very low false-positive rate. (Common interpreters like `node`, `sh`, and `python` are intentionally *not* watched, since they appear constantly in legitimate installs.)
+
+> **`bun` and `deno` are detection targets, not supported package managers.** gyrseek watches for them being *executed inside a scanned install* (e.g. `gyrseek npm install some-pkg`, where the package secretly runs `bun`). You **cannot** wrap them directly — `gyrseek deno ...` or `gyrseek bun ...` is not supported and the command would simply be forwarded unscanned. The package managers gyrseek actually wraps are listed under [Supported Commands](#supported-commands): `uv`, `pip`/`pip3`, `poetry`, and `npm`.
+
+Two cases are detected:
+
+1. **Newly introduced execution** — a baseline version never ran `bun`, but the target version does. The `bun` invocation is "new" and is **fail-closed**.
+2. **Existing execution with additions/changes** — a baseline already runs `bun run build`, but the target version *also* runs `bun run _index.js` (or changes the arguments). Each invocation is recorded as a distinct signature (`bun|run|<args>`), so the extra/changed call is "new" and is **fail-closed**.
+
+Example warning:
+
+```text
+❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
+Package 'left-pad', version '1.3.0' introduced new watched-process execution (for example bun/deno) not seen in baseline versions (1.2.0, 1.1.3): ["bun|run|_index.js"]
+This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload).
+Aborting host operation securely.
+```
+
+Tune this with the `watched_executables` and `process_exec_allowlist` config keys (see [Configuration](#configuration)).
+
+> **Scope:** this observes processes executed *inside the sandbox during install* (where the Bun loader fires for npm-style hooks and where Python install-time execution can occur). The PyPI `*-setup.pth` variant that triggers on the *next interpreter startup* rather than at install time may execute outside the install window; see [Limitations](#docker-hardening-limitations).
+
 ## Configuration
 
 `gyrseek` reads a YAML policy file to allowlist known-good endpoints and tune its release gates.
@@ -195,6 +235,8 @@ GYRSEEK_CONFIG=./security-policy.yaml cargo run -- npm install
 | `minimum_release_age_package` | off | Minimum release age in **days**. When set, runs before burst/anomaly checks and fails closed if the current release is younger. |
 | `release_burst_threshold` | off | Fails closed if a package published at least this many versions within the burst window. |
 | `release_burst_window_hours` | `24` | Lookback window (hours) for the burst checker. |
+| `watched_executables` | `bun`, `deno` | Executable basenames to flag if **executed inside a scanned install** and diffed across versions (these are detection targets, not package managers gyrseek wraps). Config entries are **added to** the built-in defaults, so `bun`/`deno` are always watched. |
+| `process_exec_allowlist` | empty | Watched-process signatures (`bun\|run\|build`) or bare executables (`bun`) that are allowed even when newly introduced. |
 
 ### Example config
 
@@ -222,6 +264,14 @@ new_package_exemptions:
 minimum_release_age_package: 3
 release_burst_threshold: 3
 release_burst_window_hours: 24
+# Executables to watch for execution *inside* a scanned install (not managers to wrap).
+# bun and deno are always watched; entries here are added on top.
+watched_executables:
+   - bun
+   - deno
+process_exec_allowlist:
+   - bun|run|build
+   - deno
 ```
 
 ### Config loading behavior
@@ -389,6 +439,7 @@ The Docker sandbox is currently tuned for practical compatibility and throughput
 - Full `--read-only` rootfs is not enabled.
 - Full capability dropping is not enabled.
 - Outbound network remains generally available so package-manager traffic can proceed.
+- Behavioral detection (network, git clone, watched-process execution) observes what runs **during the sandbox install**. Payloads designed to fire *outside* the install window — e.g. the PyPI `*-setup.pth` variant that executes on the next `python`/`pip`/CI interpreter startup rather than at install — may not detonate during the scan, so their behavior may not be captured.
 
 **Why:** earlier stricter configs (read-only rootfs + full capability drop + non-root setup) caused apt/setup failures that prevented scans from running. The current config is the stable path that lets matrix probes complete in one sandbox run.
 
@@ -414,6 +465,7 @@ cargo test --test behavior_tests
 cargo test --test cli_burst_exit_tests
 cargo test --test git_clone_behavior_tests
 cargo test --test git_clone_scan_tests
+cargo test --test bun_exec_scan_tests
 
 # Run one specific test case
 cargo test parses_npm_install_with_pinned_version
@@ -437,6 +489,8 @@ Behavior test coverage includes deterministic DNS-enrichment checks for reverse-
 - `tests/parser_tests.rs` — command parsing tests
 - `tests/behavior_tests.rs` — behavior anomaly simulation tests
 - `tests/git_clone_behavior_tests.rs` — git clone behavior simulation tests
+- `tests/git_clone_scan_tests.rs` — install-time git-clone signature diff tests
+- `tests/bun_exec_scan_tests.rs` — watched-process (bun/deno) execution diff tests
 
 **Collaboration docs** (for multi-developer / multi-LLM work)
 

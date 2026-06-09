@@ -30,6 +30,8 @@
 	- minimum_release_age_package
 	- release_burst_threshold
 	- release_burst_window_hours
+	- watched_executables (unioned onto built-in defaults bun/deno)
+	- process_exec_allowlist
 
 ## Adding a New Supported Command
 1. Add command detection in run routing logic.
