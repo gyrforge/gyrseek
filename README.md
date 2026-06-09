@@ -22,6 +22,7 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 - [Network Behavior Detection](#network-behavior-detection)
 - [Git Clone Behavior](#git-clone-behavior)
 - [Watched-Process Detection (Shai-Hulud / Bun)](#watched-process-detection-shai-hulud--bun)
+  - [Shai-Hulud detection coverage](#shai-hulud-detection-coverage)
 - [Configuration](#configuration)
 - [Sandbox Modes](#sandbox-modes)
 - [Prebuilt Scanner Images](#prebuilt-scanner-images)
@@ -243,6 +244,44 @@ Aborting host operation securely.
 Tune this with the `watched_executables` and `process_exec_allowlist` config keys (see [Configuration](#configuration)).
 
 > **Scope:** this observes processes executed _inside the sandbox during install_ (where the Bun loader fires for npm-style hooks and where Python install-time execution can occur). The PyPI `*-setup.pth` variant that triggers on the _next interpreter startup_ rather than at install time may execute outside the install window; see [Limitations](#docker-hardening-limitations).
+### Shai-Hulud detection coverage
+
+The Shai-Hulud campaign has produced several named attack waves across different ecosystems, each using different execution techniques. The table below maps each wave to gyrseek's verdict and — where the attack fires during install — the specific IoCs gyrseek would have captured.
+
+> **Key:** ✅ Caught during install · ❌ Missed (deferred or out of scope) · ⚠️ Partial
+
+| Attack wave | Ecosystem | Execution technique | gyrseek | IoCs gyrseek captures (✅) / Why missed (❌) |
+|---|---|---|---|---|
+| **Hades / Miasma PyPI wave** | PyPI | `*-setup.pth` auto-executes on next Python startup | ❌ | Fires outside the install window — `.pth` is written to disk during install but not executed until the next interpreter invocation. gyrseek sees no anomalous network or execve during `pip install`. |
+| **Bioinformatics & MCP wave** | PyPI | `__init__.py` import hook; compiled `.abi3.so` side-effect; split loader/payload across two packages | ❌ | All three variants defer execution to import or interpreter startup — outside the sandbox window. |
+| **gpt-pilot GitHub source compromise** | Python (source repo) | Injected telemetry `__init__.py` spawns daemon on import | ❌ | Fires on application import, not `pip install`. The registry wheel is clean; the compromise is in the source tree. |
+| **Red Hat Cloud Services npm** | npm | `preinstall` hook runs `node index.js` during `npm install` | ✅ | **Network:** new connection to GitHub Releases (`github.com/oven-sh/bun/releases`) to download `bun-linux-x64.zip`. **Bun execve:** `bun\|run\|_index.js`. Both are flagged vs. baseline. |
+| **@antv ecosystem worm** (639 versions, 323 packages) | npm | `preinstall` hook; worm republishes via stolen tokens | ✅ | Same IoCs as Red Hat wave. The worm-republished package's `npm install` triggers the hook inside the sandbox — **network:** GitHub Releases IPs; **bun execve:** `bun\|run\|_index.js`. The downstream worm propagation via stolen tokens is not blocked. |
+| **Intercom npm compromise** | npm | `preinstall` runs `node setup.mjs`, downloads `router_runtime.js` | ✅ | **Network:** new connection to GitHub Releases for `bun-linux-x64.zip`. **Bun execve:** `bun\|run\|router_runtime.js`. |
+| **Intercom PHP / Packagist** | PHP | Composer plugin `post-install-cmd` runs shell script, downloads Bun | ❌ | PHP/Packagist is not a supported manager. Outside gyrseek's scope. **Network IoC if it were in scope:** connection to `zero.masscan.cloud:443`. |
+| **Post-compromise activity** (CI injection, C2, wiper, persistence, lateral movement) | Any | All techniques fire after credential harvest — GitHub Actions injection, steganographic C2, systemd/LaunchAgent, SSH crawl, `~/` wiper on token revoke | ❌ | These techniques operate after the malicious package has already run on the host. gyrseek's scope is the install window. |
+
+**What gyrseek catches, stated plainly**
+
+gyrseek reliably catches Shai-Hulud attacks where the malicious behaviour fires *during* `npm install` — specifically the `preinstall` hook variants used in the Red Hat, @antv, and Intercom npm waves. The two IoC classes that trigger detection are:
+
+- **New network connection** to GitHub Releases (`github.com/oven-sh/bun/releases/...`) — the Bun download
+- **Watched-process execve** `bun|run|_index.js` or `bun|run|router_runtime.js` — the payload invocation
+
+Either signal alone is sufficient to block the install before it completes.
+
+**The core gap — deferred Python execution**
+
+The original Hades/Miasma PyPI wave and the Bioinformatics/MCP wave use `.pth` files and import hooks specifically to survive install-time scanners. The sequence:
+
+1. `pip install evil-pkg` runs inside gyrseek's sandbox — the `.pth` file is written to `site-packages` as ordinary file I/O. No network calls, no bun execve, nothing anomalous. **gyrseek sees a clean install and allows it.**
+2. The next time *any* Python interpreter starts on the host, `.pth` fires, downloads Bun from GitHub, and runs the stealer.
+
+gyrseek's sandbox window ends when `pip install` exits.
+
+**What would close this gap**
+
+After the sandbox install, gyrseek could run a second strace-covered step — start a fresh Python interpreter with the installed package on `sys.path` to force `.pth` execution — and capture the Bun download and `bun run` execve the same way npm hooks are caught today. A complementary approach is static wheel diffing: comparing wheel contents between versions would surface a newly appearing `.pth` or `_index.js` file before any code runs. Both are on the roadmap.
 
 ## Configuration
 
