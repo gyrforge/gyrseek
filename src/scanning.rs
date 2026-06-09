@@ -1,5 +1,7 @@
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
+use std::sync::OnceLock;
 
 use chrono::{DateTime, Duration, Utc};
 use dns_lookup::lookup_addr;
@@ -7,6 +9,80 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::sandbox::SandboxRunner;
+
+/// Policy knobs resolved from the YAML config (or defaults), passed by reference
+/// into the scanner so call sites don't have to thread a dozen positional args.
+#[derive(Clone, Debug)]
+pub struct PolicyConfig {
+    pub ip_allowlist: HashSet<String>,
+    pub domain_allowlist: HashSet<String>,
+    pub git_clone_allowlist: HashSet<String>,
+    pub baseline_overrides: HashMap<String, (Option<String>, Option<String>)>,
+    pub baseline_count: usize,
+    pub min_baseline_age_hours_by_package: HashMap<String, usize>,
+    pub new_package_exemptions: HashSet<String>,
+    pub release_burst_threshold: Option<usize>,
+    pub release_burst_window_hours: usize,
+    pub minimum_release_age_package: Option<usize>,
+}
+
+impl Default for PolicyConfig {
+    fn default() -> Self {
+        Self {
+            ip_allowlist: HashSet::new(),
+            domain_allowlist: HashSet::new(),
+            git_clone_allowlist: HashSet::new(),
+            baseline_overrides: HashMap::new(),
+            baseline_count: 2,
+            min_baseline_age_hours_by_package: HashMap::new(),
+            new_package_exemptions: HashSet::new(),
+            release_burst_threshold: None,
+            release_burst_window_hours: 24,
+            minimum_release_age_package: None,
+        }
+    }
+}
+
+/// Outcome of scanning a single (package, requested-version) target.
+#[derive(Clone, Debug)]
+pub struct ScanReport {
+    /// Whether the host command is allowed to proceed for this target.
+    pub allowed: bool,
+    /// The concrete version the scanner actually resolved and examined. For an
+    /// unpinned ("latest") request this is the version the registry ordering
+    /// selected, which callers should pin the forwarded command to.
+    pub resolved_version: String,
+}
+
+/// Orders version strings using real semantics rather than lexicographically:
+/// semver for npm, PEP 440 for the Python managers. Strings that fail to parse
+/// are treated as lower than any parseable version (so junk is never selected as
+/// "latest"), with two unparseable strings falling back to lexical order.
+fn compare_version_strings(manager: &str, a: &str, b: &str) -> Ordering {
+    if manager == "npm" {
+        match (semver::Version::parse(a), semver::Version::parse(b)) {
+            (Ok(x), Ok(y)) => x.cmp(&y),
+            (Ok(_), Err(_)) => Ordering::Greater,
+            (Err(_), Ok(_)) => Ordering::Less,
+            (Err(_), Err(_)) => a.cmp(b),
+        }
+    } else {
+        match (
+            a.parse::<pep440_rs::Version>(),
+            b.parse::<pep440_rs::Version>(),
+        ) {
+            (Ok(x), Ok(y)) => x.cmp(&y),
+            (Ok(_), Err(_)) => Ordering::Greater,
+            (Err(_), Ok(_)) => Ordering::Less,
+            (Err(_), Err(_)) => a.cmp(b),
+        }
+    }
+}
+
+/// Sorts versions ascending (oldest/lowest first) by semantic order.
+fn sort_versions_ascending(manager: &str, versions: &mut [String]) {
+    versions.sort_by(|a, b| compare_version_strings(manager, a, b));
+}
 
 #[derive(Default, Clone)]
 struct TraceSignals {
@@ -180,11 +256,10 @@ pub async fn fetch_history_with_baselines(
     if manager == "npm" {
         let encoded = package.replace('/', "%2f");
         let url = format!("https://registry.npmjs.org/{}", encoded);
-        if let Ok(res) = client.get(&url).send().await {
-            if let Ok(data) = res.json::<NpmResponse>().await {
+        if let Ok(res) = client.get(&url).send().await
+            && let Ok(data) = res.json::<NpmResponse>().await {
                 let mut versions: Vec<String> = data.versions.keys().cloned().collect();
-                // Basic sorting (for production, use a semantic versioning crate like 'semver')
-                versions.sort();
+                sort_versions_ascending(manager, &mut versions);
 
                 let current = if target_v == "latest" {
                     versions.last().cloned().unwrap_or_else(|| target_v.to_string())
@@ -195,12 +270,8 @@ pub async fn fetch_history_with_baselines(
                 if let Some(idx) = versions.iter().position(|v| v == &current) {
                     let now = Utc::now();
                     let cutoff = now - Duration::hours(min_baseline_age_hours.max(0));
-                    let mut published_at: HashMap<String, DateTime<Utc>> = HashMap::new();
-                    for (version, ts) in data.time {
-                        if let Ok(dt) = DateTime::parse_from_rfc3339(&ts) {
-                            published_at.insert(version, dt.with_timezone(&Utc));
-                        }
-                    }
+                    let version_keys: HashSet<String> = data.versions.keys().cloned().collect();
+                    let published_at = npm_published_times(&data.time, &version_keys);
                     let releases_last_24h = count_releases_in_window(
                         &published_at,
                         now - Duration::hours(release_burst_window_hours.max(1)),
@@ -215,14 +286,12 @@ pub async fn fetch_history_with_baselines(
                     return (current, baselines, releases_last_24h, current_release_age_days);
                 }
             }
-        }
     } else {
         let url = format!("https://pypi.org/pypi/{}/json", package);
-        if let Ok(res) = client.get(&url).send().await {
-            if let Ok(data) = res.json::<PyPiResponse>().await {
+        if let Ok(res) = client.get(&url).send().await
+            && let Ok(data) = res.json::<PyPiResponse>().await {
                 let mut versions: Vec<String> = data.releases.keys().cloned().collect();
-                // Basic sorting (for production, use a semantic versioning crate like 'semver')
-                versions.sort();
+                sort_versions_ascending(manager, &mut versions);
 
                 let current = if target_v == "latest" {
                     versions.last().cloned().unwrap_or_else(|| target_v.to_string())
@@ -270,7 +339,6 @@ pub async fn fetch_history_with_baselines(
                     return (current, baselines, releases_last_24h, current_release_age_days);
                 }
             }
-        }
     }
 
     (target_v.to_string(), Vec::new(), 0, None)
@@ -282,19 +350,51 @@ fn trace_sandbox_install_matrix(
     probes: &[(String, String)],
 ) -> Result<HashMap<(String, String), TraceSignals>, String> {
     let traces = runner.trace_install_matrix(manager, probes)?;
-    let re = Regex::new(r#"sin_addr=inet_addr\("([\d.]+)"\)"#).unwrap();
     let mut by_probe: HashMap<(String, String), TraceSignals> = HashMap::new();
 
     for ((package, version), stderr_str) in traces {
-        let mut signals = TraceSignals::default();
-        for cap in re.captures_iter(&stderr_str) {
-            signals.ips.insert(cap[1].to_string());
-        }
-        signals.git_clone_signatures = extract_git_clone_signatures(&stderr_str);
+        let signals = TraceSignals {
+            ips: extract_connection_ips(&stderr_str),
+            git_clone_signatures: extract_git_clone_signatures(&stderr_str),
+        };
         by_probe.insert((package, version), signals);
     }
 
     Ok(by_probe)
+}
+
+/// Extracts both IPv4 and IPv6 connection endpoints from an strace trace.
+///
+/// IPv4 appears as `sin_addr=inet_addr("1.2.3.4")`. IPv6 appears as
+/// `sin6_addr=inet_pton(AF_INET6, "2001:db8::1", ...)` (and the abbreviated
+/// `inet_pton("2001:db8::1")` form some strace builds emit). Captured IPv6
+/// values are normalised through `IpAddr` so equivalent textual forms compare
+/// equal against baselines and allowlists.
+fn extract_connection_ips(trace: &str) -> HashSet<String> {
+    static V4: OnceLock<Regex> = OnceLock::new();
+    static V6: OnceLock<Regex> = OnceLock::new();
+
+    let v4 = V4.get_or_init(|| Regex::new(r#"sin_addr=inet_addr\("([\d.]+)"\)"#).unwrap());
+    let v6 = V6.get_or_init(|| {
+        Regex::new(r#"inet_pton\(\s*AF_INET6\s*,\s*"([0-9A-Fa-f:.]+)"|sin6_addr=inet_pton\(\s*AF_INET6\s*,\s*"([0-9A-Fa-f:.]+)""#)
+            .unwrap()
+    });
+
+    let mut ips = HashSet::new();
+    for cap in v4.captures_iter(trace) {
+        ips.insert(cap[1].to_string());
+    }
+    for cap in v6.captures_iter(trace) {
+        if let Some(raw) = cap.get(1).or_else(|| cap.get(2)) {
+            let raw = raw.as_str();
+            let canonical = raw
+                .parse::<IpAddr>()
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|_| raw.to_string());
+            ips.insert(canonical);
+        }
+    }
+    ips
 }
 
 fn extract_git_clone_signatures(trace: &str) -> HashSet<String> {
@@ -408,11 +508,10 @@ fn select_effective_baselines(
         if let Some(v) = override_m1.clone() {
             merged.push(v);
         }
-        if let Some(v) = override_m2.clone() {
-            if !merged.contains(&v) {
+        if let Some(v) = override_m2.clone()
+            && !merged.contains(&v) {
                 merged.push(v);
             }
-        }
 
         for v in &baselines {
             if merged.len() >= baseline_count {
@@ -441,16 +540,38 @@ fn select_age_eligible_baselines(
 ) -> Vec<String> {
     let mut selected = Vec::new();
     for version in candidates_newest_first {
-        if let Some(ts) = published_at.get(&version) {
-            if *ts <= cutoff {
+        if let Some(ts) = published_at.get(&version)
+            && *ts <= cutoff {
                 selected.push(version);
                 if selected.len() >= baseline_count {
                     break;
                 }
             }
-        }
     }
     selected
+}
+
+/// Parses npm's `time` map into per-version publish timestamps, excluding the
+/// `created`/`modified` bookkeeping keys and any key that isn't an actual
+/// published version. Without this filter the release-burst counter would
+/// over-count by up to two and falsely trip the threshold.
+fn npm_published_times(
+    time: &HashMap<String, String>,
+    version_keys: &HashSet<String>,
+) -> HashMap<String, DateTime<Utc>> {
+    let mut published_at = HashMap::new();
+    for (version, ts) in time {
+        if version == "created" || version == "modified" {
+            continue;
+        }
+        if !version_keys.contains(version) {
+            continue;
+        }
+        if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
+            published_at.insert(version.clone(), dt.with_timezone(&Utc));
+        }
+    }
+    published_at
 }
 
 fn count_releases_in_window(
@@ -530,30 +651,22 @@ pub async fn scan_packages_versions(
     runner: &dyn SandboxRunner,
     manager: &str,
     pkg_targets: &[(String, String)],
-    ip_allowlist: &HashSet<String>,
-    domain_allowlist: &HashSet<String>,
-    git_clone_allowlist: &HashSet<String>,
-    baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
-    baseline_count: usize,
-    min_baseline_age_hours_by_package: &HashMap<String, usize>,
-    new_package_exemptions: &HashSet<String>,
-    release_burst_threshold: Option<usize>,
-    release_burst_window_hours: usize,
-    minimum_release_age_package: Option<usize>,
-) -> HashMap<String, bool> {
-    let mut results = HashMap::new();
+    policy: &PolicyConfig,
+) -> HashMap<String, ScanReport> {
+    let mut results: HashMap<String, ScanReport> = HashMap::new();
     if pkg_targets.is_empty() {
         return results;
     }
 
     let mut plans = Vec::new();
     for (pkg_name, tgt_version) in pkg_targets {
-        let min_baseline_age_hours = min_baseline_age_hours_by_package
+        let min_baseline_age_hours = policy
+            .min_baseline_age_hours_by_package
             .get(pkg_name)
             .copied()
             .unwrap_or(DEFAULT_MIN_BASELINE_AGE_HOURS as usize) as i64;
 
-        let fetch_count = baseline_count.max(2);
+        let fetch_count = policy.baseline_count.max(2);
         let (v_curr, fetched_baselines, releases_last_24h, current_release_age_days) =
             fetch_history_with_baselines(
                 manager,
@@ -561,30 +674,36 @@ pub async fn scan_packages_versions(
                 tgt_version,
                 fetch_count,
                 min_baseline_age_hours,
-                release_burst_window_hours as i64,
+                policy.release_burst_window_hours as i64,
             )
             .await;
 
         if let Some(warning) = minimum_release_age_policy_warning(
             pkg_name,
             current_release_age_days,
-            minimum_release_age_package,
+            policy.minimum_release_age_package,
         ) {
             println!("{}", warning);
             println!("Aborting host operation securely.");
-            results.insert(format!("{}|{}", pkg_name, tgt_version), false);
+            results.insert(
+                format!("{}|{}", pkg_name, tgt_version),
+                ScanReport { allowed: false, resolved_version: v_curr.clone() },
+            );
             continue;
         }
 
         if let Some(warning) = burst_policy_warning(
             pkg_name,
             releases_last_24h,
-            release_burst_threshold,
-            release_burst_window_hours,
+            policy.release_burst_threshold,
+            policy.release_burst_window_hours,
         ) {
             println!("{}", warning);
             println!("Aborting host operation securely.");
-            results.insert(format!("{}|{}", pkg_name, tgt_version), false);
+            results.insert(
+                format!("{}|{}", pkg_name, tgt_version),
+                ScanReport { allowed: false, resolved_version: v_curr.clone() },
+            );
             continue;
         }
 
@@ -593,11 +712,11 @@ pub async fn scan_packages_versions(
         let baselines = select_effective_baselines(
             &v_curr,
             fetched_baselines,
-            baseline_overrides.get(pkg_name),
-            baseline_count,
+            policy.baseline_overrides.get(pkg_name),
+            policy.baseline_count,
         );
 
-        let new_package_exempt = new_package_exemptions.contains(pkg_name);
+        let new_package_exempt = policy.new_package_exemptions.contains(pkg_name);
         let (_, should_warn_exemption) = exemption_behavior(new_package_exempt, eligible_baseline_versions);
         if should_warn_exemption {
             println!(
@@ -606,7 +725,7 @@ pub async fn scan_packages_versions(
             );
         }
 
-        if baseline_overrides.get(pkg_name).is_some() {
+        if policy.baseline_overrides.contains_key(pkg_name) {
             println!(
                 "ℹ️ [gyrseek] Applying baseline override(s) for '{}': baseline set={:?}",
                 pkg_name,
@@ -650,7 +769,10 @@ pub async fn scan_packages_versions(
         Err(e) => {
             for plan in &plans {
                 println!("❌ [gyrseek] Sandbox execution failed for '{}': {}", plan.package, e);
-                results.insert(format!("{}|{}", plan.package, plan.target_version), false);
+                results.insert(
+                    format!("{}|{}", plan.package, plan.target_version),
+                    ScanReport { allowed: false, resolved_version: plan.current.clone() },
+                );
             }
             return results;
         }
@@ -658,6 +780,10 @@ pub async fn scan_packages_versions(
 
     for plan in plans {
         let key = format!("{}|{}", plan.package, plan.target_version);
+        let resolved_version = plan.current.clone();
+        let blocked = |results: &mut HashMap<String, ScanReport>, key: String| {
+            results.insert(key, ScanReport { allowed: false, resolved_version: resolved_version.clone() });
+        };
         let current_key = (plan.package.clone(), plan.current.clone());
         let current_signals = match traces_by_probe.get(&current_key) {
             Some(v) => v.clone(),
@@ -666,7 +792,7 @@ pub async fn scan_packages_versions(
                     "❌ [gyrseek] Sandbox trace missing for '{}@{}'.",
                     plan.package, plan.current
                 );
-                results.insert(key, false);
+                blocked(&mut results, key);
                 continue;
             }
         };
@@ -696,7 +822,7 @@ pub async fn scan_packages_versions(
         }
 
         if missing {
-            results.insert(key, false);
+            blocked(&mut results, key);
             continue;
         }
 
@@ -707,14 +833,14 @@ pub async fn scan_packages_versions(
                 "⚠️ [gyrseek] New package exemption applied for '{}': only {} eligible baseline version(s) available (<2). Skipping anomaly block for now.",
                 plan.package, plan.eligible_baseline_versions
             );
-            results.insert(key, true);
+            results.insert(key, ScanReport { allowed: true, resolved_version });
             continue;
         }
 
         let new_git_clone_signatures =
             find_new_git_clone_signatures(&git_curr, &baseline_git_clone_signatures);
         let (new_git_clone_signatures, allowlisted_git_clone_signatures) =
-            filter_allowlisted_git_clone_signatures(new_git_clone_signatures, git_clone_allowlist);
+            filter_allowlisted_git_clone_signatures(new_git_clone_signatures, &policy.git_clone_allowlist);
 
         if !allowlisted_git_clone_signatures.is_empty() {
             println!(
@@ -736,16 +862,16 @@ pub async fn scan_packages_versions(
                 plan.package, plan.current, baseline_label, new_git_clone_signatures
             );
             println!("Aborting host operation securely.");
-            results.insert(key, false);
+            blocked(&mut results, key);
             continue;
         }
 
         let new_connections = find_new_connections(&ips_curr, &baseline_ips);
         let (new_connections, allowlisted_connections) =
-            filter_allowlisted_new_connections(new_connections, ip_allowlist);
+            filter_allowlisted_new_connections(new_connections, &policy.ip_allowlist);
         let (new_connections, allowlisted_domain_connections) = filter_domain_allowlisted_new_connections_with(
             new_connections,
-            domain_allowlist,
+            &policy.domain_allowlist,
             reverse_dns_domain,
         );
 
@@ -790,11 +916,11 @@ pub async fn scan_packages_versions(
                 );
             }
             println!("Aborting host operation securely.");
-            results.insert(key, false);
+            blocked(&mut results, key);
             continue;
         }
 
-        results.insert(key, true);
+        results.insert(key, ScanReport { allowed: true, resolved_version });
     }
 
     results
@@ -807,9 +933,162 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{
-        burst_policy_warning, burst_triggered, exemption_behavior,
-        minimum_release_age_policy_warning, select_age_eligible_baselines, select_effective_baselines,
+        burst_policy_warning, burst_triggered, compare_version_strings, count_releases_in_window,
+        exemption_behavior, extract_connection_ips, minimum_release_age_policy_warning,
+        npm_published_times, select_age_eligible_baselines, select_effective_baselines,
+        sort_versions_ascending,
     };
+    use chrono::Duration;
+    use std::cmp::Ordering;
+    use std::collections::HashSet;
+
+    // --- #1 semantic version ordering ---
+
+    #[test]
+    fn npm_versions_sort_semantically_not_lexically() {
+        // Lexically "10.0.0" < "9.0.0"; semver must order it the other way.
+        let mut versions = vec![
+            "9.0.0".to_string(),
+            "10.0.0".to_string(),
+            "10.0.0-rc.1".to_string(),
+            "2.0.0".to_string(),
+        ];
+        sort_versions_ascending("npm", &mut versions);
+        assert_eq!(
+            versions,
+            vec![
+                "2.0.0".to_string(),
+                "9.0.0".to_string(),
+                "10.0.0-rc.1".to_string(), // prerelease sorts below its release
+                "10.0.0".to_string(),
+            ]
+        );
+        // The "latest" pick (last element) must be the true newest release.
+        assert_eq!(versions.last().map(String::as_str), Some("10.0.0"));
+    }
+
+    #[test]
+    fn pypi_versions_sort_by_pep440_not_lexically() {
+        // Lexically "0.10.0" < "0.9.0" and "1.0.0a1" > "1.0.0"; PEP 440 fixes both.
+        let mut versions = vec![
+            "0.9.0".to_string(),
+            "0.10.0".to_string(),
+            "1.0.0".to_string(),
+            "1.0.0a1".to_string(),
+        ];
+        sort_versions_ascending("pip", &mut versions);
+        assert_eq!(
+            versions,
+            vec![
+                "0.9.0".to_string(),
+                "0.10.0".to_string(),
+                "1.0.0a1".to_string(), // alpha pre-release sorts below final
+                "1.0.0".to_string(),
+            ]
+        );
+        assert_eq!(versions.last().map(String::as_str), Some("1.0.0"));
+    }
+
+    #[test]
+    fn unparseable_versions_sort_below_parseable_ones() {
+        // Junk must never be selected as "latest" over a real version.
+        assert_eq!(compare_version_strings("npm", "not-a-version", "1.0.0"), Ordering::Less);
+        assert_eq!(compare_version_strings("npm", "1.0.0", "not-a-version"), Ordering::Greater);
+
+        let mut versions = vec!["garbage".to_string(), "1.2.3".to_string()];
+        sort_versions_ascending("npm", &mut versions);
+        assert_eq!(versions.last().map(String::as_str), Some("1.2.3"));
+    }
+
+    // --- #3 IPv6 connection capture ---
+
+    #[test]
+    fn extract_connection_ips_captures_ipv4() {
+        let trace = r#"connect(3, {sa_family=AF_INET, sin_port=htons(443), sin_addr=inet_addr("93.184.216.34")}, 16) = 0"#;
+        let ips = extract_connection_ips(trace);
+        assert!(ips.contains("93.184.216.34"));
+    }
+
+    #[test]
+    fn extract_connection_ips_captures_ipv6_inet_pton() {
+        let trace = r#"connect(3, {sa_family=AF_INET6, sin6_port=htons(443), sin6_addr=inet_pton(AF_INET6, "2606:2800:220:1:248:1893:25c8:1946")}, 28) = 0"#;
+        let ips = extract_connection_ips(trace);
+        // Normalised through IpAddr, so the canonical form is what we compare on.
+        assert!(ips.contains("2606:2800:220:1:248:1893:25c8:1946"));
+    }
+
+    #[test]
+    fn extract_connection_ips_normalises_ipv6_equivalents() {
+        let trace = r#"inet_pton(AF_INET6, "2001:0db8:0000:0000:0000:0000:0000:0001", ...) = 1"#;
+        let ips = extract_connection_ips(trace);
+        // Expanded and compressed forms must collapse to one canonical entry.
+        assert!(ips.contains("2001:db8::1"));
+    }
+
+    #[test]
+    fn extract_connection_ips_handles_mixed_v4_and_v6() {
+        let trace = r#"
+sin_addr=inet_addr("8.8.8.8")
+sin6_addr=inet_pton(AF_INET6, "fe80::1")
+"#;
+        let ips = extract_connection_ips(trace);
+        assert!(ips.contains("8.8.8.8"));
+        assert!(ips.contains("fe80::1"));
+        assert_eq!(ips.len(), 2);
+    }
+
+    // --- #6 created/modified must not inflate the release-burst count ---
+
+    #[test]
+    fn npm_published_times_excludes_created_and_modified_keys() {
+        let time = HashMap::from([
+            ("created".to_string(), "2020-01-01T00:00:00.000Z".to_string()),
+            ("modified".to_string(), "2026-01-01T00:00:00.000Z".to_string()),
+            ("1.0.0".to_string(), "2026-06-01T00:00:00.000Z".to_string()),
+            ("1.0.1".to_string(), "2026-06-02T00:00:00.000Z".to_string()),
+        ]);
+        let version_keys: HashSet<String> =
+            ["1.0.0".to_string(), "1.0.1".to_string()].into_iter().collect();
+
+        let published = npm_published_times(&time, &version_keys);
+        assert_eq!(published.len(), 2);
+        assert!(published.contains_key("1.0.0"));
+        assert!(published.contains_key("1.0.1"));
+        assert!(!published.contains_key("created"));
+        assert!(!published.contains_key("modified"));
+    }
+
+    #[test]
+    fn npm_published_times_ignores_time_keys_without_a_matching_version() {
+        let time = HashMap::from([
+            ("created".to_string(), "2020-01-01T00:00:00.000Z".to_string()),
+            ("modified".to_string(), "2026-01-01T00:00:00.000Z".to_string()),
+            ("9.9.9-yanked".to_string(), "2026-06-01T00:00:00.000Z".to_string()),
+        ]);
+        // Only 1.0.0 is a real version; the time map has stale extras.
+        let version_keys: HashSet<String> = ["1.0.0".to_string()].into_iter().collect();
+
+        let published = npm_published_times(&time, &version_keys);
+        assert!(published.is_empty());
+    }
+
+    #[test]
+    fn burst_count_is_not_inflated_by_created_modified() {
+        // Simulate a quiet package: one real release, but created/modified both
+        // fall in the window. Without filtering this would count as 3.
+        let now = chrono::Utc::now();
+        let ts = |dt: chrono::DateTime<chrono::Utc>| dt.to_rfc3339();
+        let time = HashMap::from([
+            ("created".to_string(), ts(now - Duration::hours(1))),
+            ("modified".to_string(), ts(now - Duration::hours(1))),
+            ("1.0.0".to_string(), ts(now - Duration::hours(1))),
+        ]);
+        let version_keys: HashSet<String> = ["1.0.0".to_string()].into_iter().collect();
+
+        let published = npm_published_times(&time, &version_keys);
+        let count = count_releases_in_window(&published, now - Duration::hours(24), now);
+        assert_eq!(count, 1, "created/modified must not be counted as releases");
+    }
 
     #[test]
     fn baseline_count_limits_fetched_baselines_without_overrides() {
@@ -1036,36 +1315,15 @@ pub async fn scan_package_versions(
     manager: &str,
     pkg_name: &str,
     tgt_version: &str,
-    ip_allowlist: &HashSet<String>,
-    domain_allowlist: &HashSet<String>,
-    git_clone_allowlist: &HashSet<String>,
-    baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
-    baseline_count: usize,
-    min_baseline_age_hours_by_package: &HashMap<String, usize>,
-    new_package_exemptions: &HashSet<String>,
-    release_burst_threshold: Option<usize>,
-    release_burst_window_hours: usize,
-    minimum_release_age_package: Option<usize>,
-) -> bool {
+    policy: &PolicyConfig,
+) -> ScanReport {
     let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
-    let outcome = scan_packages_versions(
-        runner,
-        manager,
-        &targets,
-        ip_allowlist,
-        domain_allowlist,
-        git_clone_allowlist,
-        baseline_overrides,
-        baseline_count,
-        min_baseline_age_hours_by_package,
-        new_package_exemptions,
-        release_burst_threshold,
-        release_burst_window_hours,
-        minimum_release_age_package,
-    )
-    .await;
+    let outcome = scan_packages_versions(runner, manager, &targets, policy).await;
     outcome
         .get(&format!("{}|{}", pkg_name, tgt_version))
-        .copied()
-        .unwrap_or(false)
+        .cloned()
+        .unwrap_or_else(|| ScanReport {
+            allowed: false,
+            resolved_version: tgt_version.to_string(),
+        })
 }

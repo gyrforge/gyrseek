@@ -13,8 +13,8 @@ This file stores persistent working memory and agent instructions for this repos
   - src/scanning.rs (registry lookup and anomaly scanning)
   - src/sandbox.rs (sandbox runner backends and mode selection)
 - Test strategy:
-  - Integration tests under tests/
-  - Prefer placing new tests under tests/ rather than src/
+  - Integration tests under tests/ (preferred for command-path and behavior coverage)
+  - Pure-function unit tests live inline in src/ modules (src/scanning.rs, src/sandbox.rs) where they cover internal, non-exported helpers
   - Run with cargo test
 - Collaboration docs:
   - docs/ARCHITECTURE.md
@@ -26,7 +26,10 @@ This file stores persistent working memory and agent instructions for this repos
   - Behavioral anomaly detection also compares install-time git clone command signatures across versions and fails closed when new clone behavior appears
   - Direct runtime interception for standalone `git clone ...` commands is still not enabled; only install-time clone behavior inside package scan traces is currently enforced
   - Install-time git clone behavior comparison is covered by integration tests in tests/git_clone_scan_tests.rs
-  - New IPs remain fail-closed anomalies; warning output now includes reverse-DNS domain context as informational enrichment
+  - Version ordering is semantic-version aware: npm uses semver, Python managers (pip/pip3/uv/poetry) use PEP 440; unparseable version strings sort below any parseable version so malformed entries are never selected as `latest` (see compare_version_strings/sort_versions_ascending in src/scanning.rs)
+  - After a clear scan of an explicit unpinned (`latest`) install target, the forwarded command is rewritten to pin the exact resolved version that was scanned (npm `pkg@x.y.z`, Python `pkg==x.y.z`) via rewrite_args_with_pinned_versions; lockfile/manifest-driven flows (uv sync, uv pip sync, uv lock, poetry install/update) forward verbatim because the lockfile already pins versions
+  - scan_packages_versions/scan_package_versions return a ScanReport { allowed, resolved_version }; policy knobs are passed as a single PolicyConfig struct rather than positional args
+  - New IPs remain fail-closed anomalies (both IPv4 and IPv6 connection endpoints are captured from trace output and IPv6 is normalized to canonical form); warning output now includes reverse-DNS domain context as informational enrichment
   - Behavior tests include deterministic DNS-enrichment coverage (match and unresolved lookup paths)
   - YAML policy config is supported (`gyrseek.yaml` by default, overridable via `--config` or `GYRSEEK_CONFIG`) using `ip_allowlist`, `domain_allowlist`, `git_clone_allowlist` (allowlist for install-time git clone targets), optional package `baseline_overrides` (`baseline-1`/`baseline-2`), `baseline_count` (default 2), per-package `min_baseline_age_hours` (default effective age gate 2 hours), `new_package_exemptions` (temporary bypass when <2 eligible baselines), optional `minimum_release_age_package` (disabled by default; when set, fails closed if current release age in days is below threshold), optional `release_burst_threshold` (disabled by default), and optional `release_burst_window_hours` (default 24h; when threshold is set, fails closed if version publish count in the configured window meets threshold); IPs are canonicalized so equivalent IPv6 representations match
   - uv sync scans all packages from uv.lock
@@ -53,6 +56,9 @@ This file stores persistent working memory and agent instructions for this repos
   - README includes a platform support matrix for `docker`, `host`, and `microvm` modes across macOS and Linux
   - Sandbox initialization failures fail closed (non-zero exit)
   - Docker sandbox batches package-version probe matrices (multiple packages and baselines) in one container session while preserving package-version attribution
+  - strace invocations use `-s 4096 -v` so long argv strings (e.g. git clone URLs) and addresses are not truncated to the 32-byte default
+  - The traced install payload is dropped to an unprivileged in-container user (`strace -u gyrseek`) while strace and the trace log files stay root-owned in the bind-mounted /out, so a malicious install/postinstall script cannot overwrite or delete its own trace before gyrseek reads it
+  - If the host command cannot be spawned after a clear scan, gyrseek fails closed (non-zero exit) instead of panicking
   - Docker runner currently avoids read-only rootfs because apt-based probe tooling setup requires writable root filesystem
   - Docker runner executes setup as root and uses `APT::Sandbox::User=root` to avoid setgroups failures under capability restrictions
   - Docker runner currently does not drop all Linux capabilities because apt-based setup fails under full capability drop

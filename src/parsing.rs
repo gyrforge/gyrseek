@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 
 fn parse_toml_quoted_value(line: &str, key: &str) -> Option<String> {
@@ -294,11 +295,10 @@ fn parse_requirements_spec(spec: &str) -> Option<(String, Option<String>)> {
 
     let base = trimmed.split_whitespace().next().unwrap_or(trimmed);
 
-    if let Some((name, version)) = base.split_once("==") {
-        if !name.is_empty() && !version.is_empty() {
+    if let Some((name, version)) = base.split_once("==")
+        && !name.is_empty() && !version.is_empty() {
             return Some((name.to_string(), Some(version.to_string())));
         }
-    }
 
     if base.starts_with('-') || base.starts_with('.') || base.contains("://") {
         return None;
@@ -334,11 +334,10 @@ pub fn parse_pip_install_packages_from_args(args: &[String]) -> Vec<(String, Opt
         let arg = &args[idx];
 
         if arg == "-r" || arg == "--requirements" {
-            if let Some(path) = args.get(idx + 1) {
-                if let Ok(content) = fs::read_to_string(path) {
+            if let Some(path) = args.get(idx + 1)
+                && let Ok(content) = fs::read_to_string(path) {
                     packages.extend(parse_requirements_packages_from_content(&content));
                 }
-            }
             idx += 2;
             continue;
         }
@@ -367,23 +366,21 @@ pub fn parse_pip_install_packages_from_args(args: &[String]) -> Vec<(String, Opt
 
 fn parse_npm_spec(arg: &str) -> (String, Option<String>) {
     if arg.starts_with('@') {
-        if let Some(idx) = arg.rfind('@') {
-            if idx > 0 {
+        if let Some(idx) = arg.rfind('@')
+            && idx > 0 {
                 let name = &arg[..idx];
                 let version = &arg[idx + 1..];
                 if !version.is_empty() && name.contains('/') {
                     return (name.to_string(), Some(version.to_string()));
                 }
             }
-        }
         return (arg.to_string(), None);
     }
 
-    if let Some((name, version)) = arg.rsplit_once('@') {
-        if !name.is_empty() && !version.is_empty() {
+    if let Some((name, version)) = arg.rsplit_once('@')
+        && !name.is_empty() && !version.is_empty() {
             return (name.to_string(), Some(version.to_string()));
         }
-    }
 
     (arg.to_string(), None)
 }
@@ -495,25 +492,96 @@ pub fn parse_uv_lock_upgrade_packages_from_args(args: &[String]) -> Vec<String> 
         let arg = &args[idx];
 
         if arg == "-P" || arg == "--upgrade-package" {
-            if let Some(pkg) = args.get(idx + 1) {
-                if !pkg.starts_with('-') {
+            if let Some(pkg) = args.get(idx + 1)
+                && !pkg.starts_with('-') {
                     packages.push(pkg.to_string());
                 }
-            }
             idx += 2;
             continue;
         }
 
-        if let Some(pkg) = arg.strip_prefix("--upgrade-package=") {
-            if !pkg.is_empty() {
+        if let Some(pkg) = arg.strip_prefix("--upgrade-package=")
+            && !pkg.is_empty() {
                 packages.push(pkg.to_string());
             }
-        }
 
         idx += 1;
     }
 
     packages
+}
+
+/// Rewrites an install command's positional package arguments so each package
+/// named in `pins` is pinned to the exact version the scanner resolved.
+///
+/// `pins` maps package name -> resolved version. Flags, already-pinned specs,
+/// and non-registry specs (paths/URLs/git) are left untouched. This is what lets
+/// gyrseek guarantee the host installs the *same* version it examined, even when
+/// the user asked for an unpinned (`latest`) install.
+pub fn rewrite_args_with_pinned_versions(
+    manager: &str,
+    args: &[String],
+    pins: &HashMap<String, String>,
+) -> Vec<String> {
+    if pins.is_empty() {
+        return args.to_vec();
+    }
+
+    let is_python = manager == "pip" || manager == "pip3" || manager == "uv" || manager == "poetry";
+    if manager != "npm" && !is_python {
+        return args.to_vec();
+    }
+
+    // First two tokens are the manager + subcommand (e.g. `npm install`,
+    // `pip install`); `uv pip install` has a third. Don't rewrite those.
+    let skip = if manager == "uv"
+        && args.get(1).map(String::as_str) == Some("pip")
+        && args.get(2).map(String::as_str) == Some("install")
+    {
+        3
+    } else {
+        2
+    };
+
+    let mut out: Vec<String> = Vec::with_capacity(args.len());
+    for (idx, arg) in args.iter().enumerate() {
+        if idx < skip || arg.starts_with('-') {
+            out.push(arg.clone());
+            continue;
+        }
+
+        if manager == "npm" {
+            let (name, existing_version) = parse_npm_spec(arg);
+            if existing_version.is_none()
+                && let Some(version) = pins.get(&name) {
+                    out.push(format!("{}@{}", name, version));
+                    continue;
+                }
+            out.push(arg.clone());
+            continue;
+        }
+
+        // Python managers: only rewrite a bare `name` (no version operator and
+        // not a path/URL spec).
+        if arg.contains("==")
+            || arg.starts_with('.')
+            || arg.contains("://")
+            || arg.contains(['<', '>', '=', '!', '~', '@'])
+        {
+            out.push(arg.clone());
+            continue;
+        }
+
+        // A requirements spec like `name[extra]` keeps the extras when pinning.
+        let base_name = arg.split('[').next().unwrap_or(arg);
+        if let Some(version) = pins.get(base_name) {
+            out.push(format!("{}=={}", arg, version));
+        } else {
+            out.push(arg.clone());
+        }
+    }
+
+    out
 }
 
 pub fn parse_package_details(manager: &str, args: &[String]) -> (Option<String>, Option<String>) {
