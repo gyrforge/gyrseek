@@ -24,6 +24,21 @@ pub struct PolicyConfig {
     pub release_burst_threshold: Option<usize>,
     pub release_burst_window_hours: usize,
     pub minimum_release_age_package: Option<usize>,
+    /// Executable basenames whose execution during install is tracked and diffed
+    /// across versions (e.g. `bun`, `deno`). New or changed invocations of these
+    /// are fail-closed anomalies.
+    pub watched_executables: HashSet<String>,
+    /// Watched-process signatures (`bun|run|build`) or bare executables (`bun`)
+    /// that are explicitly allowed even when newly introduced.
+    pub process_exec_allowlist: HashSet<String>,
+}
+
+/// The executables gyrseek watches by default. These are runtimes that
+/// essentially never appear in a normal npm/pip install, so flagging a newly
+/// introduced invocation has a very low false-positive rate while catching the
+/// Shai-Hulud "download Bun and run the stealer" pattern.
+pub fn default_watched_executables() -> HashSet<String> {
+    ["bun", "deno"].into_iter().map(String::from).collect()
 }
 
 impl Default for PolicyConfig {
@@ -39,6 +54,8 @@ impl Default for PolicyConfig {
             release_burst_threshold: None,
             release_burst_window_hours: 24,
             minimum_release_age_package: None,
+            watched_executables: default_watched_executables(),
+            process_exec_allowlist: HashSet::new(),
         }
     }
 }
@@ -88,6 +105,7 @@ fn sort_versions_ascending(manager: &str, versions: &mut [String]) {
 struct TraceSignals {
     ips: HashSet<String>,
     git_clone_signatures: HashSet<String>,
+    process_exec_signatures: HashSet<String>,
 }
 
 #[derive(Clone)]
@@ -348,6 +366,7 @@ fn trace_sandbox_install_matrix(
     runner: &dyn SandboxRunner,
     manager: &str,
     probes: &[(String, String)],
+    watched_executables: &HashSet<String>,
 ) -> Result<HashMap<(String, String), TraceSignals>, String> {
     let traces = runner.trace_install_matrix(manager, probes)?;
     let mut by_probe: HashMap<(String, String), TraceSignals> = HashMap::new();
@@ -356,6 +375,7 @@ fn trace_sandbox_install_matrix(
         let signals = TraceSignals {
             ips: extract_connection_ips(&stderr_str),
             git_clone_signatures: extract_git_clone_signatures(&stderr_str),
+            process_exec_signatures: extract_process_exec_signatures(&stderr_str, watched_executables),
         };
         by_probe.insert((package, version), signals);
     }
@@ -397,22 +417,40 @@ fn extract_connection_ips(trace: &str) -> HashSet<String> {
     ips
 }
 
-fn extract_git_clone_signatures(trace: &str) -> HashSet<String> {
-    let execve_re = Regex::new(r#"execve\([^,]+,\s*\[(?P<argv>[^\]]*)\]"#).unwrap();
-    let quoted_arg_re = Regex::new(r#"\"((?:\\.|[^\"])*)\""#).unwrap();
-    let mut signatures = HashSet::new();
+/// Parses every `execve(..., [argv], ...)` line in an strace trace into its
+/// decoded argv vector. Shared by the git-clone and watched-process extractors.
+fn parse_execve_argvs(trace: &str) -> Vec<Vec<String>> {
+    static EXECVE_RE: OnceLock<Regex> = OnceLock::new();
+    static QUOTED_ARG_RE: OnceLock<Regex> = OnceLock::new();
 
+    let execve_re =
+        EXECVE_RE.get_or_init(|| Regex::new(r#"execve\([^,]+,\s*\[(?P<argv>[^\]]*)\]"#).unwrap());
+    let quoted_arg_re =
+        QUOTED_ARG_RE.get_or_init(|| Regex::new(r#"\"((?:\\.|[^\"])*)\""#).unwrap());
+
+    let mut argvs = Vec::new();
     for cap in execve_re.captures_iter(trace) {
         let argv = cap.name("argv").map(|m| m.as_str()).unwrap_or("");
-        let mut args: Vec<String> = quoted_arg_re
+        let args: Vec<String> = quoted_arg_re
             .captures_iter(argv)
             .filter_map(|m| m.get(1).map(|x| x.as_str().replace("\\\"", "\"")))
             .collect();
-
-        if args.is_empty() {
-            continue;
+        if !args.is_empty() {
+            argvs.push(args);
         }
+    }
+    argvs
+}
 
+/// Returns the lowercased basename of an executable path (`/usr/bin/bun` -> `bun`).
+fn executable_basename(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase()
+}
+
+fn extract_git_clone_signatures(trace: &str) -> HashSet<String> {
+    let mut signatures = HashSet::new();
+
+    for mut args in parse_execve_argvs(trace) {
         // strace argv usually starts with executable name as argv[0].
         let first = args.remove(0);
         let first_lower = first.to_ascii_lowercase();
@@ -451,6 +489,44 @@ fn extract_git_clone_signatures(trace: &str) -> HashSet<String> {
     signatures
 }
 
+/// Extracts execution signatures for *watched* executables (default `bun`,
+/// `deno`) from an strace trace. Each signature is the executable basename
+/// joined with its argv, e.g. `bun|run|_index.js`.
+///
+/// This is what detects the Shai-Hulud "Hades/miasma" class of attack, where a
+/// compromised package downloads the Bun runtime during install and runs an
+/// obfuscated stealer via `bun run`. Diffed against baseline versions, it flags
+/// both "this version started executing bun" and "this version runs bun but with
+/// new/extra arguments not seen before".
+fn extract_process_exec_signatures(
+    trace: &str,
+    watched_executables: &HashSet<String>,
+) -> HashSet<String> {
+    if watched_executables.is_empty() {
+        return HashSet::new();
+    }
+
+    let watched: HashSet<String> = watched_executables
+        .iter()
+        .map(|e| e.trim().to_ascii_lowercase())
+        .filter(|e| !e.is_empty())
+        .collect();
+
+    let mut signatures = HashSet::new();
+    for args in parse_execve_argvs(trace) {
+        let exe = executable_basename(&args[0]);
+        if !watched.contains(&exe) {
+            continue;
+        }
+        // Signature = basename + remaining argv, so changed/extra args produce a
+        // distinct signature that won't match the baseline set.
+        let mut parts = vec![exe];
+        parts.extend(args[1..].iter().cloned());
+        signatures.insert(parts.join("|"));
+    }
+    signatures
+}
+
 fn find_new_git_clone_signatures(
     current: &HashSet<String>,
     baseline: &HashSet<String>,
@@ -458,6 +534,45 @@ fn find_new_git_clone_signatures(
     let mut out: Vec<String> = current.difference(baseline).cloned().collect();
     out.sort();
     out
+}
+
+/// Signatures present in the current version but absent from every baseline.
+fn find_new_process_exec_signatures(
+    current: &HashSet<String>,
+    baseline: &HashSet<String>,
+) -> Vec<String> {
+    let mut out: Vec<String> = current.difference(baseline).cloned().collect();
+    out.sort();
+    out
+}
+
+/// Splits watched-process signatures into (blocked, allowlisted). An entry is
+/// allowlisted if the policy lists either the exact signature (`bun|run|build`)
+/// or just the executable basename (`bun`), both compared case-insensitively.
+fn filter_allowlisted_process_exec_signatures(
+    signatures: Vec<String>,
+    process_exec_allowlist: &HashSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    let normalized_allowlist: HashSet<String> = process_exec_allowlist
+        .iter()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| !v.is_empty())
+        .collect();
+
+    let mut remaining = Vec::new();
+    let mut allowlisted = Vec::new();
+
+    for signature in signatures {
+        let lower = signature.to_ascii_lowercase();
+        let exe = lower.split('|').next().unwrap_or("").to_string();
+        if normalized_allowlist.contains(&lower) || normalized_allowlist.contains(&exe) {
+            allowlisted.push(signature);
+        } else {
+            remaining.push(signature);
+        }
+    }
+
+    (remaining, allowlisted)
 }
 
 fn filter_allowlisted_git_clone_signatures(
@@ -764,7 +879,7 @@ pub async fn scan_packages_versions(
         }
     }
 
-    let traces_by_probe = match trace_sandbox_install_matrix(runner, manager, &probes) {
+    let traces_by_probe = match trace_sandbox_install_matrix(runner, manager, &probes, &policy.watched_executables) {
         Ok(v) => v,
         Err(e) => {
             for plan in &plans {
@@ -798,9 +913,11 @@ pub async fn scan_packages_versions(
         };
         let ips_curr = current_signals.ips;
         let git_curr = current_signals.git_clone_signatures;
+        let proc_curr = current_signals.process_exec_signatures;
 
         let mut baseline_ips = HashSet::new();
         let mut baseline_git_clone_signatures = HashSet::new();
+        let mut baseline_process_exec_signatures = HashSet::new();
         let mut missing = false;
 
         for v in &plan.baselines {
@@ -810,6 +927,8 @@ pub async fn scan_packages_versions(
                     baseline_ips.extend(found.ips.iter().cloned());
                     baseline_git_clone_signatures
                         .extend(found.git_clone_signatures.iter().cloned());
+                    baseline_process_exec_signatures
+                        .extend(found.process_exec_signatures.iter().cloned());
                 }
                 None => {
                     println!(
@@ -834,6 +953,39 @@ pub async fn scan_packages_versions(
                 plan.package, plan.eligible_baseline_versions
             );
             results.insert(key, ScanReport { allowed: true, resolved_version });
+            continue;
+        }
+
+        let new_process_exec_signatures =
+            find_new_process_exec_signatures(&proc_curr, &baseline_process_exec_signatures);
+        let (new_process_exec_signatures, allowlisted_process_exec_signatures) =
+            filter_allowlisted_process_exec_signatures(
+                new_process_exec_signatures,
+                &policy.process_exec_allowlist,
+            );
+
+        if !allowlisted_process_exec_signatures.is_empty() {
+            println!(
+                "ℹ️ [gyrseek] process_exec_allowlist ignored new process execution behavior for '{}': {:?}",
+                plan.package, allowlisted_process_exec_signatures
+            );
+        }
+
+        if !new_process_exec_signatures.is_empty() {
+            let baseline_label = if plan.baselines.is_empty() {
+                "n/a".to_string()
+            } else {
+                plan.baselines.join(", ")
+            };
+
+            println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
+            println!(
+                "Package '{}', version '{}' introduced new watched-process execution (for example bun/deno) not seen in baseline versions ({}): {:?}",
+                plan.package, plan.current, baseline_label, new_process_exec_signatures
+            );
+            println!("This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload).");
+            println!("Aborting host operation securely.");
+            blocked(&mut results, key);
             continue;
         }
 
@@ -934,9 +1086,10 @@ mod tests {
 
     use super::{
         burst_policy_warning, burst_triggered, compare_version_strings, count_releases_in_window,
-        exemption_behavior, extract_connection_ips, minimum_release_age_policy_warning,
-        npm_published_times, select_age_eligible_baselines, select_effective_baselines,
-        sort_versions_ascending,
+        default_watched_executables, exemption_behavior, extract_connection_ips,
+        extract_process_exec_signatures, filter_allowlisted_process_exec_signatures,
+        find_new_process_exec_signatures, minimum_release_age_policy_warning, npm_published_times,
+        select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
     };
     use chrono::Duration;
     use std::cmp::Ordering;
@@ -1088,6 +1241,137 @@ sin6_addr=inet_pton(AF_INET6, "fe80::1")
         let published = npm_published_times(&time, &version_keys);
         let count = count_releases_in_window(&published, now - Duration::hours(24), now);
         assert_eq!(count, 1, "created/modified must not be counted as releases");
+    }
+
+    // --- watched-process (bun/deno) execution detection (Shai-Hulud class) ---
+
+    fn watched() -> HashSet<String> {
+        default_watched_executables()
+    }
+
+    #[test]
+    fn default_watched_set_includes_bun_and_deno() {
+        let w = default_watched_executables();
+        assert!(w.contains("bun"));
+        assert!(w.contains("deno"));
+    }
+
+    #[test]
+    fn extract_process_exec_captures_bun_run_with_argv() {
+        // The Shai-Hulud loader downloads bun and runs the obfuscated stealer.
+        let trace = r#"execve("/tmp/b/bun", ["/tmp/b/bun", "run", "_index.js"], 0x7ff) = 0"#;
+        let sigs = extract_process_exec_signatures(trace, &watched());
+        assert!(sigs.contains("bun|run|_index.js"), "got: {sigs:?}");
+    }
+
+    #[test]
+    fn extract_process_exec_uses_basename_so_path_does_not_matter() {
+        let a = extract_process_exec_signatures(
+            r#"execve("/tmp/b/bun", ["/tmp/b/bun", "run", "x.js"], 0x7ff) = 0"#,
+            &watched(),
+        );
+        let b = extract_process_exec_signatures(
+            r#"execve("/usr/local/bin/bun", ["bun", "run", "x.js"], 0x7ff) = 0"#,
+            &watched(),
+        );
+        // Both normalize to the same signature regardless of install path / argv0.
+        assert_eq!(a, b);
+        assert!(a.contains("bun|run|x.js"));
+    }
+
+    #[test]
+    fn extract_process_exec_ignores_non_watched_executables() {
+        // node/sh/python are intentionally NOT watched (too noisy in installs).
+        let trace = r#"
+execve("/usr/bin/node", ["node", "build.js"], 0x7ff) = 0
+execve("/bin/sh", ["sh", "-c", "echo hi"], 0x7ff) = 0
+execve("/usr/bin/python3", ["python3", "setup.py"], 0x7ff) = 0
+"#;
+        let sigs = extract_process_exec_signatures(trace, &watched());
+        assert!(sigs.is_empty(), "got: {sigs:?}");
+    }
+
+    #[test]
+    fn empty_watched_set_extracts_nothing() {
+        let trace = r#"execve("/tmp/bun", ["bun", "run", "x.js"], 0x7ff) = 0"#;
+        assert!(extract_process_exec_signatures(trace, &HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn case_1_new_bun_is_flagged_against_clean_baseline() {
+        // Baseline never ran bun; latest does -> the bun signature is "new".
+        let baseline = extract_process_exec_signatures(
+            r#"execve("/usr/bin/node", ["node", "index.js"], 0x7ff) = 0"#,
+            &watched(),
+        );
+        let current = extract_process_exec_signatures(
+            r#"execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0"#,
+            &watched(),
+        );
+        let new = find_new_process_exec_signatures(&current, &baseline);
+        assert_eq!(new, vec!["bun|run|_index.js".to_string()]);
+    }
+
+    #[test]
+    fn case_2_existing_bun_plus_additional_invocation_is_flagged() {
+        // Baseline legitimately runs `bun run build`. Latest still does that, but
+        // ALSO runs the stealer. Only the new invocation should surface.
+        let baseline = extract_process_exec_signatures(
+            r#"execve("/usr/bin/bun", ["bun", "run", "build"], 0x7ff) = 0"#,
+            &watched(),
+        );
+        let current = extract_process_exec_signatures(
+            r#"
+execve("/usr/bin/bun", ["bun", "run", "build"], 0x7ff) = 0
+execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
+"#,
+            &watched(),
+        );
+        let new = find_new_process_exec_signatures(&current, &baseline);
+        assert_eq!(new, vec!["bun|run|_index.js".to_string()]);
+    }
+
+    #[test]
+    fn case_2b_changed_bun_arguments_are_flagged() {
+        // Same executable, different args -> distinct signature, so it's "new".
+        let baseline = extract_process_exec_signatures(
+            r#"execve("/usr/bin/bun", ["bun", "run", "build"], 0x7ff) = 0"#,
+            &watched(),
+        );
+        let current = extract_process_exec_signatures(
+            r#"execve("/usr/bin/bun", ["bun", "run", "build", "--evil-flag"], 0x7ff) = 0"#,
+            &watched(),
+        );
+        let new = find_new_process_exec_signatures(&current, &baseline);
+        assert_eq!(new, vec!["bun|run|build|--evil-flag".to_string()]);
+    }
+
+    #[test]
+    fn identical_bun_behavior_is_not_flagged() {
+        let baseline = extract_process_exec_signatures(
+            r#"execve("/usr/bin/bun", ["bun", "run", "build"], 0x7ff) = 0"#,
+            &watched(),
+        );
+        let current = baseline.clone();
+        assert!(find_new_process_exec_signatures(&current, &baseline).is_empty());
+    }
+
+    #[test]
+    fn process_exec_allowlist_matches_exact_signature_and_bare_executable() {
+        let sigs = vec!["bun|run|build".to_string(), "deno|run|task.ts".to_string()];
+
+        // Exact-signature allowlist clears only that one.
+        let allow_exact: HashSet<String> = ["bun|run|build".to_string()].into_iter().collect();
+        let (remaining, allowed) =
+            filter_allowlisted_process_exec_signatures(sigs.clone(), &allow_exact);
+        assert_eq!(allowed, vec!["bun|run|build".to_string()]);
+        assert_eq!(remaining, vec!["deno|run|task.ts".to_string()]);
+
+        // Bare-executable allowlist clears every invocation of that executable.
+        let allow_exe: HashSet<String> = ["bun".to_string()].into_iter().collect();
+        let (remaining, allowed) = filter_allowlisted_process_exec_signatures(sigs, &allow_exe);
+        assert_eq!(allowed, vec!["bun|run|build".to_string()]);
+        assert_eq!(remaining, vec!["deno|run|task.ts".to_string()]);
     }
 
     #[test]

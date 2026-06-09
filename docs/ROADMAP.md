@@ -12,12 +12,15 @@
 - Made host-command forwarding fail closed when the manager binary cannot be spawned.
 - Folded policy knobs into a single PolicyConfig struct and scan results into ScanReport.
 - Added unit/integration coverage for all of the above (version ordering, IPv4/IPv6 extraction, burst filtering, version pinning, strace hardening, fail-closed forwarding).
+- Added watched-process execution detection (default bun/deno) diffed across versions to catch the Shai-Hulud "download a runtime and run a hidden payload" class, with `watched_executables`/`process_exec_allowlist` config and coverage in tests/bun_exec_scan_tests.rs.
 
 ## Near Term
 - Add richer requirements parsing (environment markers, extras, line continuations).
 - Add end-to-end command-path tests covering pinned forwarding and lockfile-flow verbatim forwarding (e.g. uv sync) with a stub manager.
 
 ## Mid Term
+- Detect post-install / startup-triggered payloads that fire outside the install window (e.g. PyPI `*-setup.pth` startup execution): exercise the package's import/startup path inside the sandbox and diff that behavior too.
+- Make the watched-executable set extensible per-ecosystem and consider an opt-in "watch all unexpected process execution" strict mode.
 - Add direct runtime git clone interception path with safe heuristics.
 - Improve baseline selection strategy when fewer historical versions exist.
 - Add structured logging mode for CI and machine parsing.

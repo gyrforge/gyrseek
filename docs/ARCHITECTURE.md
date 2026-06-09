@@ -28,13 +28,14 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - Version lists are ordered semantically: semver for npm, PEP 440 for Python managers (compare_version_strings / sort_versions_ascending). Unparseable strings sort below any parseable version, so junk is never resolved as `latest`.
   - npm `time` map parsing (npm_published_times) excludes the `created`/`modified` bookkeeping keys and any non-version key, so the release-burst counter is not inflated.
 - Behavior capture:
-  - trace_sandbox_install_matrix runs via SandboxRunner backend and captures per package-version connection IPs (IPv4 via inet_addr and IPv6 via inet_pton, normalized to canonical form by extract_connection_ips) and install-time git clone command signatures from trace output.
+  - trace_sandbox_install_matrix runs via SandboxRunner backend and captures, per package-version: connection IPs (IPv4 via inet_addr and IPv6 via inet_pton, normalized to canonical form by extract_connection_ips), install-time git clone command signatures, and watched-process execution signatures (extract_process_exec_signatures: `exe|arg1|...` for watched runtimes such as bun/deno).
   - strace runs with `-s 4096 -v` (no argv/address truncation) and `-u <scanner-user>` so the traced install payload runs unprivileged while strace and its root-owned /out trace logs remain tamper-resistant.
   - Docker backend can execute probe matrices (multiple packages with their current and baseline versions) in one container session.
   - build_runner_from_env selects backend mode (`docker` default, `host` fallback).
 - Anomaly decision:
   - find_new_connections returns endpoints seen in current but not in baseline.
   - install-time git clone signatures are diffed across current and baseline versions; newly introduced clone behavior is fail-closed unless allowlisted.
+  - watched-process execution signatures (default bun/deno) are diffed across versions; a newly introduced or changed/extra invocation is fail-closed unless allowlisted (process_exec_allowlist). This targets the Shai-Hulud "download Bun and run a hidden payload" class of attack.
 - In-run optimization:
   - run keeps an in-memory cache keyed by manager/package/version to avoid repeating identical scans in one execution.
 
@@ -42,9 +43,9 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
 For each scanned package:
 1. Determine current target version (explicit, or `latest` resolved via semantic ordering).
 2. Resolve baseline versions (v-1 and v-2 where available, ordered semantically).
-3. Collect behavior signals for current and baseline installs (network endpoints and install-time git clone signatures).
+3. Collect behavior signals for current and baseline installs (network endpoints, install-time git clone signatures, and watched-process execution signatures).
 4. Compute set differences current minus baseline for each signal type.
-5. Apply allowlists (`ip_allowlist`, `domain_allowlist`, `git_clone_allowlist`).
+5. Apply allowlists (`ip_allowlist`, `domain_allowlist`, `git_clone_allowlist`, `process_exec_allowlist`).
 6. If non-allowlisted differences remain, block command.
 
 ## Fail-Closed Policy
@@ -56,6 +57,8 @@ gyrseek blocks instead of passthrough when package detection is expected for sup
 - Direct runtime interception for standalone `git clone ...` commands is not enabled yet.
 - Docker mode assumes Docker CLI availability; host mode assumes strace availability and is less safe. The unprivileged-payload (`strace -u`) trace-integrity protection applies to the Docker/microvm backends.
 - Trace extraction still assumes current strace output patterns.
+- Behavioral signals (network, git clone, watched-process execution) are only captured for what executes during the sandbox install. Payloads that fire outside the install window (e.g. the PyPI `*-setup.pth` startup-execution variant) may not detonate during the scan.
+- Watched-process detection covers a curated runtime set (default bun/deno) rather than all process execution, to keep false positives low.
 
 ## Main Files
 - src/main.rs: binary entrypoint
@@ -68,6 +71,7 @@ gyrseek blocks instead of passthrough when package detection is expected for sup
 - tests/git_clone_behavior_tests.rs: git-clone simulation coverage
 - tests/git_clone_scan_tests.rs: install-time git-clone signature diff coverage
 - tests/forward_fail_closed_tests.rs: fail-closed coverage when the host command cannot be spawned
-- src/scanning.rs (unit tests): semantic version ordering, IPv4/IPv6 trace extraction, npm time-map release-burst filtering
+- tests/bun_exec_scan_tests.rs: watched-process (bun/deno) execution diff coverage (new bun, bun+extra, identical, allowlisted)
+- src/scanning.rs (unit tests): semantic version ordering, IPv4/IPv6 trace extraction, npm time-map release-burst filtering, watched-process signature extraction/diff/allowlist
 - src/sandbox.rs (unit tests): strace no-truncation flags, unprivileged-payload trace integrity, docker arg construction
 - tests/parser_tests.rs also covers forwarded-command version pinning (rewrite_args_with_pinned_versions)
