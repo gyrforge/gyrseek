@@ -4,11 +4,18 @@
 - Added install/build-time git clone behavior diffing across package versions.
 - Added `git_clone_allowlist` policy support for install-time clone targets.
 - Added integration coverage for install-time git clone scan behavior under `tests/git_clone_scan_tests.rs`.
+- Replaced lexicographic version ordering with semantic ordering (semver for npm, PEP 440 for Python), with safe fallback for unparseable versions.
+- Pinned the forwarded command to the exact scanned version for explicit unpinned install targets (closes the scan-vs-install version gap).
+- Captured IPv6 connection endpoints (not just IPv4) and normalized them to canonical form.
+- Hardened trace capture: `strace -s 4096 -v` (no truncation) and `-u` to run the install payload unprivileged so it cannot tamper with its own trace.
+- Excluded npm `created`/`modified` bookkeeping keys from the release-burst counter.
+- Made host-command forwarding fail closed when the manager binary cannot be spawned.
+- Folded policy knobs into a single PolicyConfig struct and scan results into ScanReport.
+- Added unit/integration coverage for all of the above (version ordering, IPv4/IPv6 extraction, burst filtering, version pinning, strace hardening, fail-closed forwarding).
 
 ## Near Term
-- Add semantic version ordering to replace lexicographic sorting.
 - Add richer requirements parsing (environment markers, extras, line continuations).
-- Add end-to-end command-path tests for fail-closed enforcement behavior.
+- Add end-to-end command-path tests covering pinned forwarding and lockfile-flow verbatim forwarding (e.g. uv sync) with a stub manager.
 
 ## Mid Term
 - Add direct runtime git clone interception path with safe heuristics.

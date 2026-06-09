@@ -40,7 +40,7 @@ It currently supports:
 
 `gyrseek` uses syscall tracing (`strace`) during sandbox installs to observe outbound network connection behavior.
 
-- It captures connection target IPs from trace output.
+- It captures connection target IPs (both IPv4 and IPv6, normalized to canonical form) from trace output.
 - It computes the difference between:
    - current version endpoints
    - baseline endpoints from previous versions
@@ -390,9 +390,10 @@ cargo run -- npm update lodash typescript
 - `poetry install` and `poetry update` exclude local project entries (for example directory/path/editable source blocks) from anomaly comparison.
 - `npm install`, `npm i`, and `npm update` scan all explicit package targets; when no targets are provided, they scan dependencies declared in `package.json`.
 - For npm package.json fallback scanning, local source dependencies (`file:`, `workspace:`, `git+`, direct URL/link sources) are excluded from anomaly comparison.
-- Version selection is currently sorted lexicographically, not semantic-version aware.
+- Version selection is semantic-version aware: npm targets are ordered with semver and Python targets (pip/uv/poetry) with PEP 440. Unparseable version strings sort below any parseable version so malformed entries are never chosen as `latest`.
+- After a clear scan of an unpinned (`latest`) install target, the forwarded command is rewritten to pin the exact version that was examined, so the host installs the same version gyrseek scanned.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
-- For supported install/sync command paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
+- For supported install/sync command paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough. If the host command itself cannot be launched after a clear scan, gyrseek also fails closed.
 
 ## Docker Hardening Limitations
 
@@ -401,7 +402,7 @@ Current Docker sandbox mode is designed for practical compatibility and throughp
 Current limitations:
 
 - Container setup installs probe tooling at runtime (`apt-get` and, for Python, `uv`).
-- Container setup currently runs as root.
+- Container setup and `strace` run as root so the trace logs are root-owned, but the traced install payload itself is dropped to an unprivileged in-container user (`strace -u`). This prevents a malicious install script from overwriting or deleting its own trace before gyrseek reads it.
 - Full `--read-only` rootfs is not enabled in this mode.
 - Full capability dropping is not enabled in this mode.
 - Outbound network remains generally available so package manager traffic can proceed.

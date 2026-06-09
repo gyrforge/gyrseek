@@ -7,9 +7,117 @@ use gyrseek::{
     parse_requirements_packages_from_content,
     parse_uv_lock_upgrade_packages_from_args,
     parse_uv_lock_packages_from_content,
+    rewrite_args_with_pinned_versions,
     GyrSeek,
 };
+use std::collections::HashMap;
 use std::fs;
+
+// --- #2 pin the forwarded command to the exact scanned version ---
+
+fn args(parts: &[&str]) -> Vec<String> {
+    parts.iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn pins_unpinned_npm_install_to_resolved_version() {
+    let pins = HashMap::from([("left-pad".to_string(), "1.3.0".to_string())]);
+    let out = rewrite_args_with_pinned_versions(
+        "npm",
+        &args(&["npm", "install", "left-pad"]),
+        &pins,
+    );
+    assert_eq!(out, args(&["npm", "install", "left-pad@1.3.0"]));
+}
+
+#[test]
+fn pins_scoped_npm_package() {
+    let pins = HashMap::from([("@scope/pkg".to_string(), "2.5.1".to_string())]);
+    let out = rewrite_args_with_pinned_versions(
+        "npm",
+        &args(&["npm", "install", "@scope/pkg"]),
+        &pins,
+    );
+    assert_eq!(out, args(&["npm", "install", "@scope/pkg@2.5.1"]));
+}
+
+#[test]
+fn does_not_repin_npm_package_that_already_has_a_version() {
+    let pins = HashMap::from([("left-pad".to_string(), "1.3.0".to_string())]);
+    let out = rewrite_args_with_pinned_versions(
+        "npm",
+        &args(&["npm", "install", "left-pad@1.2.0"]),
+        &pins,
+    );
+    // User explicitly asked for 1.2.0; leave it untouched.
+    assert_eq!(out, args(&["npm", "install", "left-pad@1.2.0"]));
+}
+
+#[test]
+fn pins_unpinned_pip_install_to_resolved_version() {
+    let pins = HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+    let out = rewrite_args_with_pinned_versions(
+        "pip",
+        &args(&["pip", "install", "requests"]),
+        &pins,
+    );
+    assert_eq!(out, args(&["pip", "install", "requests==2.31.0"]));
+}
+
+#[test]
+fn pins_pip_package_with_extras() {
+    let pins = HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+    let out = rewrite_args_with_pinned_versions(
+        "pip",
+        &args(&["pip", "install", "requests[security]"]),
+        &pins,
+    );
+    assert_eq!(out, args(&["pip", "install", "requests[security]==2.31.0"]));
+}
+
+#[test]
+fn leaves_pip_flags_and_pinned_specs_untouched() {
+    let pins = HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+    let out = rewrite_args_with_pinned_versions(
+        "pip",
+        &args(&["pip", "install", "--no-cache-dir", "requests==2.30.0"]),
+        &pins,
+    );
+    assert_eq!(out, args(&["pip", "install", "--no-cache-dir", "requests==2.30.0"]));
+}
+
+#[test]
+fn pins_uv_pip_install_respecting_three_token_prefix() {
+    let pins = HashMap::from([("flask".to_string(), "3.0.0".to_string())]);
+    let out = rewrite_args_with_pinned_versions(
+        "uv",
+        &args(&["uv", "pip", "install", "flask"]),
+        &pins,
+    );
+    assert_eq!(out, args(&["uv", "pip", "install", "flask==3.0.0"]));
+}
+
+#[test]
+fn empty_pins_is_a_noop() {
+    let out = rewrite_args_with_pinned_versions(
+        "npm",
+        &args(&["npm", "install", "left-pad"]),
+        &HashMap::new(),
+    );
+    assert_eq!(out, args(&["npm", "install", "left-pad"]));
+}
+
+#[test]
+fn does_not_pin_unrelated_packages() {
+    let pins = HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+    let out = rewrite_args_with_pinned_versions(
+        "pip",
+        &args(&["pip", "install", "flask"]),
+        &pins,
+    );
+    // flask isn't in the pin set, so it's left as-is.
+    assert_eq!(out, args(&["pip", "install", "flask"]));
+}
 
 #[test]
 fn parses_uv_add_as_latest_when_unpinned() {

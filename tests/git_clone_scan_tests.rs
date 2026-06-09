@@ -1,7 +1,25 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
-use gyrseek::{scan_packages_versions, SandboxRunner};
+use gyrseek::{scan_packages_versions, PolicyConfig, SandboxRunner};
+
+/// Builds a single-baseline policy pinning `package` to baseline `baseline`,
+/// optionally with a git-clone allowlist.
+fn policy_with_baseline(
+    package: &str,
+    baseline: &str,
+    git_clone_allowlist: HashSet<String>,
+) -> PolicyConfig {
+    PolicyConfig {
+        baseline_count: 1,
+        git_clone_allowlist,
+        baseline_overrides: HashMap::from([(
+            package.to_string(),
+            (Some(baseline.to_string()), None),
+        )]),
+        ..PolicyConfig::default()
+    }
+}
 
 struct MockRunner {
     traces: HashMap<(String, String), String>,
@@ -46,19 +64,7 @@ execve("/usr/bin/sh", ["sh", "-c", "echo ok"], 0x7ff) = 0
         &runner,
         "npm",
         &[("pkg-a".to_string(), "1.3.0".to_string())],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashMap::from([(
-            "pkg-a".to_string(),
-            (Some("1.2.0".to_string()), None),
-        )]),
-        1,
-        &HashMap::new(),
-        &HashSet::new(),
-        None,
-        24,
-        None,
+        &policy_with_baseline("pkg-a", "1.2.0", HashSet::new()),
     )
     .await;
 
@@ -66,7 +72,7 @@ execve("/usr/bin/sh", ["sh", "-c", "echo ok"], 0x7ff) = 0
         std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
     }
 
-    assert_eq!(results.get("pkg-a|1.3.0"), Some(&false));
+    assert_eq!(results.get("pkg-a|1.3.0").map(|r| r.allowed), Some(false));
 }
 
 #[tokio::test]
@@ -94,19 +100,7 @@ execve("/usr/bin/git", ["git", "clone", "https://github.com/acme/repo.git"], 0x7
         &runner,
         "npm",
         &[("pkg-b".to_string(), "1.3.0".to_string())],
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashMap::from([(
-            "pkg-b".to_string(),
-            (Some("1.2.0".to_string()), None),
-        )]),
-        1,
-        &HashMap::new(),
-        &HashSet::new(),
-        None,
-        24,
-        None,
+        &policy_with_baseline("pkg-b", "1.2.0", HashSet::new()),
     )
     .await;
 
@@ -114,7 +108,7 @@ execve("/usr/bin/git", ["git", "clone", "https://github.com/acme/repo.git"], 0x7
         std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
     }
 
-    assert_eq!(results.get("pkg-b|1.3.0"), Some(&true));
+    assert_eq!(results.get("pkg-b|1.3.0").map(|r| r.allowed), Some(true));
 }
 
 #[tokio::test]
@@ -145,19 +139,7 @@ execve("/usr/bin/sh", ["sh", "-c", "echo ok"], 0x7ff) = 0
         &runner,
         "npm",
         &[("pkg-c".to_string(), "1.3.0".to_string())],
-        &HashSet::new(),
-        &HashSet::new(),
-        &git_clone_allowlist,
-        &HashMap::from([(
-            "pkg-c".to_string(),
-            (Some("1.2.0".to_string()), None),
-        )]),
-        1,
-        &HashMap::new(),
-        &HashSet::new(),
-        None,
-        24,
-        None,
+        &policy_with_baseline("pkg-c", "1.2.0", git_clone_allowlist),
     )
     .await;
 
@@ -165,5 +147,5 @@ execve("/usr/bin/sh", ["sh", "-c", "echo ok"], 0x7ff) = 0
         std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
     }
 
-    assert_eq!(results.get("pkg-c|1.3.0"), Some(&true));
+    assert_eq!(results.get("pkg-c|1.3.0").map(|r| r.allowed), Some(true));
 }

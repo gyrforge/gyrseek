@@ -35,9 +35,18 @@
 1. Add command detection in run routing logic.
 2. Decide if command is single-target or bulk-target.
 3. Reuse or extend parser helpers.
-4. Reuse scan_package_versions for each resolved package target.
-5. Enforce fail-closed when detection is expected but unresolved.
-6. Add parser tests and behavior tests.
+4. Reuse scan_package_versions (single) or scan_packages_versions (bulk) for resolved targets; both take a single &PolicyConfig and return a ScanReport per target (allowed + resolved_version).
+5. For explicit unpinned install targets, forward via forward_pinned_command(&pins) using the resolved_version values so the host installs exactly what was scanned; lockfile/manifest-driven flows forward verbatim with forward_original_command.
+6. Enforce fail-closed when detection is expected but unresolved.
+7. Add parser tests and behavior tests.
+
+## Version Ordering Notes
+- npm versions are ordered with the semver crate; Python managers (pip/pip3/uv/poetry) use PEP 440 (pep440_rs).
+- Unparseable version strings deliberately sort below any parseable version so malformed entries are never chosen as `latest`.
+
+## Test Locations
+- Integration tests live under tests/ (preferred for new behavior).
+- Pure-function unit tests also live inline in src/scanning.rs and src/sandbox.rs (version ordering, trace extraction, strace/docker arg construction); keep these alongside the code they cover.
 
 ## Required Change Hygiene
 After every repository change:

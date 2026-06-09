@@ -26,8 +26,10 @@ pub use scanning::enrich_new_connection_domains_with;
 pub use scanning::filter_allowlisted_new_connections;
 pub use scanning::filter_domain_allowlisted_new_connections_with;
 pub use scanning::scan_packages_versions;
+pub use scanning::{PolicyConfig, ScanReport};
 pub use sandbox::SandboxRunner;
 
+pub use parsing::rewrite_args_with_pinned_versions;
 use parsing::{parse_package_details, should_enforce_package_detection};
 use sandbox::{build_runner_from_env, list_docker_runtimes};
 use scanning::scan_package_versions;
@@ -98,39 +100,11 @@ fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool)
     Ok((args[idx..].to_vec(), cfg_path, cfg_explicit))
 }
 
-fn load_policy_config(
-    path: &str,
-    explicit: bool,
-) -> Result<
-    (
-        HashSet<String>,
-        HashSet<String>,
-        HashMap<String, (Option<String>, Option<String>)>,
-        usize,
-        HashMap<String, usize>,
-        HashSet<String>,
-        Option<usize>,
-        usize,
-        Option<usize>,
-        HashSet<String>,
-    ),
-    String,
-> {
+fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) if !explicit && e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((
-                HashSet::new(),
-                HashSet::new(),
-                HashMap::new(),
-                2,
-                HashMap::new(),
-                HashSet::new(),
-                None,
-                24,
-                None,
-                HashSet::new(),
-            ));
+            return Ok(PolicyConfig::default());
         }
         Err(e) => {
             return Err(format!("Failed to read config file '{}': {}", path, e));
@@ -259,18 +233,18 @@ fn load_policy_config(
         None => None,
     };
 
-    Ok((
-        set,
-        domain_set,
+    Ok(PolicyConfig {
+        ip_allowlist: set,
+        domain_allowlist: domain_set,
+        git_clone_allowlist,
         baseline_overrides,
         baseline_count,
-        min_baseline_age_hours,
+        min_baseline_age_hours_by_package: min_baseline_age_hours,
         new_package_exemptions,
         release_burst_threshold,
         release_burst_window_hours,
         minimum_release_age_package,
-        git_clone_allowlist,
-    ))
+    })
 }
 
 #[cfg(test)]
@@ -302,32 +276,28 @@ mod config_tests {
         assert_eq!(manager_args, vec!["uv", "sync"]);
     }
 
+    fn load(file: &NamedTempFile) -> super::PolicyConfig {
+        load_policy_config(
+            file.path().to_str().expect("path should be utf8"),
+            true,
+        )
+        .expect("config should parse")
+    }
+
     #[test]
     fn missing_default_config_returns_empty_allowlist() {
         let missing = "gyrseek-config-does-not-exist.yaml";
-        let (
-            ip_allowlist,
-            domain_allowlist,
-            baseline_overrides,
-            baseline_count,
-            min_baseline_age_hours,
-            new_package_exemptions,
-            release_burst_threshold,
-            release_burst_window_hours,
-            minimum_release_age_package,
-            git_clone_allowlist,
-        ) =
-            load_policy_config(missing, false).expect("missing default should be allowed");
-        assert!(ip_allowlist.is_empty());
-        assert!(domain_allowlist.is_empty());
-        assert!(baseline_overrides.is_empty());
-        assert_eq!(baseline_count, 2);
-        assert!(min_baseline_age_hours.is_empty());
-        assert!(new_package_exemptions.is_empty());
-        assert!(release_burst_threshold.is_none());
-        assert_eq!(release_burst_window_hours, 24);
-        assert!(minimum_release_age_package.is_none());
-        assert!(git_clone_allowlist.is_empty());
+        let cfg = load_policy_config(missing, false).expect("missing default should be allowed");
+        assert!(cfg.ip_allowlist.is_empty());
+        assert!(cfg.domain_allowlist.is_empty());
+        assert!(cfg.baseline_overrides.is_empty());
+        assert_eq!(cfg.baseline_count, 2);
+        assert!(cfg.min_baseline_age_hours_by_package.is_empty());
+        assert!(cfg.new_package_exemptions.is_empty());
+        assert!(cfg.release_burst_threshold.is_none());
+        assert_eq!(cfg.release_burst_window_hours, 24);
+        assert!(cfg.minimum_release_age_package.is_none());
+        assert!(cfg.git_clone_allowlist.is_empty());
     }
 
     #[test]
@@ -346,60 +316,37 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (
-            ip_allowlist,
-            domain_allowlist,
-            baseline_overrides,
-            baseline_count,
-            min_baseline_age_hours,
-            new_package_exemptions,
-            release_burst_threshold,
-            release_burst_window_hours,
-            minimum_release_age_package,
-            git_clone_allowlist,
-        ) =
-            load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
+        let cfg = load(&file);
 
-        assert_eq!(ip_allowlist.len(), 3);
-        assert!(ip_allowlist.contains("1.1.1.1"));
-        assert!(ip_allowlist.contains("8.8.8.8"));
-        assert!(ip_allowlist.contains("2001:db8::ff00:42:8329"));
-        assert!(domain_allowlist.contains("example.com"));
-        assert!(domain_allowlist.contains("sub.safe.net"));
-        assert_eq!(baseline_overrides.len(), 2);
+        assert_eq!(cfg.ip_allowlist.len(), 3);
+        assert!(cfg.ip_allowlist.contains("1.1.1.1"));
+        assert!(cfg.ip_allowlist.contains("8.8.8.8"));
+        assert!(cfg.ip_allowlist.contains("2001:db8::ff00:42:8329"));
+        assert!(cfg.domain_allowlist.contains("example.com"));
+        assert!(cfg.domain_allowlist.contains("sub.safe.net"));
+        assert_eq!(cfg.baseline_overrides.len(), 2);
         assert_eq!(
-            baseline_overrides.get("requests"),
+            cfg.baseline_overrides.get("requests"),
             Some(&(Some("2.30.0".to_string()), Some("2.29.0".to_string())))
         );
         assert_eq!(
-            baseline_overrides.get("lodash"),
+            cfg.baseline_overrides.get("lodash"),
             Some(&(Some("4.17.20".to_string()), None))
         );
-        assert_eq!(baseline_count, 2);
-        assert!(min_baseline_age_hours.is_empty());
-        assert!(new_package_exemptions.is_empty());
-        assert!(release_burst_threshold.is_none());
-        assert_eq!(release_burst_window_hours, 24);
-        assert!(minimum_release_age_package.is_none());
-        assert!(git_clone_allowlist.is_empty());
+        assert_eq!(cfg.baseline_count, 2);
+        assert!(cfg.min_baseline_age_hours_by_package.is_empty());
+        assert!(cfg.new_package_exemptions.is_empty());
+        assert!(cfg.release_burst_threshold.is_none());
+        assert_eq!(cfg.release_burst_window_hours, 24);
+        assert!(cfg.minimum_release_age_package.is_none());
+        assert!(cfg.git_clone_allowlist.is_empty());
     }
 
     #[test]
     fn parses_baseline_count_override_from_config() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "baseline_count: 4").expect("config should be written");
-
-        let (_, _, _, baseline_count, _, _, _, _, _, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert_eq!(baseline_count, 4);
+        assert_eq!(load(&file).baseline_count, 4);
     }
 
     #[test]
@@ -411,15 +358,10 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, _, _, min_baseline_age_hours, _, _, _, _, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert_eq!(min_baseline_age_hours.get("requests"), Some(&6));
-        assert_eq!(min_baseline_age_hours.get("lodash"), Some(&12));
-        assert!(!min_baseline_age_hours.contains_key("badpkg"));
+        let cfg = load(&file);
+        assert_eq!(cfg.min_baseline_age_hours_by_package.get("requests"), Some(&6));
+        assert_eq!(cfg.min_baseline_age_hours_by_package.get("lodash"), Some(&12));
+        assert!(!cfg.min_baseline_age_hours_by_package.contains_key("badpkg"));
     }
 
     #[test]
@@ -431,15 +373,10 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, _, _, _, new_package_exemptions, _, _, _, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert!(new_package_exemptions.contains("requests"));
-        assert!(new_package_exemptions.contains("lodash"));
-        assert_eq!(new_package_exemptions.len(), 2);
+        let cfg = load(&file);
+        assert!(cfg.new_package_exemptions.contains("requests"));
+        assert!(cfg.new_package_exemptions.contains("lodash"));
+        assert_eq!(cfg.new_package_exemptions.len(), 2);
     }
 
     #[test]
@@ -447,55 +384,25 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_threshold: 3").expect("config should be written");
 
-        let (
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            release_burst_threshold,
-            release_burst_window_hours,
-            minimum_release_age_package,
-            git_clone_allowlist,
-        ) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert_eq!(release_burst_threshold, Some(3));
-        assert_eq!(release_burst_window_hours, 24);
-        assert!(minimum_release_age_package.is_none());
-        assert!(git_clone_allowlist.is_empty());
+        let cfg = load(&file);
+        assert_eq!(cfg.release_burst_threshold, Some(3));
+        assert_eq!(cfg.release_burst_window_hours, 24);
+        assert!(cfg.minimum_release_age_package.is_none());
+        assert!(cfg.git_clone_allowlist.is_empty());
     }
 
     #[test]
     fn release_burst_threshold_zero_disables_checker() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_threshold: 0").expect("config should be written");
-
-        let (_, _, _, _, _, _, release_burst_threshold, _, _, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert!(release_burst_threshold.is_none());
+        assert!(load(&file).release_burst_threshold.is_none());
     }
 
     #[test]
     fn baseline_count_zero_falls_back_to_default_two() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "baseline_count: 0").expect("config should be written");
-
-        let (_, _, _, baseline_count, _, _, _, _, _, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert_eq!(baseline_count, 2);
+        assert_eq!(load(&file).baseline_count, 2);
     }
 
     #[test]
@@ -507,73 +414,40 @@ mod config_tests {
         )
         .expect("config should be written");
 
-        let (_, _, baseline_overrides, _, min_baseline_age_hours, _, _, _, _, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
+        let cfg = load(&file);
         assert_eq!(
-            baseline_overrides.get("requests"),
+            cfg.baseline_overrides.get("requests"),
             Some(&(Some("2.30.0".to_string()), None))
         );
-        assert_eq!(min_baseline_age_hours.get("requests"), Some(&6));
+        assert_eq!(cfg.min_baseline_age_hours_by_package.get("requests"), Some(&6));
     }
 
     #[test]
     fn parses_release_burst_window_hours_override() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_window_hours: 12").expect("config should be written");
-
-        let (_, _, _, _, _, _, _, release_burst_window_hours, _, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert_eq!(release_burst_window_hours, 12);
+        assert_eq!(load(&file).release_burst_window_hours, 12);
     }
 
     #[test]
     fn release_burst_window_hours_zero_falls_back_to_24() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "release_burst_window_hours: 0").expect("config should be written");
-
-        let (_, _, _, _, _, _, _, release_burst_window_hours, _, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert_eq!(release_burst_window_hours, 24);
+        assert_eq!(load(&file).release_burst_window_hours, 24);
     }
 
     #[test]
     fn parses_minimum_release_age_package_override() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "minimum_release_age_package: 7").expect("config should be written");
-
-        let (_, _, _, _, _, _, _, _, minimum_release_age_package, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert_eq!(minimum_release_age_package, Some(7));
+        assert_eq!(load(&file).minimum_release_age_package, Some(7));
     }
 
     #[test]
     fn minimum_release_age_package_zero_disables_policy() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "minimum_release_age_package: 0").expect("config should be written");
-
-        let (_, _, _, _, _, _, _, _, minimum_release_age_package, _) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert!(minimum_release_age_package.is_none());
+        assert!(load(&file).minimum_release_age_package.is_none());
     }
 
     #[test]
@@ -581,14 +455,9 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "git_clone_allowlist:\n  - https://github.com/acme/repo.git\n  - '  '").expect("config should be written");
 
-        let (_, _, _, _, _, _, _, _, _, git_clone_allowlist) = load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse");
-
-        assert!(git_clone_allowlist.contains("https://github.com/acme/repo.git"));
-        assert_eq!(git_clone_allowlist.len(), 1);
+        let cfg = load(&file);
+        assert!(cfg.git_clone_allowlist.contains("https://github.com/acme/repo.git"));
+        assert_eq!(cfg.git_clone_allowlist.len(), 1);
     }
 }
 
@@ -618,18 +487,39 @@ impl GyrSeek {
         parse_package_details(&self.manager, &self.passthrough_args)
     }
 
-    /// Executes the user's raw host operation transparently
+    /// Executes the user's raw host operation transparently.
     pub fn forward_original_command(&self) {
-        if self.passthrough_args.is_empty() {
+        self.forward_args(&self.passthrough_args);
+    }
+
+    /// Forwards the install command, but rewrites the version specifiers of the
+    /// named packages to the exact versions the scanner resolved and examined.
+    /// This closes the gap where an unpinned `install foo` is scanned at one
+    /// version while the host manager would otherwise resolve a different one.
+    pub fn forward_pinned_command(&self, pins: &HashMap<String, String>) {
+        let pinned = rewrite_args_with_pinned_versions(&self.manager, &self.passthrough_args, pins);
+        self.forward_args(&pinned);
+    }
+
+    fn forward_args(&self, args: &[String]) {
+        if args.is_empty() {
             return;
         }
 
-        let mut child = Command::new(&self.manager)
-            .args(&self.passthrough_args[1..])
-            .spawn()
-            .expect("Failed to execute host command");
-
-        let _ = child.wait();
+        match Command::new(&self.manager).args(&args[1..]).spawn() {
+            Ok(mut child) => {
+                let _ = child.wait();
+            }
+            Err(e) => {
+                // Fail closed: if we can't even launch the host command, don't
+                // pretend the operation succeeded.
+                println!(
+                    "❌ [gyrseek] Failed to execute host command '{}': {}",
+                    self.manager, e
+                );
+                std::process::exit(1);
+            }
+        }
     }
 
     fn parse_uv_lock_packages(&self) -> Vec<(String, String)> {
@@ -687,69 +577,38 @@ impl GyrSeek {
 }
 
 async fn scan_with_cache(
-    cache: &mut HashMap<String, bool>,
+    cache: &mut HashMap<String, ScanReport>,
     runner: &dyn SandboxRunner,
     manager: &str,
     pkg_name: &str,
     tgt_version: &str,
-    ip_allowlist: &HashSet<String>,
-    domain_allowlist: &HashSet<String>,
-    git_clone_allowlist: &HashSet<String>,
-    baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
-    baseline_count: usize,
-    min_baseline_age_hours_by_package: &HashMap<String, usize>,
-    new_package_exemptions: &HashSet<String>,
-    release_burst_threshold: Option<usize>,
-    release_burst_window_hours: usize,
-    minimum_release_age_package: Option<usize>,
-) -> bool {
+    policy: &PolicyConfig,
+) -> ScanReport {
     let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
     if let Some(cached) = cache.get(&key) {
         println!(
             "🧠 [gyrseek] Cache hit for '{}@{}' in current run.",
             pkg_name, tgt_version
         );
-        return *cached;
+        return cached.clone();
     }
 
-    let result =
-        scan_package_versions(
-            runner,
-            manager,
-            pkg_name,
-            tgt_version,
-            ip_allowlist,
-            domain_allowlist,
-            git_clone_allowlist,
-            baseline_overrides,
-            baseline_count,
-            min_baseline_age_hours_by_package,
-            new_package_exemptions,
-            release_burst_threshold,
-            release_burst_window_hours,
-            minimum_release_age_package,
-        )
-        .await;
-    cache.insert(key, result);
+    let result = scan_package_versions(runner, manager, pkg_name, tgt_version, policy).await;
+    cache.insert(key, result.clone());
     result
 }
 
+/// Scans a batch of targets. On success returns the resolved-version pins
+/// (requested package name -> concrete version actually examined) so callers
+/// can pin the forwarded command. Returns `None` if any target is blocked.
 async fn scan_many_with_cache(
-    cache: &mut HashMap<String, bool>,
+    cache: &mut HashMap<String, ScanReport>,
     runner: &dyn SandboxRunner,
     manager: &str,
     targets: Vec<(String, String)>,
-    ip_allowlist: &HashSet<String>,
-    domain_allowlist: &HashSet<String>,
-    git_clone_allowlist: &HashSet<String>,
-    baseline_overrides: &HashMap<String, (Option<String>, Option<String>)>,
-    baseline_count: usize,
-    min_baseline_age_hours_by_package: &HashMap<String, usize>,
-    new_package_exemptions: &HashSet<String>,
-    release_burst_threshold: Option<usize>,
-    release_burst_window_hours: usize,
-    minimum_release_age_package: Option<usize>,
-) -> bool {
+    policy: &PolicyConfig,
+) -> Option<HashMap<String, String>> {
+    let mut pins: HashMap<String, String> = HashMap::new();
     let mut uncached: Vec<(String, String)> = Vec::new();
 
     for (pkg_name, tgt_version) in targets {
@@ -759,48 +618,35 @@ async fn scan_many_with_cache(
                 "🧠 [gyrseek] Cache hit for '{}@{}' in current run.",
                 pkg_name, tgt_version
             );
-            if !cached {
-                return false;
+            if !cached.allowed {
+                return None;
             }
+            pins.insert(pkg_name, cached.resolved_version.clone());
             continue;
         }
         uncached.push((pkg_name, tgt_version));
     }
 
     if uncached.is_empty() {
-        return true;
+        return Some(pins);
     }
 
-    let batch_results = scan_packages_versions(
-        runner,
-        manager,
-        &uncached,
-        ip_allowlist,
-        domain_allowlist,
-        git_clone_allowlist,
-        baseline_overrides,
-        baseline_count,
-        min_baseline_age_hours_by_package,
-        new_package_exemptions,
-        release_burst_threshold,
-        release_burst_window_hours,
-        minimum_release_age_package,
-    )
-    .await;
+    let batch_results = scan_packages_versions(runner, manager, &uncached, policy).await;
 
     for (pkg_name, tgt_version) in uncached {
-        let result = batch_results
+        let report = batch_results
             .get(&format!("{}|{}", pkg_name, tgt_version))
-            .copied()
-            .unwrap_or(false);
+            .cloned()
+            .unwrap_or_else(|| ScanReport { allowed: false, resolved_version: tgt_version.clone() });
         let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
-        cache.insert(key, result);
-        if !result {
-            return false;
+        cache.insert(key, report.clone());
+        if !report.allowed {
+            return None;
         }
+        pins.insert(pkg_name, report.resolved_version);
     }
 
-    true
+    Some(pins)
 }
 
 pub async fn run(args: Vec<String>) {
@@ -812,18 +658,7 @@ pub async fn run(args: Vec<String>) {
         }
     };
 
-    let (
-        ip_allowlist,
-        domain_allowlist,
-        baseline_overrides,
-        baseline_count,
-        min_baseline_age_hours_by_package,
-        new_package_exemptions,
-        release_burst_threshold,
-        release_burst_window_hours,
-        minimum_release_age_package,
-        git_clone_allowlist,
-    ) = match load_policy_config(&config_path, config_explicit) {
+    let policy = match load_policy_config(&config_path, config_explicit) {
         Ok(v) => v,
         Err(e) => {
             println!("❌ [gyrseek] {}", e);
@@ -831,55 +666,55 @@ pub async fn run(args: Vec<String>) {
         }
     };
 
-    if !ip_allowlist.is_empty() {
+    if !policy.ip_allowlist.is_empty() {
         println!(
             "ℹ️ [gyrseek] Loaded {} allowlisted IP(s) from {}",
-            ip_allowlist.len(),
+            policy.ip_allowlist.len(),
             config_path
         );
     }
-    if !domain_allowlist.is_empty() {
+    if !policy.domain_allowlist.is_empty() {
         println!(
             "ℹ️ [gyrseek] Loaded {} allowlisted domain(s) from {}",
-            domain_allowlist.len(),
+            policy.domain_allowlist.len(),
             config_path
         );
     }
-    if !git_clone_allowlist.is_empty() {
+    if !policy.git_clone_allowlist.is_empty() {
         println!(
             "ℹ️ [gyrseek] Loaded {} allowlisted git clone target(s) from {}",
-            git_clone_allowlist.len(),
+            policy.git_clone_allowlist.len(),
             config_path
         );
     }
-    if !baseline_overrides.is_empty() {
+    if !policy.baseline_overrides.is_empty() {
         println!(
             "ℹ️ [gyrseek] Loaded {} baseline override package(s) from {}",
-            baseline_overrides.len(),
+            policy.baseline_overrides.len(),
             config_path
         );
     }
-    println!("ℹ️ [gyrseek] Using baseline_count={}", baseline_count);
-    if !min_baseline_age_hours_by_package.is_empty() {
+    println!("ℹ️ [gyrseek] Using baseline_count={}", policy.baseline_count);
+    if !policy.min_baseline_age_hours_by_package.is_empty() {
         println!(
             "ℹ️ [gyrseek] Loaded per-package min_baseline_age_hours for {} package(s)",
-            min_baseline_age_hours_by_package.len()
+            policy.min_baseline_age_hours_by_package.len()
         );
     }
-    if !new_package_exemptions.is_empty() {
+    if !policy.new_package_exemptions.is_empty() {
         println!(
             "ℹ️ [gyrseek] Loaded new package exemptions for {} package(s)",
-            new_package_exemptions.len()
+            policy.new_package_exemptions.len()
         );
     }
-    if let Some(threshold) = release_burst_threshold {
+    if let Some(threshold) = policy.release_burst_threshold {
         println!(
             "ℹ️ [gyrseek] Release burst checker enabled (threshold={} releases/{}h)",
             threshold,
-            release_burst_window_hours
+            policy.release_burst_window_hours
         );
     }
-    if let Some(days) = minimum_release_age_package {
+    if let Some(days) = policy.minimum_release_age_package {
         println!(
             "ℹ️ [gyrseek] Minimum release age policy enabled (minimum_release_age_package={} day(s))",
             days
@@ -905,7 +740,7 @@ pub async fn run(args: Vec<String>) {
         return;
     }
 
-    let mut scan_cache: HashMap<String, bool> = HashMap::new();
+    let mut scan_cache: HashMap<String, ScanReport> = HashMap::new();
     let runner = if env::var("GYRSEEK_TEST_BYPASS_RUNNER_INIT").ok().as_deref() == Some("1") {
         Box::new(NoopRunner) as Box<dyn SandboxRunner>
     } else {
@@ -932,23 +767,9 @@ pub async fn run(args: Vec<String>) {
                 .into_iter()
                 .map(|pkg_name| (pkg_name, "latest".to_string()))
                 .collect();
-            if !scan_many_with_cache(
-                &mut scan_cache,
-                runner.as_ref(),
-                &eye.manager,
-                targets,
-                &ip_allowlist,
-                &domain_allowlist,
-                &git_clone_allowlist,
-                &baseline_overrides,
-                baseline_count,
-                &min_baseline_age_hours_by_package,
-                &new_package_exemptions,
-                release_burst_threshold,
-                release_burst_window_hours,
-                minimum_release_age_package,
-            )
-            .await
+            if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets, &policy)
+                .await
+                .is_none()
             {
                 std::process::exit(1);
             }
@@ -972,23 +793,9 @@ pub async fn run(args: Vec<String>) {
                 lock_packages.len()
             );
 
-            if !scan_many_with_cache(
-                &mut scan_cache,
-                runner.as_ref(),
-                &eye.manager,
-                lock_packages,
-                &ip_allowlist,
-                &domain_allowlist,
-                &git_clone_allowlist,
-                &baseline_overrides,
-                baseline_count,
-                &min_baseline_age_hours_by_package,
-                &new_package_exemptions,
-                release_burst_threshold,
-                release_burst_window_hours,
-                minimum_release_age_package,
-            )
-            .await
+            if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages, &policy)
+                .await
+                .is_none()
             {
                 std::process::exit(1);
             }
@@ -1022,23 +829,9 @@ pub async fn run(args: Vec<String>) {
             lock_packages.len()
         );
 
-        if !scan_many_with_cache(
-            &mut scan_cache,
-            runner.as_ref(),
-            &eye.manager,
-            lock_packages,
-            &ip_allowlist,
-            &domain_allowlist,
-            &git_clone_allowlist,
-            &baseline_overrides,
-            baseline_count,
-            &min_baseline_age_hours_by_package,
-            &new_package_exemptions,
-            release_burst_threshold,
-            release_burst_window_hours,
-            minimum_release_age_package,
-        )
-        .await
+        if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages, &policy)
+            .await
+            .is_none()
         {
             std::process::exit(1);
         }
@@ -1073,23 +866,9 @@ pub async fn run(args: Vec<String>) {
                 (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
             })
             .collect();
-        if !scan_many_with_cache(
-            &mut scan_cache,
-            runner.as_ref(),
-            &eye.manager,
-            targets,
-            &ip_allowlist,
-            &domain_allowlist,
-            &git_clone_allowlist,
-            &baseline_overrides,
-            baseline_count,
-            &min_baseline_age_hours_by_package,
-            &new_package_exemptions,
-            release_burst_threshold,
-            release_burst_window_hours,
-            minimum_release_age_package,
-        )
-        .await
+        if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets, &policy)
+            .await
+            .is_none()
         {
             std::process::exit(1);
         }
@@ -1113,23 +892,9 @@ pub async fn run(args: Vec<String>) {
             lock_packages.len()
         );
 
-        if !scan_many_with_cache(
-            &mut scan_cache,
-            runner.as_ref(),
-            &eye.manager,
-            lock_packages,
-            &ip_allowlist,
-            &domain_allowlist,
-            &git_clone_allowlist,
-            &baseline_overrides,
-            baseline_count,
-            &min_baseline_age_hours_by_package,
-            &new_package_exemptions,
-            release_burst_threshold,
-            release_burst_window_hours,
-            minimum_release_age_package,
-        )
-        .await
+        if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages, &policy)
+            .await
+            .is_none()
         {
             std::process::exit(1);
         }
@@ -1162,29 +927,13 @@ pub async fn run(args: Vec<String>) {
                 (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
             })
             .collect();
-        if !scan_many_with_cache(
-            &mut scan_cache,
-            runner.as_ref(),
-            &eye.manager,
-            targets,
-            &ip_allowlist,
-            &domain_allowlist,
-            &git_clone_allowlist,
-            &baseline_overrides,
-            baseline_count,
-            &min_baseline_age_hours_by_package,
-            &new_package_exemptions,
-            release_burst_threshold,
-            release_burst_window_hours,
-            minimum_release_age_package,
-        )
-        .await
-        {
-            std::process::exit(1);
-        }
+        let pins = match scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets, &policy).await {
+            Some(pins) => pins,
+            None => std::process::exit(1),
+        };
 
         println!("\n✅ [gyrseek] Clear behavioral report for pip package set. Forwarding command safely...");
-        eye.forward_original_command();
+        eye.forward_pinned_command(&pins);
         return;
     }
 
@@ -1214,29 +963,13 @@ pub async fn run(args: Vec<String>) {
                 (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
             })
             .collect();
-        if !scan_many_with_cache(
-            &mut scan_cache,
-            runner.as_ref(),
-            &eye.manager,
-            targets,
-            &ip_allowlist,
-            &domain_allowlist,
-            &git_clone_allowlist,
-            &baseline_overrides,
-            baseline_count,
-            &min_baseline_age_hours_by_package,
-            &new_package_exemptions,
-            release_burst_threshold,
-            release_burst_window_hours,
-            minimum_release_age_package,
-        )
-        .await
-        {
-            std::process::exit(1);
-        }
+        let pins = match scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets, &policy).await {
+            Some(pins) => pins,
+            None => std::process::exit(1),
+        };
 
         println!("\n✅ [gyrseek] Clear behavioral report for npm package set. Forwarding command safely...");
-        eye.forward_original_command();
+        eye.forward_pinned_command(&pins);
         return;
     }
 
@@ -1256,28 +989,21 @@ pub async fn run(args: Vec<String>) {
     let pkg_name = package.unwrap();
     let tgt_version = target_v.unwrap_or_else(|| "latest".to_string());
 
-    if !scan_with_cache(
+    let report = scan_with_cache(
         &mut scan_cache,
         runner.as_ref(),
         &eye.manager,
         &pkg_name,
         &tgt_version,
-        &ip_allowlist,
-        &domain_allowlist,
-        &git_clone_allowlist,
-        &baseline_overrides,
-        baseline_count,
-        &min_baseline_age_hours_by_package,
-        &new_package_exemptions,
-        release_burst_threshold,
-        release_burst_window_hours,
-        minimum_release_age_package,
+        &policy,
     )
-    .await
-    {
+    .await;
+
+    if !report.allowed {
         std::process::exit(1);
     }
 
     println!("\n✅ [gyrseek] Clear behavioral report. Forwarding command safely...");
-    eye.forward_original_command();
+    let pins = HashMap::from([(pkg_name, report.resolved_version)]);
+    eye.forward_pinned_command(&pins);
 }
