@@ -84,7 +84,6 @@ pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, St
     let mut source_type: Option<String> = None;
     let mut source_url: Option<String> = None;
     let mut source_path: Option<String> = None;
-    let mut develop = false;
 
     let is_local_location = |value: &str| {
         value == "." || value.starts_with("./") || value.starts_with("../") || value.starts_with('/')
@@ -98,7 +97,6 @@ pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, St
         source_type: &mut Option<String>,
         source_url: &mut Option<String>,
         source_path: &mut Option<String>,
-        develop: &mut bool,
     | {
         let directory_local = source_type.as_deref() == Some("directory")
             && (source_url
@@ -110,7 +108,12 @@ pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, St
                     .map(is_local_location)
                     .unwrap_or(false));
 
-        if !*local_source && !(directory_local && *develop) {
+        // Exclude any local directory-source package regardless of the `develop`
+        // flag. `develop` only distinguishes editable from non-editable installs;
+        // both resolve to a local path at install time, so neither should be sent
+        // to the registry scanner (a public package of the same name would be
+        // scanned and approved while the local path is what actually installs).
+        if !*local_source && !directory_local {
             if let (Some(n), Some(v)) = (name.take(), version.take()) {
                 packages.push((n, v));
             }
@@ -123,7 +126,6 @@ pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, St
         *source_type = None;
         *source_url = None;
         *source_path = None;
-        *develop = false;
     };
 
     for raw_line in content.lines() {
@@ -138,7 +140,6 @@ pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, St
                 &mut source_type,
                 &mut source_url,
                 &mut source_path,
-                &mut develop,
             );
             in_package = true;
             in_package_source = false;
@@ -158,7 +159,6 @@ pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, St
                 &mut source_type,
                 &mut source_url,
                 &mut source_path,
-                &mut develop,
             );
             in_package = false;
             in_package_source = false;
@@ -184,10 +184,6 @@ pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, St
                         || line.contains("path = \"../"))))
         {
             local_source = true;
-        }
-
-        if line.starts_with("develop") && line.contains("true") {
-            develop = true;
         }
 
         if in_package_source {
@@ -233,7 +229,6 @@ pub fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, St
         &mut source_type,
         &mut source_url,
         &mut source_path,
-        &mut develop,
     );
 
     packages
@@ -287,6 +282,16 @@ pub fn parse_pylock_packages_from_content(content: &str) -> Vec<(String, Option<
     packages
 }
 
+/// Strips PEP 508 extras (`requests[security]` -> `requests`) from a package
+/// name. Extras are install-time options, not part of the canonical name the
+/// registry knows; they must be removed before any PyPI lookup or `pins` key,
+/// or the lookup 404s and the pin key never matches the rewrite-time lookup.
+/// The original spec (with extras) is preserved separately for the forwarded
+/// install command, where extras are valid and meaningful.
+pub fn strip_pep508_extras(name: &str) -> &str {
+    name.split('[').next().unwrap_or(name)
+}
+
 fn parse_requirements_spec(spec: &str) -> Option<(String, Option<String>)> {
     let trimmed = spec.trim();
     if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -297,14 +302,14 @@ fn parse_requirements_spec(spec: &str) -> Option<(String, Option<String>)> {
 
     if let Some((name, version)) = base.split_once("==")
         && !name.is_empty() && !version.is_empty() {
-            return Some((name.to_string(), Some(version.to_string())));
+            return Some((strip_pep508_extras(name).to_string(), Some(version.to_string())));
         }
 
     if base.starts_with('-') || base.starts_with('.') || base.contains("://") {
         return None;
     }
 
-    Some((base.to_string(), None))
+    Some((strip_pep508_extras(base).to_string(), None))
 }
 
 pub fn parse_requirements_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
@@ -572,8 +577,10 @@ pub fn rewrite_args_with_pinned_versions(
             continue;
         }
 
-        // A requirements spec like `name[extra]` keeps the extras when pinning.
-        let base_name = arg.split('[').next().unwrap_or(arg);
+        // A requirements spec like `name[extra]` keeps the extras when pinning,
+        // but `pins` is keyed by the canonical (extras-stripped) name, so look up
+        // with the stripped name and re-emit the full `arg` (extras intact).
+        let base_name = strip_pep508_extras(arg);
         if let Some(version) = pins.get(base_name) {
             out.push(format!("{}=={}", arg, version));
         } else {
@@ -632,11 +639,16 @@ pub fn parse_package_details(manager: &str, args: &[String]) -> (Option<String>,
                 if arg.contains("==") {
                     let parts: Vec<&str> = arg.split("==").collect();
                     if parts.len() == 2 {
-                        return (Some(parts[0].to_string()), Some(parts[1].to_string()));
+                        // Strip extras so the registry lookup / pins key use the
+                        // canonical name; the forwarded command keeps the spec.
+                        return (
+                            Some(strip_pep508_extras(parts[0]).to_string()),
+                            Some(parts[1].to_string()),
+                        );
                     }
                 }
 
-                return (Some(arg.to_string()), None);
+                return (Some(strip_pep508_extras(arg).to_string()), None);
             }
         }
     }
@@ -668,4 +680,96 @@ pub fn should_enforce_package_detection(manager: &str, args: &[String]) -> bool 
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- #6 PEP 508 extras must be stripped from the canonical name ---
+
+    #[test]
+    fn strip_pep508_extras_removes_bracket_suffix() {
+        assert_eq!(strip_pep508_extras("requests[security]"), "requests");
+        assert_eq!(strip_pep508_extras("flask[async,dotenv]"), "flask");
+        // No extras: returned unchanged.
+        assert_eq!(strip_pep508_extras("requests"), "requests");
+    }
+
+    #[test]
+    fn strips_pep508_extras_from_requirements_name() {
+        // The parsed name (used for the PyPI lookup and the pins key) must be the
+        // canonical `requests`, not the 404-ing `requests[security]`. Extras are
+        // install-time options preserved only for the forwarded command.
+        let requirements = "requests[security]==2.31.0\nflask[async,dotenv]\n";
+        let parsed = parse_requirements_packages_from_content(requirements);
+        assert_eq!(
+            parsed,
+            vec![
+                ("requests".to_string(), Some("2.31.0".to_string())),
+                ("flask".to_string(), None),
+            ]
+        );
+    }
+
+    // --- #7 extras-qualified spec pins via the canonical key, keeps extras ---
+
+    #[test]
+    fn pins_extras_spec_using_canonical_key_and_preserves_extras() {
+        // `pins` is keyed by the canonical name; the rewrite must strip extras to
+        // look it up, then re-emit the full spec (extras intact) with the pin.
+        let pins = HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+        let out = rewrite_args_with_pinned_versions(
+            "pip",
+            &["pip".into(), "install".into(), "requests[security]".into()],
+            &pins,
+        );
+        assert_eq!(out, vec!["pip", "install", "requests[security]==2.31.0"]);
+    }
+
+    // --- #5 local directory-source poetry packages are excluded regardless of develop ---
+
+    #[test]
+    fn skips_non_develop_local_package_from_poetry_lock() {
+        // A local directory source with NO `develop` key (defaults to
+        // non-editable) must still be excluded; previously only `develop = true`
+        // locals were filtered, so a same-named public package would be scanned
+        // while the local path is what actually installs.
+        let lock = r#"
+[[package]]
+name = "mylib"
+version = "0.1.0"
+
+[package.source]
+type = "directory"
+url = "../mylib"
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+"#;
+        let parsed = parse_poetry_lock_packages_from_content(lock);
+        assert_eq!(parsed, vec![("requests".to_string(), "2.31.0".to_string())]);
+    }
+
+    #[test]
+    fn skips_develop_local_package_from_poetry_lock() {
+        // The editable (`develop = true`) local case must remain excluded too.
+        let lock = r#"
+[[package]]
+name = "test"
+version = "0.1.0"
+develop = true
+
+[package.source]
+type = "directory"
+url = "."
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+"#;
+        let parsed = parse_poetry_lock_packages_from_content(lock);
+        assert_eq!(parsed, vec![("requests".to_string(), "2.31.0".to_string())]);
+    }
 }

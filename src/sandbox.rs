@@ -185,10 +185,23 @@ fn trace_install_docker_matrix_with_runtime(
     let mut results = Vec::new();
     for (idx, (package, version)) in probes.iter().enumerate() {
         let trace_path = out_dir.path().join(format!("gyrseek_trace_{}.log", idx));
-        let trace = std::fs::read_to_string(&trace_path).unwrap_or_else(|_| {
-            trace_install_docker_single_with_runtime(manager, package, version, runtime)
-                .unwrap_or_default()
-        });
+        // Prefer the matrix log; if it is missing/unreadable, retry the probe in
+        // isolation. Either way, a blank trace means strace produced no data and
+        // MUST NOT be treated as a clean zero-connection scan — fail closed.
+        let trace = match std::fs::read_to_string(&trace_path) {
+            Ok(contents) if !contents.trim().is_empty() => contents,
+            _ => trace_install_docker_single_with_runtime(manager, package, version, runtime)?,
+        };
+        if trace.trim().is_empty() {
+            let err_path = out_dir.path().join(format!("gyrseek_err_{}.log", idx));
+            let strace_err = std::fs::read_to_string(&err_path).unwrap_or_default();
+            return Err(format!(
+                "empty trace for '{}@{}': strace produced no output (ptrace likely unavailable in this environment). strace stderr: {}",
+                package,
+                version,
+                strace_err.trim()
+            ));
+        }
         results.push(((package.clone(), version.clone()), trace));
     }
 
@@ -213,6 +226,15 @@ fn trace_install_docker_single_with_runtime(
         .stdout(Stdio::null())
         .output()
         .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "single-probe docker sandbox failed for '{}@{}': {}",
+            package,
+            version,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
 
     Ok(String::from_utf8_lossy(&output.stderr).to_string())
 }
@@ -303,9 +325,16 @@ fn build_matrix_script(manager: &str, probes: &[(String, String)], prebuilt: boo
     for (idx, (package, version)) in probes.iter().enumerate() {
         let spec = package_spec(manager, package, version);
         let log = format!("/out/gyrseek_trace_{}.log", idx);
+        let err = format!("/out/gyrseek_err_{}.log", idx);
+        // Drop the install's own stdout, but capture strace's stderr to a per-probe
+        // file instead of discarding it with `>/dev/null 2>&1`. `|| true` keeps a
+        // single failing install (e.g. a yanked baseline) from aborting sibling
+        // probes; a genuine strace-attach failure leaves an empty trace log, which
+        // the reader treats as a hard error (fail closed) using the captured stderr.
         steps.push(format!(
-            "{} >/dev/null 2>&1 || true",
-            strace_install_command(manager, &spec, Some(&log))
+            "{} >/dev/null 2>{} || true",
+            strace_install_command(manager, &spec, Some(&log)),
+            err
         ));
     }
 
@@ -338,6 +367,14 @@ fn build_docker_run_args(
         "bridge".to_string(),
         "--security-opt".to_string(),
         "no-new-privileges".to_string(),
+        // strace runs as root but drops the traced install to the unprivileged
+        // `gyrseek` user (`strace -u`). Attaching to a process of a different UID
+        // requires CAP_SYS_PTRACE, which is NOT in Docker's default capability
+        // set — without it `PTRACE_SEIZE` fails with EPERM and no trace is ever
+        // produced. The capability is scoped to this container's PID namespace,
+        // so it cannot trace host processes.
+        "--cap-add".to_string(),
+        "SYS_PTRACE".to_string(),
         "--pids-limit".to_string(),
         "256".to_string(),
         "--memory".to_string(),
@@ -529,5 +566,44 @@ mod tests {
         let args = build_docker_run_args("img:latest", "/tmp/out", Some("kata-runtime"), "echo hi");
         let pos = args.iter().position(|a| a == "--runtime").expect("runtime flag present");
         assert_eq!(args.get(pos + 1).map(String::as_str), Some("kata-runtime"));
+    }
+
+    #[test]
+    fn docker_args_grant_sys_ptrace_capability() {
+        // strace -u drops the install to an unprivileged user; attaching across
+        // UIDs needs CAP_SYS_PTRACE, which Docker does not grant by default.
+        // Without this the sandbox can never produce a trace.
+        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi");
+        let pos = args
+            .iter()
+            .position(|a| a == "--cap-add")
+            .expect("--cap-add flag present");
+        assert_eq!(args.get(pos + 1).map(String::as_str), Some("SYS_PTRACE"));
+    }
+
+    // --- #4 strace stderr must be captured, not discarded ---
+
+    #[test]
+    fn matrix_script_captures_strace_stderr_not_devnull() {
+        let script = build_matrix_script(
+            "npm",
+            &[("left-pad".to_string(), "1.3.0".to_string())],
+            true,
+        );
+        // strace's stderr must land in a per-probe error log so an attach
+        // failure is diagnosable, never silently routed to /dev/null.
+        assert!(
+            script.contains("2>/out/gyrseek_err_0.log"),
+            "strace stderr must be captured to a log: {script}"
+        );
+        // The strace install step specifically must not merge its stderr away.
+        let strace_step = script
+            .split("; ")
+            .find(|s| s.contains("strace -f"))
+            .expect("script should contain a strace step");
+        assert!(
+            !strace_step.contains("2>&1"),
+            "strace stderr must not be merged into /dev/null: {strace_step}"
+        );
     }
 }

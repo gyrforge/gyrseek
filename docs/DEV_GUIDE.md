@@ -47,8 +47,9 @@
 - Unparseable version strings deliberately sort below any parseable version so malformed entries are never chosen as `latest`.
 
 ## Test Locations
-- Integration tests live under tests/ (preferred for new behavior).
-- Pure-function unit tests also live inline in src/scanning.rs and src/sandbox.rs (version ordering, trace extraction, strace/docker arg construction); keep these alongside the code they cover.
+- Follow Rust convention: unit tests for private/internal functions live inline in the module's `#[cfg(test)] mod tests` (they can see private items); integration tests that exercise the public API or need a real subprocess live under tests/.
+- Pure-function unit tests live inline in src/scanning.rs, src/sandbox.rs, and src/parsing.rs (version ordering, trace extraction, FCrDNS decision, bracketed-argv parsing, strace/docker arg construction, SYS_PTRACE capability, PEP 508 extras stripping, poetry local-source exclusion); keep these alongside the code they cover.
+- Anything that can only be observed from outside the process belongs in tests/ — e.g. host exit-status propagation (`std::process::exit`) is covered in tests/forward_fail_closed_tests.rs because exit codes are only visible to a spawning parent.
 
 ## Required Change Hygiene
 After every repository change:

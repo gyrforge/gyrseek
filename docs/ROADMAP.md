@@ -13,9 +13,17 @@
 - Folded policy knobs into a single PolicyConfig struct and scan results into ScanReport.
 - Added unit/integration coverage for all of the above (version ordering, IPv4/IPv6 extraction, burst filtering, version pinning, strace hardening, fail-closed forwarding).
 - Added watched-process execution detection (default bun/deno) diffed across versions to catch the Shai-Hulud "download a runtime and run a hidden payload" class, with `watched_executables`/`process_exec_allowlist` config and coverage in tests/bun_exec_scan_tests.rs.
+- Resolved the 8 findings in docs/FINDINGS.md (re-verified accurate, then fixed):
+  - Empty/whitespace sandbox traces now fail closed (no more silent clean-pass on strace failure); strace stderr is captured per-probe instead of discarded.
+  - Granted `--cap-add SYS_PTRACE` so cross-UID tracing actually works under Docker (surfaced once empty traces stopped passing silently).
+  - `domain_allowlist` now uses forward-confirmed reverse DNS (FCrDNS), closing the spoofed-PTR bypass.
+  - Balanced-bracket-aware execve argv regex so `]`-containing arguments (PEP 508 extras, bracketed paths) are no longer truncated.
+  - Poetry parser excludes all local directory-source packages regardless of `develop`.
+  - PEP 508 extras stripped from the canonical name for registry lookups and the pin key, while the forwarded command keeps the full spec (fixes both the PyPI 404/zero-baseline path and the broken version pinning).
+  - Forwarded host command exit status is propagated instead of discarded.
 
 ## Near Term
-- Add richer requirements parsing (environment markers, extras, line continuations).
+- Add richer requirements parsing (environment markers, line continuations). (PEP 508 extras handling is now done.)
 - Add end-to-end command-path tests covering pinned forwarding and lockfile-flow verbatim forwarding (e.g. uv sync) with a stub manager.
 
 ## Mid Term

@@ -4,7 +4,7 @@ use std::net::IpAddr;
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Duration, Utc};
-use dns_lookup::lookup_addr;
+use dns_lookup::{lookup_addr, lookup_host};
 use regex::Regex;
 use serde::Deserialize;
 
@@ -210,9 +210,33 @@ where
     (remaining, allowlisted)
 }
 
+/// Forward-confirmed reverse DNS (FCrDNS) for `ip`.
+///
+/// A raw PTR record is controlled by whoever owns the IP address, so an attacker
+/// can point their C2 server's reverse DNS at any allowlisted domain. To prevent
+/// that bypass we resolve the PTR hostname *forward* and only return it if one of
+/// its A/AAAA records maps back to the original IP. A hostname that does not
+/// forward-confirm is discarded (treated as if there were no reverse record).
 fn reverse_dns_domain(ip: &str) -> Option<String> {
     let addr: IpAddr = ip.parse().ok()?;
-    lookup_addr(&addr).ok()
+    forward_confirmed_hostname(addr, |a| lookup_addr(&a).ok(), |h| lookup_host(h).ok())
+}
+
+/// Pure FCrDNS decision, with DNS lookups injected so it is deterministically
+/// testable. Returns the PTR hostname only if its forward resolution includes
+/// the original address; otherwise `None`.
+fn forward_confirmed_hostname<R, F>(addr: IpAddr, reverse: R, forward: F) -> Option<String>
+where
+    R: Fn(IpAddr) -> Option<String>,
+    F: Fn(&str) -> Option<Vec<IpAddr>>,
+{
+    let hostname = reverse(addr)?;
+    let resolved = forward(&hostname)?;
+    if resolved.contains(&addr) {
+        Some(hostname)
+    } else {
+        None
+    }
 }
 
 pub fn enrich_new_connection_domains_with<F>(
@@ -423,8 +447,15 @@ fn parse_execve_argvs(trace: &str) -> Vec<Vec<String>> {
     static EXECVE_RE: OnceLock<Regex> = OnceLock::new();
     static QUOTED_ARG_RE: OnceLock<Regex> = OnceLock::new();
 
-    let execve_re =
-        EXECVE_RE.get_or_init(|| Regex::new(r#"execve\([^,]+,\s*\[(?P<argv>[^\]]*)\]"#).unwrap());
+    // The argv group must tolerate `]` *inside* arguments (e.g. PEP 508 extras
+    // like `requests[security]` or a path such as `script[obf].js`). A plain
+    // `[^\]]*` stops at the first inner `]` and truncates the argument, which
+    // both corrupts extracted signatures and lets a truncated baseline/current
+    // pair match and bypass detection. `[^\[\]]*(?:\[[^\]]*\][^\[\]]*)*` consumes
+    // any number of balanced `[...]` spans before the array's real closing `]`.
+    let execve_re = EXECVE_RE.get_or_init(|| {
+        Regex::new(r#"execve\([^,]+,\s*\[(?P<argv>[^\[\]]*(?:\[[^\]]*\][^\[\]]*)*)\]"#).unwrap()
+    });
     let quoted_arg_re =
         QUOTED_ARG_RE.get_or_init(|| Regex::new(r#"\"((?:\\.|[^\"])*)\""#).unwrap());
 
@@ -1088,12 +1119,14 @@ mod tests {
         burst_policy_warning, burst_triggered, compare_version_strings, count_releases_in_window,
         default_watched_executables, exemption_behavior, extract_connection_ips,
         extract_process_exec_signatures, filter_allowlisted_process_exec_signatures,
-        find_new_process_exec_signatures, minimum_release_age_policy_warning, npm_published_times,
-        select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
+        find_new_process_exec_signatures, forward_confirmed_hostname,
+        minimum_release_age_policy_warning, npm_published_times, select_age_eligible_baselines,
+        select_effective_baselines, sort_versions_ascending,
     };
     use chrono::Duration;
     use std::cmp::Ordering;
     use std::collections::HashSet;
+    use std::net::IpAddr;
 
     // --- #1 semantic version ordering ---
 
@@ -1262,6 +1295,51 @@ sin6_addr=inet_pton(AF_INET6, "fe80::1")
         let trace = r#"execve("/tmp/b/bun", ["/tmp/b/bun", "run", "_index.js"], 0x7ff) = 0"#;
         let sigs = extract_process_exec_signatures(trace, &watched());
         assert!(sigs.contains("bun|run|_index.js"), "got: {sigs:?}");
+    }
+
+    // --- #2 domain allowlist must require forward-confirmed reverse DNS ---
+
+    #[test]
+    fn fcrdns_accepts_hostname_that_forward_resolves_back_to_ip() {
+        let addr: IpAddr = "1.2.3.4".parse().unwrap();
+        let got = forward_confirmed_hostname(
+            addr,
+            |_| Some("cdn.example.com".to_string()),
+            // Forward lookup returns the original IP -> confirmed.
+            |_| Some(vec!["1.2.3.4".parse().unwrap()]),
+        );
+        assert_eq!(got, Some("cdn.example.com".to_string()));
+    }
+
+    #[test]
+    fn fcrdns_rejects_spoofed_ptr_that_does_not_forward_confirm() {
+        let addr: IpAddr = "1.2.3.4".parse().unwrap();
+        let got = forward_confirmed_hostname(
+            addr,
+            // Attacker sets their C2 IP's PTR to an allowlisted domain...
+            |_| Some("cdn.example.com".to_string()),
+            // ...but the domain's real A record points elsewhere -> rejected.
+            |_| Some(vec!["9.9.9.9".parse().unwrap()]),
+        );
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn fcrdns_rejects_when_no_ptr_record() {
+        let addr: IpAddr = "1.2.3.4".parse().unwrap();
+        let got = forward_confirmed_hostname(addr, |_| None, |_| Some(vec![]));
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn extract_process_exec_preserves_brackets_in_argv() {
+        // Regression for the argv-truncation bug (#3): a `]` inside an argument
+        // must not terminate the argv capture early. `script[obf].js` has to
+        // survive intact, otherwise current/baseline both truncate identically
+        // and a payload bypasses detection.
+        let trace = r#"execve("/tmp/b/bun", ["bun", "run", "script[obf].js"], 0x7ff) = 0"#;
+        let sigs = extract_process_exec_signatures(trace, &watched());
+        assert!(sigs.contains("bun|run|script[obf].js"), "got: {sigs:?}");
     }
 
     #[test]

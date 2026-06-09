@@ -533,7 +533,21 @@ impl GyrSeek {
 
         match Command::new(&self.manager).args(&args[1..]).spawn() {
             Ok(mut child) => {
-                let _ = child.wait();
+                // Propagate the host manager's exit status. Discarding it makes a
+                // failed install (e.g. version-not-found) look successful to the
+                // caller — misleading agents and breaking any CI step that checks
+                // `$?` after a gyrseek-wrapped command.
+                match child.wait() {
+                    Ok(status) if status.success() => {}
+                    Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+                    Err(e) => {
+                        println!(
+                            "❌ [gyrseek] Failed to wait on host command '{}': {}",
+                            self.manager, e
+                        );
+                        std::process::exit(1);
+                    }
+                }
             }
             Err(e) => {
                 // Fail closed: if we can't even launch the host command, don't
