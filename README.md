@@ -1,332 +1,92 @@
 # gyrseek
 
-`gyrseek` is a Rust CLI wrapper that intercepts package install/update commands, compares network behavior across package versions, and then forwards the original command if no anomaly is detected.
+`gyrseek` is a Rust CLI wrapper that sits in front of your package manager. Before it lets an install or update run, it installs the target version (and a couple of older "baseline" versions) inside a sandbox, traces their behavior with `strace`, and **blocks the command if the new version does something the older ones never did** — like contacting a new network endpoint or running a hidden `git clone`.
 
-It currently supports:
-- `uv add`
-- `uv pip install`
-- `uv pip sync <SRC_FILE>...`
-- `uv sync`
-- `uv lock --upgrade` / `uv lock -P|--upgrade-package`
-- `pip install`
-- `pip3 install`
-- `poetry add|update|install`
-- `npm install` / `npm i`
-- `npm update`
-- git clone behavior simulation tests (runtime interception not yet enabled)
-
-## How It Works
-
-1. Parse package name and optional version from your command.
-2. If no version is provided, treat it as `latest`.
-3. Fetch version history:
-   - PyPI for Python packages
-   - npm registry for npm packages
-4. Run sandbox installs for:
-   - current version
-   - previous version (`baseline-1`)
-   - two versions back (`baseline-2`)
-   - probes may run in one sandbox session across multiple packages and versions, while preserving package-version trace attribution
-   - for bulk commands (`uv sync`, `uv pip sync`), apply this per detected package
-5. Compare observed behavior signals:
-   - Package install/update path: compare observed network endpoints across versions.
-   - Git clone path: compare clone endpoint behavior in simulation tests (runtime interception is not enabled yet).
-   - New endpoints/behaviors found: block and exit with error.
-   - No new endpoints/behaviors: forward your original command.
-6. Fail-closed behavior:
-   - if package detection is expected but no package entries are detected, block and exit
-
-## Network Behavior Detection
-
-`gyrseek` uses syscall tracing (`strace`) during sandbox installs to observe outbound network connection behavior.
-
-- It captures connection target IPs (both IPv4 and IPv6, normalized to canonical form) from trace output.
-- It computes the difference between:
-   - current version endpoints
-   - baseline endpoints from previous versions
-- Any endpoint that appears only in the current version is treated as a behavioral anomaly.
-- Install-time `git clone` command signatures (for example clone target and recursive clone usage) are also compared between current and baseline versions.
-- New IPs are always treated as anomalies (fail-closed), even if reverse DNS suggests domain overlap.
-- Reverse DNS domain context is included in warning output as informational enrichment to help triage IP-rotation cases.
-
-This gives you a behavioral signal rather than relying only on package metadata.
-
-Example warning output when abnormal network behavior is detected:
-
-```text
-❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
-Package 'left-pad', version '1.3.0' contacted new endpoints not seen in baseline versions (1.2.0, 1.1.3): ["203.0.113.42"]
-ℹ️ [gyrseek] Reverse DNS context for new IPs (informational only): ["203.0.113.42 -> suspicious-c2.example"]
-Aborting host operation securely.
-```
-
-Example warning output when a new hidden install-time git clone behavior is detected:
-
-```text
-❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
-Package 'left-pad', version '1.3.0' introduced new git clone behavior not seen in baseline versions (1.2.0, 1.1.3): ["https://github.com/unknown/repo.git|non-recursive"]
-Aborting host operation securely.
-```
-
-## Policy Config (Allowlist + Release Gates)
-
-You can define allowlisted IPs and domains that should be ignored before anomaly blocking.
-
-Default config file path:
-
-```text
-gyrseek.yaml
-```
-
-Config format:
-
-```yaml
-ip_allowlist:
-   - 151.101.0.223
-   - 151.101.64.223
-domain_allowlist:
-   - pypi.org
-   - files.pythonhosted.org
-git_clone_allowlist:
-   - https://github.com/acme/approved-build-scripts.git
-baseline_overrides:
-   requests:
-      baseline-1: "2.30.0"
-      baseline-2: "2.29.0"
-   lodash:
-      baseline-1: "4.17.20"
-baseline_count: 2
-min_baseline_age_hours:
-   requests: 6
-   lodash: 12
-new_package_exemptions:
-   - newly-published-package
-minimum_release_age_package: 3
-release_burst_threshold: 3
-release_burst_window_hours: 24
-```
-
-Override config path:
+Think of it as a behavioral diff between "the version you're about to install" and "versions that were already trusted."
 
 ```bash
-cargo run -- --config ./security-policy.yaml npm install
+# Instead of:        npm install lodash
+# You run:           cargo run -- npm install lodash
 ```
 
-You can also set an environment variable:
+If nothing suspicious is found, your original command is forwarded and runs normally. If something new shows up, `gyrseek` aborts and tells you why.
 
-```bash
-GYRSEEK_CONFIG=./security-policy.yaml cargo run -- npm install
-```
+## Table of Contents
 
-Behavior:
+- [Quick Start](#quick-start)
+- [Supported Commands](#supported-commands)
+- [How It Works](#how-it-works)
+- [Usage](#usage)
+- [Network Behavior Detection](#network-behavior-detection)
+- [Git Clone Behavior](#git-clone-behavior)
+- [Configuration](#configuration)
+- [Sandbox Modes](#sandbox-modes)
+- [Prebuilt Scanner Images](#prebuilt-scanner-images)
+- [Behavior Reference](#behavior-reference)
+- [Docker Hardening Limitations](#docker-hardening-limitations)
+- [Testing](#testing)
+- [Project Layout & Docs](#project-layout--docs)
+- [License](#license)
 
-- If `gyrseek.yaml` is missing, `gyrseek` runs with an empty allowlist.
-- If a custom config path is provided and cannot be read, `gyrseek` fails closed.
-- Invalid `ip_allowlist` entries are ignored with a warning.
-- `ip_allowlist` entries are canonicalized (for example, equivalent IPv6 forms normalize to the same value).
-- `domain_allowlist` entries are normalized to lowercase and trailing `.` is removed.
-- Subdomains match allowlisted parent domains (for example, `cdn.example.com` matches `example.com`).
-- `git_clone_allowlist` lets you allow specific git clone targets when new install-time git clone behavior appears.
-- `git_clone_allowlist` entries are compared against the detected clone target URL (case-insensitive exact match).
-- `baseline_overrides` is optional and lets you pin baseline versions per package.
-- Each package can set either or both `baseline-1` and `baseline-2`; missing keys continue using registry-derived baselines.
-- `baseline_count` controls how many historical baselines are compared; default is `2`.
-- Baselines are age-gated: by default, a version must be at least `2` hours old before it is used for comparison.
-- `min_baseline_age_hours` lets you override that age gate per package (package not listed uses the default `2` hours).
-- `new_package_exemptions` lets you exempt specific new packages when fewer than 2 eligible baseline versions exist.
-- If an exempted package later has 2 or more eligible baseline versions, `gyrseek` warns so you can remove the exemption.
-- `minimum_release_age_package` enables an optional minimum release age policy in days.
-- Default behavior does nothing unless `minimum_release_age_package` is set.
-- When enabled, this check runs before burst and anomaly checks; if the current release age is less than the configured days, `gyrseek` fails closed for that package.
-- `release_burst_threshold` enables an optional burst checker for package version churn.
-- `release_burst_window_hours` sets the burst lookback window in hours; default is `24`.
-- Default behavior does nothing (burst checker disabled) unless `release_burst_threshold` is set.
-- When enabled, `gyrseek` counts how many versions of the same package were published within the configured window.
-- If that version publish count is at least `release_burst_threshold`, `gyrseek` fails closed for that package.
+## Quick Start
 
-## Git Clone Behavior
-
-The repository includes safe simulation tests for git clone-style network anomaly detection in:
-
-- `tests/git_clone_behavior_tests.rs`
-
-Current scope:
-
-- Install-time git clone command behavior (for example hidden clone calls inside package scripts) is compared across package versions during scanning.
-- You can also test clone detection logic for standalone clone scenarios through integration tests.
-- Runtime command interception for direct `git clone ...` shell commands is not enabled yet in the CLI command parser.
-
-Example warning output for abnormal git clone behavior (simulation/test context):
-
-```text
-❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
-git clone simulation contacted new endpoints not seen in baseline clone behavior: ["185.199.108.133"]
-Aborting host operation securely.
-```
-
-## Prerequisites
+### 1. Prerequisites
 
 - Rust toolchain (`cargo`, `rustc`)
-- Network access to package registries
-- Package managers you want to wrap (`uv`, `pip`, `poetry`, `npm`)
-- Docker CLI available on your system PATH (default sandbox mode)
-- `strace` available in host mode (`GYRSEEK_SANDBOX=host`)
+- Network access to package registries (PyPI, npm)
+- The package managers you want to wrap (`uv`, `pip`, `poetry`, `npm`)
+- **Docker CLI** on your `PATH` (the default, safer sandbox mode)
+- `strace` on your `PATH` only if you use the reduced-safety `host` mode
 
-## Sandbox Modes
-
-`gyrseek` now runs scan probes through a `SandboxRunner` backend selected by environment variable:
-
-- Default: `GYRSEEK_SANDBOX=docker`
-- MicroVM runtime mode: `GYRSEEK_SANDBOX=microvm`
-- Alternative (reduced safety): `GYRSEEK_SANDBOX=host`
-
-Behavior:
-
-- If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
-- Docker mode is intended as the safer default.
-- Host mode exists for local development or environments without Docker.
-- ⚠️ Host mode is fast, but it does not provide meaningful isolation: if the latest package is malicious, you are effectively running that potentially infected package directly on your laptop and only getting a warning signal from `gyrseek`.
-- MicroVM mode is implemented through Docker runtime selection and requires a MicroVM-capable Docker runtime.
-
-MicroVM configuration:
-
-- `GYRSEEK_MICROVM_RUNTIME` selects the Docker runtime used for MicroVM mode.
-- Default runtime: `kata-runtime`.
-- If the configured runtime is not available in `docker info`, startup fails closed with an explicit message.
-- To inspect available runtimes quickly, run: `cargo run -- sandbox runtimes`
-- MicroVM mode requires a Linux environment where the selected runtime is installed and exposed through Docker runtimes.
-- On macOS Docker Desktop, MicroVM runtimes like Kata are typically not available directly; use a Linux VM or Linux host.
-
-Scanner image configuration (Docker and MicroVM modes):
-
-- `GYRSEEK_NPM_SCANNER_IMAGE` overrides the npm scanner image (default: `node:22-bookworm-slim`).
-- `GYRSEEK_PY_SCANNER_IMAGE` overrides the Python scanner image (default: `python:3.12-bookworm`).
-- `GYRSEEK_PREBUILT_SCANNER_IMAGES=true` enables prebuilt fast path for both managers.
-- `GYRSEEK_NPM_SCANNER_PREBUILT=true` and `GYRSEEK_PY_SCANNER_PREBUILT=true` can override prebuilt mode per manager.
-- In prebuilt mode, runtime setup (`apt-get` and Python `uv` bootstrapping) is skipped to reduce hot-path latency.
-
-### Prebuild Scanner Images (Recommended)
-
-If you want faster probe startup and fewer runtime setup failures, prebuild scanner images with required tools already installed.
-
-#### 1) Build an npm scanner image
-
-Create a Dockerfile, for example `Dockerfile.npm-scanner`:
-
-```dockerfile
-FROM node:22-bookworm-slim
-RUN apt-get update \
-   && apt-get install -y --no-install-recommends strace ca-certificates \
-   && rm -rf /var/lib/apt/lists/*
-```
-
-Build it:
-
-```bash
-docker build -f Dockerfile.npm-scanner -t gyrseek/npm-scanner:latest .
-```
-
-Use it:
-
-```bash
-GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
-GYRSEEK_NPM_SCANNER_PREBUILT=true \
-cargo run -- npm update
-```
-
-#### 2) Build a Python scanner image
-
-Create a Dockerfile, for example `Dockerfile.py-scanner`:
-
-```dockerfile
-FROM python:3.12-bookworm
-RUN apt-get update \
-   && apt-get install -y --no-install-recommends strace ca-certificates \
-   && rm -rf /var/lib/apt/lists/*
-RUN python -m pip install --no-cache-dir uv
-```
-
-Build it:
-
-```bash
-docker build -f Dockerfile.py-scanner -t gyrseek/py-scanner:latest .
-```
-
-Use it:
-
-```bash
-GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
-GYRSEEK_PY_SCANNER_PREBUILT=true \
-cargo run -- uv sync
-```
-
-#### 3) Enable prebuilt mode globally (optional)
-
-If both scanner images are prebuilt, you can enable one global toggle:
-
-```bash
-GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
-GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
-GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
-cargo run -- npm update
-```
-
-#### 4) Verify images are usable
-
-Quick checks:
-
-```bash
-docker run --rm gyrseek/npm-scanner:latest sh -lc 'strace -V'
-docker run --rm gyrseek/py-scanner:latest sh -lc 'strace -V && uv --version'
-```
-
-If these checks pass, `GYRSEEK_*_SCANNER_PREBUILT=true` should work without runtime tool installation.
-
-#### 5) Use pinned image digests (recommended for reproducibility)
-
-To avoid tag drift, pin scanner images by digest.
-
-Example (replace digest values with real ones from your registry):
-
-```bash
-GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
-GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
-GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
-cargo run -- npm update
-```
-
-Tip:
-
-- Build and push your scanner images once in CI.
-- Resolve and publish immutable digests.
-- Reference only digest-pinned images in production or shared CI environments.
-
-Examples:
-
-```bash
-GYRSEEK_SANDBOX=docker cargo run -- npm install
-GYRSEEK_SANDBOX=host cargo run -- pip3 install -r requirements.txt
-```
-
-### Platform Support Matrix
-
-| Mode | macOS (Docker Desktop) | Linux host/VM |
-| --- | --- | --- |
-| `docker` | Supported | Supported |
-| `host` | Supported (requires local `strace`) | Supported (requires local `strace`) |
-| `microvm` | Usually unavailable (Kata/runtime typically not exposed) | Supported when a MicroVM-capable Docker runtime is installed |
-
-## Build
+### 2. Build
 
 ```bash
 cargo build --release
+# binary is produced at: target/release/gyrseek
 ```
 
-Binary path:
+### 3. Run your first scan
 
 ```bash
-target/release/gyrseek
+# Scan + (if clean) install lodash via npm:
+cargo run -- npm install lodash
+
+# Or with the release binary:
+./target/release/gyrseek npm install lodash
 ```
+
+That's it. `gyrseek` resolves the version, runs the sandbox behavioral diff, and either forwards your command or blocks it with an explanation.
+
+## Supported Commands
+
+| Ecosystem | Commands |
+| --- | --- |
+| **uv** | `uv add`, `uv pip install`, `uv pip sync <SRC_FILE>...`, `uv sync`, `uv lock --upgrade`, `uv lock -P\|--upgrade-package` |
+| **pip** | `pip install`, `pip3 install` (including `-r/--requirements` files) |
+| **poetry** | `poetry add`, `poetry update`, `poetry install` |
+| **npm** | `npm install`, `npm i`, `npm update` |
+
+> Standalone `git clone` runtime interception is not enabled yet — only install-time clone behavior *inside* package scans is enforced today (see [Git Clone Behavior](#git-clone-behavior)).
+
+## How It Works
+
+1. **Parse** the package name and optional version from your command. If no version is given, it's treated as `latest`.
+2. **Fetch version history** from PyPI (Python) or the npm registry (npm) and order it semantically (semver for npm, PEP 440 for Python).
+3. **Run sandbox installs** for:
+   - the current/target version
+   - the previous version (`baseline-1`)
+   - two versions back (`baseline-2`)
+
+   Multiple packages and versions may run in one sandbox session while keeping per-package, per-version trace attribution. Bulk commands (`uv sync`, `uv pip sync`, etc.) apply this to every detected package.
+4. **Compare behavior signals** between the target and its baselines:
+   - **Network**: endpoints contacted during install.
+   - **Git clone**: install-time `git clone` command signatures.
+5. **Decide**:
+   - New endpoint or clone behavior found → **block and exit non-zero**.
+   - Nothing new → **forward your original command**.
+6. **Fail closed**: if a package target was expected but couldn't be detected, `gyrseek` blocks rather than letting the command through.
+
+This gives you a *behavioral* signal, rather than relying only on package metadata.
 
 ## Usage
 
@@ -334,11 +94,7 @@ General pattern:
 
 ```bash
 cargo run -- <manager> <subcommand> <package>
-```
-
-or with release binary:
-
-```bash
+# or, with the release binary:
 ./target/release/gyrseek <manager> <subcommand> <package>
 ```
 
@@ -370,112 +126,327 @@ cargo run -- npm update
 cargo run -- npm update lodash typescript
 ```
 
-## Important Notes
+> For project-aware tools like `poetry` or `npm`, run inside a directory containing the expected project files (`pyproject.toml`, `package.json`, etc.).
+
+## Network Behavior Detection
+
+`gyrseek` uses syscall tracing (`strace`) during sandbox installs to observe outbound network connections.
+
+- It captures connection target IPs — **both IPv4 and IPv6**, normalized to canonical form — from the trace output.
+- It computes the difference between **current version endpoints** and **baseline endpoints** from previous versions.
+- Any endpoint that appears *only* in the current version is treated as a behavioral anomaly.
+- Install-time `git clone` command signatures (e.g. clone target and recursive-clone usage) are also diffed across versions.
+- New IPs are **always** treated as anomalies (fail-closed), even if reverse DNS suggests domain overlap.
+- Reverse DNS context is included in warnings as informational enrichment to help triage IP-rotation cases.
+
+Example — abnormal network behavior detected:
+
+```text
+❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
+Package 'left-pad', version '1.3.0' contacted new endpoints not seen in baseline versions (1.2.0, 1.1.3): ["203.0.113.42"]
+ℹ️ [gyrseek] Reverse DNS context for new IPs (informational only): ["203.0.113.42 -> suspicious-c2.example"]
+Aborting host operation securely.
+```
+
+Example — a new hidden install-time `git clone` detected:
+
+```text
+❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
+Package 'left-pad', version '1.3.0' introduced new git clone behavior not seen in baseline versions (1.2.0, 1.1.3): ["https://github.com/unknown/repo.git|non-recursive"]
+Aborting host operation securely.
+```
+
+## Git Clone Behavior
+
+- **Install-time clones** (e.g. hidden `git clone` calls inside package scripts) are compared across package versions during scanning, and new behavior is fail-closed unless allowlisted.
+- Clone-detection logic can also be exercised for standalone scenarios via integration tests (`tests/git_clone_behavior_tests.rs`).
+- **Runtime interception of direct `git clone ...` shell commands is not enabled yet** in the CLI parser.
+
+Example warning (simulation/test context):
+
+```text
+❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
+git clone simulation contacted new endpoints not seen in baseline clone behavior: ["185.199.108.133"]
+Aborting host operation securely.
+```
+
+## Configuration
+
+`gyrseek` reads a YAML policy file to allowlist known-good endpoints and tune its release gates.
+
+**Config path:** defaults to `gyrseek.yaml` in the working directory. Override it with `--config` or the `GYRSEEK_CONFIG` environment variable:
+
+```bash
+cargo run -- --config ./security-policy.yaml npm install
+GYRSEEK_CONFIG=./security-policy.yaml cargo run -- npm install
+```
+
+### Config keys
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `ip_allowlist` | empty | IPs to ignore before anomaly blocking. Canonicalized (equivalent IPv6 forms match); invalid entries are skipped with a warning. |
+| `domain_allowlist` | empty | Domains to ignore. Lowercased, trailing `.` stripped. Subdomains match parents (`cdn.example.com` matches `example.com`). |
+| `git_clone_allowlist` | empty | Git clone targets to allow when new install-time clone behavior appears (case-insensitive exact URL match). |
+| `baseline_overrides` | none | Pin baseline versions per package via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines. |
+| `baseline_count` | `2` | How many historical baselines to compare against. |
+| `min_baseline_age_hours` | `2` | Per-package minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default. |
+| `new_package_exemptions` | none | Exempt specific new packages when fewer than 2 eligible baselines exist. `gyrseek` warns once 2+ baselines exist so you can remove the exemption. |
+| `minimum_release_age_package` | off | Minimum release age in **days**. When set, runs before burst/anomaly checks and fails closed if the current release is younger. |
+| `release_burst_threshold` | off | Fails closed if a package published at least this many versions within the burst window. |
+| `release_burst_window_hours` | `24` | Lookback window (hours) for the burst checker. |
+
+### Example config
+
+```yaml
+ip_allowlist:
+   - 151.101.0.223
+   - 151.101.64.223
+domain_allowlist:
+   - pypi.org
+   - files.pythonhosted.org
+git_clone_allowlist:
+   - https://github.com/acme/approved-build-scripts.git
+baseline_overrides:
+   requests:
+      baseline-1: "2.30.0"
+      baseline-2: "2.29.0"
+   lodash:
+      baseline-1: "4.17.20"
+baseline_count: 2
+min_baseline_age_hours:
+   requests: 6
+   lodash: 12
+new_package_exemptions:
+   - newly-published-package
+minimum_release_age_package: 3
+release_burst_threshold: 3
+release_burst_window_hours: 24
+```
+
+### Config loading behavior
+
+- If `gyrseek.yaml` is **missing**, `gyrseek` runs with an empty allowlist.
+- If a **custom** config path is provided and can't be read, `gyrseek` **fails closed**.
+
+## Sandbox Modes
+
+`gyrseek` runs scan probes through a `SandboxRunner` backend selected by environment variable:
+
+| Mode | `GYRSEEK_SANDBOX` | Notes |
+| --- | --- | --- |
+| **Docker** (default) | `docker` | Safer default. Requires Docker CLI. |
+| **MicroVM** | `microvm` | Strongest isolation; needs a MicroVM-capable Docker runtime (Linux). |
+| **Host** | `host` | Fastest, **reduced safety** — see warning below. |
+
+```bash
+GYRSEEK_SANDBOX=docker cargo run -- npm install
+GYRSEEK_SANDBOX=host  cargo run -- pip3 install -r requirements.txt
+```
+
+- If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
+- ⚠️ **Host mode does not provide meaningful isolation.** If the package is malicious, you are effectively running it directly on your machine and only getting a warning from `gyrseek`. Use it only for local development or environments without Docker.
+
+### MicroVM configuration
+
+- `GYRSEEK_MICROVM_RUNTIME` selects the Docker runtime (default: `kata-runtime`).
+- If the runtime isn't present in `docker info`, startup fails closed with an explicit message.
+- List available runtimes: `cargo run -- sandbox runtimes`
+- Requires a Linux environment with the runtime installed and exposed through Docker. On macOS Docker Desktop, Kata-style runtimes are typically unavailable — use a Linux VM or host.
+
+### Platform support matrix
+
+| Mode | macOS (Docker Desktop) | Linux host/VM |
+| --- | --- | --- |
+| `docker` | Supported | Supported |
+| `host` | Supported (requires local `strace`) | Supported (requires local `strace`) |
+| `microvm` | Usually unavailable (Kata/runtime typically not exposed) | Supported when a MicroVM-capable Docker runtime is installed |
+
+### Scanner image configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GYRSEEK_NPM_SCANNER_IMAGE` | `node:22-bookworm-slim` | npm scanner image. |
+| `GYRSEEK_PY_SCANNER_IMAGE` | `python:3.12-bookworm` | Python scanner image. |
+| `GYRSEEK_PREBUILT_SCANNER_IMAGES` | `false` | Enable prebuilt fast path for both managers. |
+| `GYRSEEK_NPM_SCANNER_PREBUILT` / `GYRSEEK_PY_SCANNER_PREBUILT` | `false` | Per-manager prebuilt override. |
+
+In prebuilt mode, runtime setup (`apt-get` and Python `uv` bootstrapping) is skipped to reduce hot-path latency.
+
+## Prebuilt Scanner Images
+
+For faster probe startup and fewer runtime setup failures, prebuild scanner images with the required tools already installed.
+
+### 1) Build an npm scanner image
+
+`Dockerfile.npm-scanner`:
+
+```dockerfile
+FROM node:22-bookworm-slim
+RUN apt-get update \
+   && apt-get install -y --no-install-recommends strace ca-certificates \
+   && rm -rf /var/lib/apt/lists/*
+```
+
+```bash
+docker build -f Dockerfile.npm-scanner -t gyrseek/npm-scanner:latest .
+
+GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
+GYRSEEK_NPM_SCANNER_PREBUILT=true \
+cargo run -- npm update
+```
+
+### 2) Build a Python scanner image
+
+`Dockerfile.py-scanner`:
+
+```dockerfile
+FROM python:3.12-bookworm
+RUN apt-get update \
+   && apt-get install -y --no-install-recommends strace ca-certificates \
+   && rm -rf /var/lib/apt/lists/*
+RUN python -m pip install --no-cache-dir uv
+```
+
+```bash
+docker build -f Dockerfile.py-scanner -t gyrseek/py-scanner:latest .
+
+GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
+GYRSEEK_PY_SCANNER_PREBUILT=true \
+cargo run -- uv sync
+```
+
+### 3) Enable prebuilt mode globally (optional)
+
+```bash
+GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
+GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
+GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
+cargo run -- npm update
+```
+
+### 4) Verify images are usable
+
+```bash
+docker run --rm gyrseek/npm-scanner:latest sh -lc 'strace -V'
+docker run --rm gyrseek/py-scanner:latest sh -lc 'strace -V && uv --version'
+```
+
+If these pass, `GYRSEEK_*_SCANNER_PREBUILT=true` should work without runtime tool installation.
+
+### 5) Use pinned image digests (recommended for reproducibility)
+
+To avoid tag drift, pin scanner images by digest (replace with real digests from your registry):
+
+```bash
+GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
+GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
+GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
+cargo run -- npm update
+```
+
+> **Tip:** Build and push scanner images once in CI, resolve immutable digests, and reference only digest-pinned images in production or shared CI.
+
+## Behavior Reference
+
+Details worth knowing once you're past the basics.
+
+**Execution & caching**
 
 - `gyrseek` forwards your command in the current working directory.
-- Scanning now runs via a sandbox backend; default mode is Docker.
 - Repeated package-version probes within the same CLI execution are cached in-memory and reused.
-- Docker mode batches probe matrices (multiple packages x versions) into a single sandbox/container run when possible.
-- Docker mode keeps resource limits, but currently relaxes rootfs and capability hardening because probe setup installs sandbox tooling in-container.
-- Docker setup currently runs as root in-container with apt sandbox user disabled to allow installing probe tooling under restrictive container flags.
-- For tools like `poetry` or `npm`, run it inside a project directory containing the expected project files (`pyproject.toml`, `package.json`, etc.).
-- `uv sync` scans all packages found in `uv.lock` before forwarding.
-- `uv sync` and `uv lock --upgrade` exclude local project entries (for example editable/path/workspace package blocks) from anomaly comparison.
-- `uv pip sync` scans all parseable packages found in its source files before forwarding.
-- `uv pip sync` currently supports requirements-style files and dedicated `pylock.toml` parsing.
-- `uv lock --upgrade` scans all packages found in `uv.lock` before forwarding.
-- `uv lock -P/--upgrade-package` scans all explicitly targeted update packages before forwarding.
-- `pip install` and `pip3 install` scan all parseable package entries, including requirements files passed with `-r/--requirements`.
-- `poetry install` and `poetry update` scan all packages found in `poetry.lock` before forwarding.
-- `poetry install` and `poetry update` exclude local project entries (for example directory/path/editable source blocks) from anomaly comparison.
-- `npm install`, `npm i`, and `npm update` scan all explicit package targets; when no targets are provided, they scan dependencies declared in `package.json`.
-- For npm package.json fallback scanning, local source dependencies (`file:`, `workspace:`, `git+`, direct URL/link sources) are excluded from anomaly comparison.
-- Version selection is semantic-version aware: npm targets are ordered with semver and Python targets (pip/uv/poetry) with PEP 440. Unparseable version strings sort below any parseable version so malformed entries are never chosen as `latest`.
-- After a clear scan of an unpinned (`latest`) install target, the forwarded command is rewritten to pin the exact version that was examined, so the host installs the same version gyrseek scanned.
+- Docker mode batches probe matrices (multiple packages × versions) into a single container run when possible.
+
+**Version handling**
+
+- Version selection is semantic-version aware: npm uses semver, Python (pip/uv/poetry) uses PEP 440. Unparseable version strings sort below any parseable version, so malformed entries are never chosen as `latest`.
+- After a clean scan of an unpinned (`latest`) **explicit install target**, the forwarded command is rewritten to pin the exact version that was examined, so the host installs the same version `gyrseek` scanned. Lockfile-driven flows (`uv sync`, `poetry install`, etc.) already carry pinned versions and are forwarded verbatim.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
-- For supported install/sync command paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough. If the host command itself cannot be launched after a clear scan, gyrseek also fails closed.
+
+**Per-command scanning scope**
+
+- `uv sync` scans all packages found in `uv.lock` before forwarding.
+- `uv sync` and `uv lock --upgrade` exclude local project entries (editable/path/workspace blocks) from comparison.
+- `uv pip sync` scans all parseable packages from its source files (requirements-style files and `pylock.toml`).
+- `uv lock --upgrade` scans all packages in `uv.lock`; `uv lock -P/--upgrade-package` scans the explicitly targeted packages.
+- `pip install` / `pip3 install` scan all parseable entries, including `-r/--requirements` files.
+- `poetry install` / `poetry update` scan all packages in `poetry.lock`, excluding local directory/path/editable source blocks.
+- `npm install`, `npm i`, `npm update` scan explicit targets; with no targets they scan `package.json` dependencies, excluding local/non-registry specs (`file:`, `workspace:`, `git+`, URL/link).
+
+**Fail-closed guarantees**
+
+- For supported install/sync paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
+- If the host command itself cannot be launched after a clean scan, `gyrseek` also fails closed.
 
 ## Docker Hardening Limitations
 
-Current Docker sandbox mode is designed for practical compatibility and throughput, not maximum isolation.
+The Docker sandbox is currently tuned for practical compatibility and throughput, not maximum isolation.
 
-Current limitations:
+**Current limitations:**
 
-- Container setup installs probe tooling at runtime (`apt-get` and, for Python, `uv`).
-- Container setup and `strace` run as root so the trace logs are root-owned, but the traced install payload itself is dropped to an unprivileged in-container user (`strace -u`). This prevents a malicious install script from overwriting or deleting its own trace before gyrseek reads it.
-- Full `--read-only` rootfs is not enabled in this mode.
-- Full capability dropping is not enabled in this mode.
-- Outbound network remains generally available so package manager traffic can proceed.
+- Container setup installs probe tooling at runtime (`apt-get`, and `uv` for Python).
+- Container setup and `strace` run as root so the trace logs are root-owned — but the **traced install payload itself runs unprivileged** (`strace -u`), so a malicious install script cannot overwrite or delete its own trace before `gyrseek` reads it.
+- Full `--read-only` rootfs is not enabled.
+- Full capability dropping is not enabled.
+- Outbound network remains generally available so package-manager traffic can proceed.
 
-Performance note:
+**Why:** earlier stricter configs (read-only rootfs + full capability drop + non-root setup) caused apt/setup failures that prevented scans from running. The current config is the stable path that lets matrix probes complete in one sandbox run.
 
-- You can avoid runtime setup overhead by using prebuilt scanner images and enabling prebuilt mode (`GYRSEEK_PREBUILT_SCANNER_IMAGES=true` or per-manager prebuilt env vars).
-
-Why these limits currently exist:
-
-- Earlier stricter configurations (read-only rootfs + full capability drop + non-root runtime setup) caused apt/setup failures and prevented scans from running.
-- The current configuration is the stable path that allows matrix probes (multiple packages and versions) to complete in one sandbox run.
-
-Recommended hardening direction:
+**Recommended hardening direction:**
 
 - Use prebuilt scanner images that already include required tooling (`strace`, certs, and `uv` where needed).
-- After prebuilt images are in place, re-enable non-root runtime, read-only rootfs, and full capability drop.
+- With prebuilt images in place, re-enable non-root runtime, read-only rootfs, and full capability drop.
 - Add seccomp/apparmor policies and image digest pinning.
-- Consider tighter egress controls (allowlist or proxy model) for stronger containment.
-- Add no-execution-first checks (artifact diff/static heuristics/provenance gates) before runtime execution paths.
-- Evolve no-execution-first checks in phases: artifact fetch/unpack, static diff scoring, then pre-runtime policy gating.
+- Consider tighter egress controls (allowlist or proxy model).
+- Add no-execution-first checks (artifact diff / static heuristics / provenance gates) before runtime execution, in phases: artifact fetch/unpack → static diff scoring → pre-runtime policy gating.
 
-## Manual Test Runs
+> **Performance note:** prebuilt images + prebuilt mode (`GYRSEEK_PREBUILT_SCANNER_IMAGES=true` or per-manager vars) avoid runtime setup overhead.
 
-Run all tests:
+## Testing
 
 ```bash
+# Run everything
 cargo test
-```
 
-Run one integration test file:
-
-```bash
+# Run one integration test file
 cargo test --test parser_tests
 cargo test --test behavior_tests
 cargo test --test cli_burst_exit_tests
 cargo test --test git_clone_behavior_tests
 cargo test --test git_clone_scan_tests
-```
 
-Run one specific test case:
-
-```bash
+# Run one specific test case
 cargo test parses_npm_install_with_pinned_version
 cargo test detects_anomalous_new_connection
-```
 
-Show test output (`println!`) while running tests:
-
-```bash
+# Show println! output while testing
 cargo test -- --nocapture
 ```
 
 Behavior test coverage includes deterministic DNS-enrichment checks for reverse-DNS context handling (including unresolved-IP scenarios).
 
-## Collaboration and Handoff
+## Project Layout & Docs
 
-For multi-developer and multi-LLM collaboration, use these docs together:
+**Source & tests**
 
-- docs/ARCHITECTURE.md: control-flow and component map
-- docs/DEV_GUIDE.md: contributor workflow and change hygiene
-- docs/ROADMAP.md: planned improvements and known next steps
-- .copilot/AGENTS.md: repository memory and mandatory update policy
+- `src/main.rs` — binary entrypoint
+- `src/lib.rs` — command routing and orchestration
+- `src/parsing.rs` — command, lockfile, and requirements parsing helpers
+- `src/scanning.rs` — registry lookup and behavior scanning engine
+- `src/sandbox.rs` — sandbox backends and mode selection
+- `tests/parser_tests.rs` — command parsing tests
+- `tests/behavior_tests.rs` — behavior anomaly simulation tests
+- `tests/git_clone_behavior_tests.rs` — git clone behavior simulation tests
 
-Repository policy: after each change, update both `.copilot/AGENTS.md` and `README.md`.
+**Collaboration docs** (for multi-developer / multi-LLM work)
 
-## Project Layout
+- `docs/ARCHITECTURE.md` — control-flow and component map
+- `docs/DEV_GUIDE.md` — contributor workflow and change hygiene
+- `docs/ROADMAP.md` — planned improvements and next steps
+- `.copilot/AGENTS.md` — repository memory and mandatory update policy
 
-- `src/main.rs`: binary entrypoint
-- `src/lib.rs`: command routing and orchestration
-- `src/parsing.rs`: command and lock or requirements parsing helpers
-- `src/scanning.rs`: registry lookup and behavior scanning engine
-- `src/sandbox.rs`: sandbox backends and mode selection
-- `tests/parser_tests.rs`: command parsing tests
-- `tests/behavior_tests.rs`: behavior anomaly simulation tests
-- `tests/git_clone_behavior_tests.rs`: git clone behavior simulation tests
+> **Repository policy:** after each change, update both `.copilot/AGENTS.md` and `README.md`.
+
+## License
+
+See [LICENSE](LICENSE).
