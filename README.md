@@ -36,7 +36,7 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 
 This tool was created by [Brandon Chuah](https://www.linkedin.com/in/brandonccl/) and [David Craggs](https://www.linkedin.com/in/david-craggs-37851793/), who were working in internal product security roles when we began building this open source CLI.
 
-Our goal is not to compete with existing vendors. Instead, we want to give open source maintainers and small businesses, especially those that cannot afford expensive commercial software supply chain tooling, a practical way to address the kinds of supply chain issues highlighted by incidents such as Shai-Hulud.
+Our goal is not to compete with existing vendors. Instead, we want to give open source maintainers and small businesses, especially those that might not be able to afford expensive commercial software supply chain tooling, a practical way to address the kinds of supply chain issues highlighted by incidents such as Shai-Hulud.
 
 The tool works out of the box and requires no proxy configuration, as long as Docker is installed. It can be run in host mode, but it is primarily intended for isolated sandbox environments where secrets and environment variables are not present, making it better suited for testing and validation.
 
@@ -506,10 +506,10 @@ Details worth knowing once you're past the basics.
 - `uv sync` scans all packages found in `uv.lock` before forwarding.
 - `uv sync` and `uv lock --upgrade` exclude local project entries (editable/path/workspace blocks) from comparison.
 - `uv pip sync` scans all parseable packages from its source files (requirements-style files and `pylock.toml`).
-- `uv lock --upgrade` scans all packages in `uv.lock`; `uv lock -P/--upgrade-package` scans the explicitly targeted packages.
+- `uv lock --upgrade` scans all packages in `uv.lock`; `uv lock -P/--upgrade-package` scans the explicitly targeted packages. When `-P` is followed by a flag (e.g. `-P --dry-run`), the flag is not consumed as a package name and the next real `-P pkg` argument is not silently skipped.
 - `pip install` / `pip3 install` scan all parseable entries, including `-r/--requirements` files.
 - `poetry install` / `poetry update` scan all packages in `poetry.lock`, excluding local directory/path/editable source blocks.
-- `npm install`, `npm i`, `npm update` scan explicit targets; with no targets they scan `package.json` dependencies, excluding local/non-registry specs (`file:`, `workspace:`, `git+`, URL/link).
+- `npm install`, `npm i`, `npm update` scan explicit targets; with no targets they scan `package.json` dependencies. Both paths exclude non-registry specs (`file:`, `workspace:`, `git+`, URL, `link:`) — previously `link:` was filtered in the `package.json` fallback but passed through as a package name on the CLI arg path.
 
 **Fail-closed guarantees**
 
@@ -547,6 +547,8 @@ The Docker sandbox is currently tuned for practical compatibility and throughput
 
 ## Testing
 
+Tests follow Rust convention: everything that doesn't need to spawn the compiled binary lives inline in its `src/` module under `#[cfg(test)]`, giving tests direct access to private items. Only CLI-level exit-code tests that must spawn the real binary remain in `tests/`.
+
 **Unit and integration tests** (no Docker required):
 
 ```bash
@@ -556,17 +558,19 @@ The Docker sandbox is currently tuned for practical compatibility and throughput
 # Or directly:
 cargo test
 
-# Run one integration test file
-cargo test --test parser_tests
-cargo test --test behavior_tests
-cargo test --test cli_burst_exit_tests
-cargo test --test git_clone_behavior_tests
-cargo test --test git_clone_scan_tests
-cargo test --test bun_exec_scan_tests
+# Run tests from a specific source module
+cargo test --lib scanning
+cargo test --lib parsing
+cargo test --lib
 
-# Run one specific test case
+# Run the CLI exit-code integration tests (spawn the binary)
+cargo test --test cli_burst_exit_tests
+cargo test --test forward_fail_closed_tests
+
+# Run one specific test case by name
 cargo test parses_npm_install_with_pinned_version
 cargo test detects_anomalous_new_connection
+cargo test flags_newly_introduced_bun_execution
 
 # Show println! output while testing
 cargo test -- --nocapture
@@ -582,22 +586,21 @@ cargo test -- --nocapture
 ./auto/cargo-test-poetry
 ```
 
-Behavior test coverage includes deterministic DNS-enrichment checks for reverse-DNS context handling (including unresolved-IP scenarios).
+Behavior test coverage includes deterministic DNS-enrichment checks, FCrDNS forward-confirmation, bracketed-argv preservation, watched-process detection, git-clone signature diffing, and release-burst policy enforcement.
 
 ## Project Layout & Docs
 
 **Source & tests**
 
+Tests follow Rust convention — inline in their module under `#[cfg(test)]`, only CLI-level exit-code tests remain in `tests/`.
+
 - `src/main.rs` — binary entrypoint
-- `src/lib.rs` — command routing and orchestration
-- `src/parsing.rs` — command, lockfile, and requirements parsing helpers
-- `src/scanning.rs` — registry lookup and behavior scanning engine
-- `src/sandbox.rs` — sandbox backends and mode selection
-- `tests/parser_tests.rs` — command parsing tests
-- `tests/behavior_tests.rs` — behavior anomaly simulation tests
-- `tests/git_clone_behavior_tests.rs` — git clone behavior simulation tests
-- `tests/git_clone_scan_tests.rs` — install-time git-clone signature diff tests
-- `tests/bun_exec_scan_tests.rs` — watched-process (bun/deno) execution diff tests
+- `src/lib.rs` — command routing, orchestration, config loading; inline tests for `GyrSeek::parse_package_details`
+- `src/parsing.rs` — command, lockfile, and requirements parsing; inline tests for all parsers and `rewrite_args_with_pinned_versions`
+- `src/scanning.rs` — registry lookup and behavior scanning engine; inline tests for version ordering, trace extraction, network/git-clone/watched-process detection, FCrDNS, and full scan pipeline
+- `src/sandbox.rs` — sandbox backends and mode selection; inline tests for docker args, strace flags, and unprivileged-payload integrity
+- `tests/cli_burst_exit_tests.rs` — release burst and minimum release age CLI exit-code tests (spawn binary)
+- `tests/forward_fail_closed_tests.rs` — fail-closed forwarding and exit-status propagation tests (spawn binary)
 
 **Scripts**
 

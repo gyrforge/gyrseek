@@ -6,9 +6,9 @@ struct ScannerImageConfig {
 }
 
 /// A single traced probe: `((package, version), raw_strace_output)`.
-pub type ProbeTrace = ((String, String), String);
+pub(crate) type ProbeTrace = ((String, String), String);
 
-pub trait SandboxRunner {
+pub(crate) trait SandboxRunner {
     fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String>;
 
     fn trace_install_matrix(
@@ -25,7 +25,7 @@ pub trait SandboxRunner {
     }
 }
 
-pub fn build_runner_from_env() -> Result<Box<dyn SandboxRunner>, String> {
+pub(crate) fn build_runner_from_env() -> Result<Box<dyn SandboxRunner>, String> {
     let mode = std::env::var("GYRSEEK_SANDBOX").unwrap_or_else(|_| "docker".to_string());
 
     match mode.as_str() {
@@ -458,7 +458,7 @@ fn parse_bool_env(value: &str) -> bool {
     )
 }
 
-pub fn list_docker_runtimes() -> Result<Vec<String>, String> {
+pub(crate) fn list_docker_runtimes() -> Result<Vec<String>, String> {
     let output = Command::new("docker")
         .args(["info", "--format", "{{json .Runtimes}}"])
         .stdout(Stdio::piped())
