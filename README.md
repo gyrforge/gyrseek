@@ -139,9 +139,9 @@ This gives you a _behavioral_ signal, rather than relying only on package metada
 General pattern:
 
 ```bash
-./target/release/gyrseek <manager> <subcommand> <package>
+cargo run npm install lodash
 # or, with the release binary:
-./target/release/gyrseek <manager> <subcommand> <package>
+./target/release/gyrseek npm install lodash
 ```
 
 ### Python examples
