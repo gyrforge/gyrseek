@@ -21,6 +21,10 @@
   - Poetry parser excludes all local directory-source packages regardless of `develop`.
   - PEP 508 extras stripped from the canonical name for registry lookups and the pin key, while the forwarded command keeps the full spec (fixes both the PyPI 404/zero-baseline path and the broken version pinning).
   - Forwarded host command exit status is propagated instead of discarded.
+- Extended lockfile scanning to bare `uv lock` and bare `poetry lock` (previously forwarded unscanned); both now scan the resolved lockfile and fail closed if it is missing/empty. Routing covered by tests/lock_routing_tests.rs.
+- Added `--version`/`-V` as a leading top-level flag (prints crate version, exits 0, works without config/Docker; does not intercept a forwarded command's own flag). Covered by tests/version_flag_tests.rs.
+- Filtered sandbox-local IPs (loopback, link-local, private/RFC1918 incl. Docker bridge and Docker Desktop gateway) at trace-extraction time, before the baseline diff, removing a class of harness-nondeterminism false positives; the cloud metadata IP `169.254.169.254` is exempt. Normalized IPv4-mapped IPv6 (`::ffff:1.2.3.4`) to bare IPv4 everywhere so diffs and the ip_allowlist match either form.
+- Added `internal_package_exemptions` config: skip first-party/private-index packages (e.g. Nexus) entirely — no registry fetch, no sandbox install, no diff — forwarding them unscanned at the requested version (with a `latest`-pin guard so the forwarded command is not corrupted).
 
 ## Near Term
 - Add richer requirements parsing (environment markers, line continuations). (PEP 508 extras handling is now done.)

@@ -591,6 +591,10 @@ pub(crate) fn rewrite_args_with_pinned_versions(
             let (name, existing_version) = parse_npm_spec(arg);
             if existing_version.is_none()
                 && let Some(version) = pins.get(&name)
+                // A "latest" pin means the version was never resolved (e.g. an
+                // internal_package_exemptions skip); leave the arg unpinned so we
+                // don't emit an invalid `name@latest` spec.
+                && version != "latest"
             {
                 out.push(format!("{}@{}", name, version));
                 continue;
@@ -614,10 +618,12 @@ pub(crate) fn rewrite_args_with_pinned_versions(
         // but `pins` is keyed by the canonical (extras-stripped) name, so look up
         // with the stripped name and re-emit the full `arg` (extras intact).
         let base_name = strip_pep508_extras(arg);
-        if let Some(version) = pins.get(base_name) {
-            out.push(format!("{}=={}", arg, version));
-        } else {
-            out.push(arg.clone());
+        match pins.get(base_name) {
+            // A "latest" pin means the version was never resolved (e.g. an
+            // internal_package_exemptions skip); leave it unpinned rather than
+            // emit an invalid `name==latest` spec.
+            Some(version) if version != "latest" => out.push(format!("{}=={}", arg, version)),
+            _ => out.push(arg.clone()),
         }
     }
 
@@ -832,6 +838,32 @@ version = "2.31.0"
         let out =
             rewrite_args_with_pinned_versions("npm", &args(&["npm", "install", "left-pad"]), &pins);
         assert_eq!(out, args(&["npm", "install", "left-pad@1.3.0"]));
+    }
+
+    #[test]
+    fn does_not_pin_npm_package_with_latest_sentinel() {
+        // A "latest" pin comes from an internal_package_exemptions skip (version
+        // never resolved); it must NOT produce an invalid `name@latest` spec.
+        let pins =
+            std::collections::HashMap::from([("internal-pkg".to_string(), "latest".to_string())]);
+        let out = rewrite_args_with_pinned_versions(
+            "npm",
+            &args(&["npm", "install", "internal-pkg"]),
+            &pins,
+        );
+        assert_eq!(out, args(&["npm", "install", "internal-pkg"]));
+    }
+
+    #[test]
+    fn does_not_pin_pip_package_with_latest_sentinel() {
+        let pins =
+            std::collections::HashMap::from([("internal-pkg".to_string(), "latest".to_string())]);
+        let out = rewrite_args_with_pinned_versions(
+            "pip",
+            &args(&["pip", "install", "internal-pkg"]),
+            &pins,
+        );
+        assert_eq!(out, args(&["pip", "install", "internal-pkg"]));
     }
 
     #[test]
