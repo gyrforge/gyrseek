@@ -22,8 +22,8 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - parse_requirements_packages_from_content parses requirements-style entries. PEP 508 extras are stripped from the canonical package name (strip_pep508_extras) so registry lookups and the version-pin map key use `requests`, not `requests[security]`; the forwarded install command still carries the full extras-qualified spec.
   - parse_pylock_packages_from_content parses pylock package entries.
   - parse_pip_install_packages_from_args resolves package targets from pip or pip3 install args, including -r or --requirements files.
-  - parse_npm_install_packages_from_args resolves npm targets from explicit args or package.json when no explicit target is given.
-  - parse_uv_lock_upgrade_packages_from_args resolves update targets from uv lock -P or --upgrade-package arguments.
+  - parse_npm_install_packages_from_args resolves npm targets from explicit args or package.json when no explicit target is given. Non-registry specs (`link:`, `file:`, `git+`, URL) are excluded in both the CLI-arg and the package.json fallback paths.
+  - parse_uv_lock_upgrade_packages_from_args resolves update targets from uv lock -P or --upgrade-package arguments. When the value after -P starts with `-` (i.e. it is a flag, not a package), only one token is consumed so the next real argument is not silently dropped.
 - Version history lookup:
   - fetch_history_with_baselines queries PyPI for Python packages and the npm registry for npm packages.
   - Version lists are ordered semantically: semver for npm, PEP 440 for Python managers (compare_version_strings / sort_versions_ascending). Unparseable strings sort below any parseable version, so junk is never resolved as `latest`.
@@ -71,17 +71,9 @@ gyrseek fails closed in the following situations:
 
 ## Main Files
 - src/main.rs: binary entrypoint
-- src/lib.rs: routing and enforcement orchestration
-- src/parsing.rs: command, lockfile, and requirements parsing
-- src/scanning.rs: registry history lookup and behavior scanning
-- src/sandbox.rs: sandbox backend abstraction and mode selection
-- tests/parser_tests.rs: parser behavior coverage
-- tests/behavior_tests.rs: anomaly decision simulation coverage
-- tests/git_clone_behavior_tests.rs: git-clone simulation coverage
-- tests/git_clone_scan_tests.rs: install-time git-clone signature diff coverage
-- tests/forward_fail_closed_tests.rs: fail-closed coverage when the host command cannot be spawned, plus host exit-status propagation (non-zero and success)
-- tests/bun_exec_scan_tests.rs: watched-process (bun/deno) execution diff coverage (new bun, bun+extra, identical, allowlisted)
-- src/scanning.rs (unit tests): semantic version ordering, IPv4/IPv6 trace extraction, npm time-map release-burst filtering, watched-process signature extraction/diff/allowlist, bracketed-argv preservation, FCrDNS forward-confirmation decision
-- src/sandbox.rs (unit tests): strace no-truncation flags, unprivileged-payload trace integrity, docker arg construction, SYS_PTRACE capability, strace-stderr capture
-- src/parsing.rs (unit tests): PEP 508 extras stripping, extras-aware version pinning, poetry local directory-source exclusion (develop and non-develop)
-- tests/parser_tests.rs also covers forwarded-command version pinning (rewrite_args_with_pinned_versions)
+- src/lib.rs: routing and enforcement orchestration; inline tests for GyrSeek::parse_package_details and parse_global_options edge cases
+- src/parsing.rs: command, lockfile, and requirements parsing; inline tests for all parsers, rewrite_args_with_pinned_versions, PEP 508 extras, local-source exclusions, npm non-registry filtering, uv lock upgrade arg parsing
+- src/scanning.rs: registry history lookup and behavior scanning; inline tests for version ordering, trace extraction, anomaly detection, git-clone and watched-process diffing, FCrDNS, allowlist matching, missing-baseline fail-closed
+- src/sandbox.rs: sandbox backend abstraction and mode selection; inline tests for docker args, strace flags, SYS_PTRACE, strace-stderr capture
+- tests/cli_burst_exit_tests.rs: release burst and minimum release age CLI exit-code tests (spawn binary)
+- tests/forward_fail_closed_tests.rs: fail-closed forwarding and host exit-status propagation (spawn binary)

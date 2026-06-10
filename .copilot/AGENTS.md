@@ -17,19 +17,15 @@ This file stores persistent working memory and agent instructions for this repos
   - auto/cargo-checks — cargo check + clippy + test; run before committing
   - auto/cargo-test-{npm,pip,uv,poetry} — end-to-end tests per manager using the release binary; require Docker
 - Test strategy:
-  - Integration tests under tests/ (preferred for command-path coverage and anything observable only from outside the process)
-  - Pure-function unit tests live inline in src/ modules (src/scanning.rs, src/sandbox.rs, src/parsing.rs) where they cover internal, non-exported helpers (Rust convention: `#[cfg(test)] mod tests` can see private items)
+  - All unit and integration tests that do not require spawning the compiled binary live inline in their src/ module under `#[cfg(test)]` — this follows Rust convention and lets tests access private items directly
+  - Only tests that need to spawn the real binary (CLI exit-code checks, forward behavior) remain in tests/ as integration test files
   - Run with cargo test or ./auto/cargo-checks
-  - tests/behavior_tests.rs — network anomaly detection, DNS enrichment, IP/domain allowlist filtering
-  - tests/bun_exec_scan_tests.rs — watched-process (bun/deno) detection and allowlisting
-  - tests/cli_burst_exit_tests.rs — release burst threshold and minimum_release_age_package CLI exit-code behavior
-  - tests/forward_fail_closed_tests.rs — fail-closed when forwarding to a missing host binary, plus host exit-status propagation (non-zero forwarded exit surfaces as non-zero; success stays 0); uses a fake `uv` binary in a temp dir to exercise forward_args without running a real manager
-  - tests/git_clone_behavior_tests.rs — network anomaly detection in git-clone simulation (uses find_new_connections)
-  - tests/git_clone_scan_tests.rs — install-time git clone signature diffing and allowlisting
-  - tests/parser_tests.rs — parsing helpers: rewrite_args_with_pinned_versions, parse_package_details, lockfile/requirements parsing for all managers
-  - src/scanning.rs (inline) — FCrDNS forward-confirmation decision (forward_confirmed_hostname), bracketed-argv preservation, version ordering, trace extraction, burst filtering
+  - src/scanning.rs (inline) — version ordering, IPv4/IPv6 trace extraction, burst filtering, FCrDNS (forward_confirmed_hostname), bracketed-argv preservation, watched-process (bun/deno) detection and allowlisting, git-clone signature diffing, network anomaly detection, DNS enrichment, IP/domain allowlist filtering, git-clone simulation
   - src/sandbox.rs (inline) — SYS_PTRACE capability in docker args, strace-stderr capture, no-truncation flags, unprivileged-payload integrity
-  - src/parsing.rs (inline) — PEP 508 extras stripping (strip_pep508_extras), extras-aware pinning, poetry local directory-source exclusion (develop + non-develop)
+  - src/parsing.rs (inline) — PEP 508 extras stripping (strip_pep508_extras), extras-aware pinning, poetry local directory-source exclusion, rewrite_args_with_pinned_versions, lockfile/requirements/npm parsing for all managers
+  - src/lib.rs (inline, mod gyrseek_tests) — GyrSeek::parse_package_details for all supported managers and subcommands
+  - tests/cli_burst_exit_tests.rs — release burst threshold and minimum_release_age_package CLI exit-code behavior (spawns binary)
+  - tests/forward_fail_closed_tests.rs — fail-closed when forwarding to a missing host binary, host exit-status propagation (spawns binary; uses fake `uv` in temp dir)
 - Collaboration docs:
   - docs/ARCHITECTURE.md
   - docs/DEV_GUIDE.md
@@ -38,12 +34,12 @@ This file stores persistent working memory and agent instructions for this repos
   - Supports uv add, uv pip install, uv pip sync, uv sync, uv lock update flags, pip/pip3 install, poetry add/update/install, npm install/i/update
   - Behavioral anomaly detection compares observed network endpoints across versions
   - Behavioral anomaly detection also compares install-time git clone command signatures across versions and fails closed when new clone behavior appears
-  - Behavioral anomaly detection also compares install-time execution of watched runtimes (default `bun`, `deno`) across versions and fails closed when a version newly executes one, or executes it with new/additional arguments (catches the Shai-Hulud "Hades/miasma" class: download Bun and run an obfuscated stealer via `bun run`). Signatures are `exe|arg1|arg2|...` so both "didn't run bun before, now does" and "ran bun before, now runs bun plus extra" are detected. See extract_process_exec_signatures in src/scanning.rs and tests/bun_exec_scan_tests.rs
+  - Behavioral anomaly detection also compares install-time execution of watched runtimes (default `bun`, `deno`) across versions and fails closed when a version newly executes one, or executes it with new/additional arguments (catches the Shai-Hulud "Hades/miasma" class: download Bun and run an obfuscated stealer via `bun run`). Signatures are `exe|arg1|arg2|...` so both "didn't run bun before, now does" and "ran bun before, now runs bun plus extra" are detected. See extract_process_exec_signatures in src/scanning.rs (inline tests: flags_newly_introduced_bun_execution, flags_existing_bun_with_additional_invocation, etc.)
   - watched_executables config entries are unioned onto the built-in defaults (bun, deno are always watched); node/sh/python are intentionally NOT watched to avoid false positives
   - process_exec_allowlist allows specific watched-process signatures (`bun|run|build`) or bare executables (`bun`) even when newly introduced (case-insensitive)
   - Scope caveat: watched-process/network/git-clone detection only observes execution during the sandbox install; the PyPI `*-setup.pth` variant that fires on next interpreter startup may execute outside the install window
   - Direct runtime interception for standalone `git clone ...` commands is still not enabled; only install-time clone behavior inside package scan traces is currently enforced
-  - Install-time git clone behavior comparison is covered by integration tests in tests/git_clone_scan_tests.rs
+  - Install-time git clone behavior comparison is covered by inline tests in src/scanning.rs (scan_flags_new_install_time_git_clone_behavior, git_clone_allowlist_matches_recursive_clone_of_allowed_url, etc.)
   - Version ordering is semantic-version aware: npm uses semver, Python managers (pip/pip3/uv/poetry) use PEP 440; unparseable version strings sort below any parseable version so malformed entries are never selected as `latest` (see compare_version_strings/sort_versions_ascending in src/scanning.rs)
   - After a clear scan of an explicit unpinned (`latest`) install target, the forwarded command is rewritten to pin the exact resolved version that was scanned (npm `pkg@x.y.z`, Python `pkg==x.y.z`) via rewrite_args_with_pinned_versions; lockfile/manifest-driven flows (uv sync, uv pip sync, uv lock, poetry install/update) forward verbatim because the lockfile already pins versions
   - scan_packages_versions/scan_package_versions return a ScanReport { allowed, resolved_version }; policy knobs are passed as a single PolicyConfig struct rather than positional args
@@ -64,11 +60,13 @@ This file stores persistent working memory and agent instructions for this repos
   - poetry lock parsing excludes ALL local directory-source project entries regardless of the `develop` flag (previously only `develop = true` editable entries were excluded, so a non-develop local path leaked into registry scanning) — to avoid scanning the application under development (was FINDINGS.md #5)
   - npm install/npm i/npm update scans multi-package inputs and package.json dependencies when no explicit package args are given
   - npm package.json fallback excludes local/non-registry dependency specs (file/workspace/git/url/link) from scanning
+  - npm CLI arg parsing also excludes non-registry specs (`link:`, `file:`, `git+`, URL) — previously only the package.json fallback path filtered these; a `link:../local-pkg` CLI arg would leak through as a package name (fixed)
+  - uv lock -P upgrade target parsing: when the value after -P starts with `-`, only one token is consumed (not two), so the next real package argument is not silently swallowed (fixed)
   - Sandbox execution mode is selected via GYRSEEK_SANDBOX (`docker` default, `host` fallback)
   - Host sandbox mode prioritizes speed over isolation; a malicious latest package can execute on the host while gyrseek only emits warnings/signals
   - GYRSEEK_SANDBOX supports `microvm` mode via Docker runtime selection
   - GYRSEEK_MICROVM_RUNTIME selects the runtime for microvm mode (default `kata-runtime`), and initialization fails closed if runtime is unavailable
-  - `cargo run -- sandbox runtimes` lists Docker runtimes to help choose GYRSEEK_MICROVM_RUNTIME
+  - `./target/release/gyrseek sandbox runtimes` lists Docker runtimes to help choose GYRSEEK_MICROVM_RUNTIME
   - GYRSEEK_NPM_SCANNER_IMAGE and GYRSEEK_PY_SCANNER_IMAGE override scanner images; prebuilt fast path can be enabled via GYRSEEK_PREBUILT_SCANNER_IMAGES or per-manager prebuilt env vars
   - README includes step-by-step Dockerfile/build/use guidance for prebuilt npm and python scanner images
   - README includes digest-pinning examples for scanner images to avoid tag drift and improve reproducibility

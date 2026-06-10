@@ -11,28 +11,19 @@ use std::process::Command;
 
 use serde::Deserialize;
 
-pub use parsing::{
+use parsing::{
     parse_npm_install_packages_from_args,
-    parse_npm_packages_from_package_json_content,
     parse_pip_install_packages_from_args,
     parse_poetry_lock_packages_from_content,
     parse_pylock_packages_from_content,
     parse_requirements_packages_from_content,
     parse_uv_lock_upgrade_packages_from_args,
     parse_uv_lock_packages_from_content,
+    rewrite_args_with_pinned_versions,
 };
-pub use scanning::find_new_connections;
-pub use scanning::enrich_new_connection_domains_with;
-pub use scanning::filter_allowlisted_new_connections;
-pub use scanning::filter_domain_allowlisted_new_connections_with;
-pub use scanning::scan_packages_versions;
-pub use scanning::{PolicyConfig, ScanReport};
-pub use sandbox::SandboxRunner;
-
-pub use parsing::rewrite_args_with_pinned_versions;
 use parsing::{parse_package_details, should_enforce_package_detection};
-use sandbox::{build_runner_from_env, list_docker_runtimes};
-use scanning::scan_package_versions;
+use sandbox::{build_runner_from_env, list_docker_runtimes, SandboxRunner};
+use scanning::{scan_package_versions, scan_packages_versions, PolicyConfig, ScanReport};
 
 const DEFAULT_CONFIG_PATH: &str = "gyrseek.yaml";
 
@@ -484,6 +475,35 @@ mod config_tests {
         assert!(cfg.git_clone_allowlist.contains("https://github.com/acme/repo.git"));
         assert_eq!(cfg.git_clone_allowlist.len(), 1);
     }
+
+    // --- gap #12: parse_global_options edge cases ---
+
+    #[test]
+    fn config_path_starting_with_dash_is_accepted() {
+        // A valid (if unusual) config path that begins with '-' must not be mistaken
+        // for a flag and must be forwarded verbatim to load_policy_config.
+        let args = vec![
+            "--config".to_string(), "-relative.yaml".to_string(),
+            "npm".to_string(), "install".to_string(), "pkg".to_string(),
+        ];
+        let (manager_args, path, explicit) = parse_global_options(args).expect("should parse");
+        assert_eq!(path, "-relative.yaml");
+        assert!(explicit);
+        assert_eq!(manager_args, vec!["npm", "install", "pkg"]);
+    }
+
+    #[test]
+    fn config_equals_form_preserves_equals_in_path() {
+        // --config=path=with=equals.yaml: only the first '=' is the separator.
+        let args = vec![
+            "--config=path=with=equals.yaml".to_string(),
+            "pip".to_string(), "install".to_string(), "requests".to_string(),
+        ];
+        let (manager_args, path, explicit) = parse_global_options(args).expect("should parse");
+        assert_eq!(path, "path=with=equals.yaml");
+        assert!(explicit);
+        assert_eq!(manager_args, vec!["pip", "install", "requests"]);
+    }
 }
 
 pub struct GyrSeek {
@@ -500,7 +520,7 @@ impl SandboxRunner for NoopRunner {
 }
 
 impl GyrSeek {
-    pub fn new(args: Vec<String>) -> Self {
+    pub(crate) fn new(args: Vec<String>) -> Self {
         let manager = args.first().cloned().unwrap_or_default();
         Self {
             passthrough_args: args,
@@ -508,12 +528,12 @@ impl GyrSeek {
         }
     }
 
-    pub fn parse_package_details(&self) -> (Option<String>, Option<String>) {
+    pub(crate) fn parse_package_details(&self) -> (Option<String>, Option<String>) {
         parse_package_details(&self.manager, &self.passthrough_args)
     }
 
     /// Executes the user's raw host operation transparently.
-    pub fn forward_original_command(&self) {
+    pub(crate) fn forward_original_command(&self) {
         self.forward_args(&self.passthrough_args);
     }
 
@@ -521,7 +541,7 @@ impl GyrSeek {
     /// named packages to the exact versions the scanner resolved and examined.
     /// This closes the gap where an unpinned `install foo` is scanned at one
     /// version while the host manager would otherwise resolve a different one.
-    pub fn forward_pinned_command(&self, pins: &HashMap<String, String>) {
+    pub(crate) fn forward_pinned_command(&self, pins: &HashMap<String, String>) {
         let pinned = rewrite_args_with_pinned_versions(&self.manager, &self.passthrough_args, pins);
         self.forward_args(&pinned);
     }
@@ -1061,4 +1081,69 @@ pub async fn run(args: Vec<String>) {
     println!("\n✅ [gyrseek] Clear behavioral report. Forwarding command safely...");
     let pins = HashMap::from([(pkg_name, report.resolved_version)]);
     eye.forward_pinned_command(&pins);
+}
+
+#[cfg(test)]
+mod gyrseek_tests {
+    use super::GyrSeek;
+
+    // ---------------------------------------------------------------------------
+    // GyrSeek::parse_package_details tests (moved from tests/parser_tests.rs)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn parses_uv_add_as_latest_when_unpinned() {
+        let eye = GyrSeek::new(vec!["uv".to_string(), "add".to_string(), "pytest".to_string()]);
+        let (pkg, version) = eye.parse_package_details();
+        assert_eq!(pkg.as_deref(), Some("pytest"));
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn parses_uv_pip_install_with_pinned_version() {
+        let eye = GyrSeek::new(vec!["uv".to_string(), "pip".to_string(), "install".to_string(), "requests==2.31.0".to_string()]);
+        let (pkg, version) = eye.parse_package_details();
+        assert_eq!(pkg.as_deref(), Some("requests"));
+        assert_eq!(version.as_deref(), Some("2.31.0"));
+    }
+
+    #[test]
+    fn parses_poetry_update_as_latest_when_unpinned() {
+        let eye = GyrSeek::new(vec!["poetry".to_string(), "update".to_string(), "pytest".to_string()]);
+        let (pkg, version) = eye.parse_package_details();
+        assert_eq!(pkg.as_deref(), Some("pytest"));
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn ignores_non_install_commands() {
+        let eye = GyrSeek::new(vec!["uv".to_string(), "run".to_string(), "script.py".to_string()]);
+        let (pkg, version) = eye.parse_package_details();
+        assert_eq!(pkg, None);
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn parses_npm_install_as_latest_when_unpinned() {
+        let eye = GyrSeek::new(vec!["npm".to_string(), "install".to_string(), "lodash".to_string()]);
+        let (pkg, version) = eye.parse_package_details();
+        assert_eq!(pkg.as_deref(), Some("lodash"));
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn parses_npm_install_with_pinned_version() {
+        let eye = GyrSeek::new(vec!["npm".to_string(), "install".to_string(), "lodash@4.17.21".to_string()]);
+        let (pkg, version) = eye.parse_package_details();
+        assert_eq!(pkg.as_deref(), Some("lodash"));
+        assert_eq!(version.as_deref(), Some("4.17.21"));
+    }
+
+    #[test]
+    fn uv_sync_has_no_single_package_target() {
+        let eye = GyrSeek::new(vec!["uv".to_string(), "sync".to_string()]);
+        let (pkg, version) = eye.parse_package_details();
+        assert_eq!(pkg, None);
+        assert_eq!(version, None);
+    }
 }

@@ -13,9 +13,10 @@
 
 ## Build and Test
 - Build debug: cargo build
-- Build release: cargo build --release
-- Run tests: cargo test
-- Run one test file: cargo test --test parser_tests
+- Build release: ./auto/cargo-build
+- Run tests: ./auto/cargo-checks (or cargo test directly)
+- Run inline tests for one module: cargo test --lib scanning / cargo test --lib parsing / cargo test --lib
+- Run CLI integration tests (spawn binary): cargo test --test cli_burst_exit_tests / cargo test --test forward_fail_closed_tests
 
 ## Policy Config Surface
 - Primary policy file: gyrseek.yaml (or override with --config / GYRSEEK_CONFIG).
@@ -48,7 +49,7 @@
 
 ## Test Locations
 - Follow Rust convention: unit tests for private/internal functions live inline in the module's `#[cfg(test)] mod tests` (they can see private items); integration tests that exercise the public API or need a real subprocess live under tests/.
-- Pure-function unit tests live inline in src/scanning.rs, src/sandbox.rs, and src/parsing.rs (version ordering, trace extraction, FCrDNS decision, bracketed-argv parsing, strace/docker arg construction, SYS_PTRACE capability, PEP 508 extras stripping, poetry local-source exclusion); keep these alongside the code they cover.
+- Pure-function unit tests live inline in their src/ module (version ordering, trace extraction, FCrDNS, bracketed-argv parsing, docker arg construction, SYS_PTRACE, PEP 508 extras stripping, poetry/uv local-source exclusion, npm non-registry filtering, git-clone allowlist matching, missing-baseline fail-closed, uv lock upgrade arg edge cases); keep these alongside the code they cover.
 - Anything that can only be observed from outside the process belongs in tests/ — e.g. host exit-status propagation (`std::process::exit`) is covered in tests/forward_fail_closed_tests.rs because exit codes are only visible to a spawning parent.
 
 ## Required Change Hygiene

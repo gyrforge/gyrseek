@@ -13,7 +13,7 @@ use crate::sandbox::SandboxRunner;
 /// Policy knobs resolved from the YAML config (or defaults), passed by reference
 /// into the scanner so call sites don't have to thread a dozen positional args.
 #[derive(Clone, Debug)]
-pub struct PolicyConfig {
+pub(crate) struct PolicyConfig {
     pub ip_allowlist: HashSet<String>,
     pub domain_allowlist: HashSet<String>,
     pub git_clone_allowlist: HashSet<String>,
@@ -37,7 +37,7 @@ pub struct PolicyConfig {
 /// essentially never appear in a normal npm/pip install, so flagging a newly
 /// introduced invocation has a very low false-positive rate while catching the
 /// Shai-Hulud "download Bun and run the stealer" pattern.
-pub fn default_watched_executables() -> HashSet<String> {
+pub(crate) fn default_watched_executables() -> HashSet<String> {
     ["bun", "deno"].into_iter().map(String::from).collect()
 }
 
@@ -62,7 +62,7 @@ impl Default for PolicyConfig {
 
 /// Outcome of scanning a single (package, requested-version) target.
 #[derive(Clone, Debug)]
-pub struct ScanReport {
+pub(crate) struct ScanReport {
     /// Whether the host command is allowed to proceed for this target.
     pub allowed: bool,
     /// The concrete version the scanner actually resolved and examined. For an
@@ -139,11 +139,11 @@ struct NpmResponse {
 const DEFAULT_MIN_BASELINE_AGE_HOURS: i64 = 2;
 
 /// Returns connections present in the current version but absent in baseline versions.
-pub fn find_new_connections(ips_curr: &HashSet<String>, baseline_ips: &HashSet<String>) -> Vec<String> {
+pub(crate) fn find_new_connections(ips_curr: &HashSet<String>, baseline_ips: &HashSet<String>) -> Vec<String> {
     ips_curr.difference(baseline_ips).cloned().collect()
 }
 
-pub fn filter_allowlisted_new_connections(
+pub(crate) fn filter_allowlisted_new_connections(
     new_connections: Vec<String>,
     ip_allowlist: &HashSet<String>,
 ) -> (Vec<String>, Vec<String>) {
@@ -187,7 +187,7 @@ fn domain_is_allowlisted(domain: &str, domain_allowlist: &HashSet<String>) -> bo
     false
 }
 
-pub fn filter_domain_allowlisted_new_connections_with<F>(
+pub(crate) fn filter_domain_allowlisted_new_connections_with<F>(
     new_connections: Vec<String>,
     domain_allowlist: &HashSet<String>,
     resolver: F,
@@ -239,7 +239,7 @@ where
     }
 }
 
-pub fn enrich_new_connection_domains_with<F>(
+pub(crate) fn enrich_new_connection_domains_with<F>(
     new_connections: &[String],
     baseline_ips: &HashSet<String>,
     resolver: F,
@@ -269,7 +269,7 @@ where
     (new_ip_domain_context, new_ip_domain_matches)
 }
 
-pub async fn fetch_history_with_baselines(
+pub(crate) async fn fetch_history_with_baselines(
     manager: &str,
     package: &str,
     target_v: &str,
@@ -793,7 +793,7 @@ fn exemption_behavior(new_package_exempt: bool, eligible_baseline_versions: usiz
     (false, true)
 }
 
-pub async fn scan_packages_versions(
+pub(crate) async fn scan_packages_versions(
     runner: &dyn SandboxRunner,
     manager: &str,
     pkg_targets: &[(String, String)],
@@ -1117,11 +1117,15 @@ mod tests {
 
     use super::{
         burst_policy_warning, burst_triggered, compare_version_strings, count_releases_in_window,
-        default_watched_executables, exemption_behavior, extract_connection_ips,
-        extract_process_exec_signatures, filter_allowlisted_process_exec_signatures,
+        default_watched_executables, enrich_new_connection_domains_with, exemption_behavior,
+        extract_connection_ips, extract_process_exec_signatures,
+        filter_allowlisted_git_clone_signatures, filter_allowlisted_new_connections,
+        filter_allowlisted_process_exec_signatures,
+        filter_domain_allowlisted_new_connections_with, find_new_connections,
         find_new_process_exec_signatures, forward_confirmed_hostname,
-        minimum_release_age_policy_warning, npm_published_times, select_age_eligible_baselines,
-        select_effective_baselines, sort_versions_ascending,
+        minimum_release_age_policy_warning, npm_published_times, scan_packages_versions,
+        select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
+        PolicyConfig,
     };
     use chrono::Duration;
     use std::cmp::Ordering;
@@ -1670,9 +1674,416 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         assert!(minimum_release_age_policy_warning("requests", Some(0), None).is_none());
     }
 
+    // ---------------------------------------------------------------------------
+    // behavior_tests (moved from tests/behavior_tests.rs)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn detects_anomalous_new_connection() {
+        let ips_curr: HashSet<String> = ["1.1.1.1", "8.8.8.8"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let mut new = find_new_connections(&ips_curr, &baseline_ips);
+        new.sort();
+        assert_eq!(new, vec!["8.8.8.8".to_string()]);
+    }
+
+    #[test]
+    fn no_anomaly_when_connections_match_baseline() {
+        let ips_curr: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1", "9.9.9.9"].into_iter().map(String::from).collect();
+        assert!(find_new_connections(&ips_curr, &baseline_ips).is_empty());
+    }
+
+    #[test]
+    fn dns_enrichment_reports_context_and_domain_overlap_matches() {
+        let baseline_ips: HashSet<String> = ["1.1.1.1", "9.9.9.9"].into_iter().map(String::from).collect();
+        let new_connections = vec!["8.8.8.8".to_string(), "5.5.5.5".to_string()];
+        let resolver = |ip: &str| match ip {
+            "1.1.1.1" => Some("example.net".to_string()),
+            "9.9.9.9" => Some("baseline-only.net".to_string()),
+            "8.8.8.8" => Some("example.net".to_string()),
+            "5.5.5.5" => Some("new.net".to_string()),
+            _ => None,
+        };
+        let (mut context, mut matches) = enrich_new_connection_domains_with(&new_connections, &baseline_ips, resolver);
+        context.sort();
+        matches.sort();
+        assert_eq!(context, vec!["5.5.5.5 -> new.net".to_string(), "8.8.8.8 -> example.net".to_string()]);
+        assert_eq!(matches, vec!["8.8.8.8 -> example.net".to_string()]);
+    }
+
+    #[test]
+    fn dns_enrichment_ignores_unresolved_ips_without_failing() {
+        let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let new_connections = vec!["8.8.8.8".to_string()];
+        let (context, matches) = enrich_new_connection_domains_with(&new_connections, &baseline_ips, |_| None);
+        assert!(context.is_empty());
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn ip_allowlist_filters_new_ips_before_blocking() {
+        let new_connections = vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()];
+        let ip_allowlist: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let (mut remaining, mut allowlisted) = filter_allowlisted_new_connections(new_connections, &ip_allowlist);
+        remaining.sort();
+        allowlisted.sort();
+        assert_eq!(remaining, vec!["8.8.8.8".to_string()]);
+        assert_eq!(allowlisted, vec!["1.1.1.1".to_string()]);
+    }
+
+    #[test]
+    fn domain_allowlist_filters_resolved_domains_before_blocking() {
+        let new_connections = vec!["8.8.8.8".to_string(), "5.5.5.5".to_string()];
+        let domain_allowlist: HashSet<String> = ["example.net"].into_iter().map(String::from).collect();
+        let resolver = |ip: &str| match ip {
+            "8.8.8.8" => Some("cdn.example.net".to_string()),
+            "5.5.5.5" => Some("other.net".to_string()),
+            _ => None,
+        };
+        let (mut remaining, mut allowlisted) = filter_domain_allowlisted_new_connections_with(new_connections, &domain_allowlist, resolver);
+        remaining.sort();
+        allowlisted.sort();
+        assert_eq!(remaining, vec!["5.5.5.5".to_string()]);
+        assert_eq!(allowlisted, vec!["8.8.8.8 -> cdn.example.net".to_string()]);
+    }
+
+    #[test]
+    fn domain_allowlist_does_not_filter_when_lookup_fails() {
+        let new_connections = vec!["8.8.8.8".to_string()];
+        let domain_allowlist: HashSet<String> = ["example.net"].into_iter().map(String::from).collect();
+        let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(new_connections, &domain_allowlist, |_| None);
+        assert_eq!(remaining, vec!["8.8.8.8".to_string()]);
+        assert!(allowlisted.is_empty());
+    }
+
+    #[test]
+    fn domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot() {
+        let new_connections = vec!["8.8.8.8".to_string()];
+        let domain_allowlist: HashSet<String> = [" Example.NET. "].into_iter().map(String::from).collect();
+        let resolver = |_ip: &str| Some("CDN.Example.Net.".to_string());
+        let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(new_connections, &domain_allowlist, resolver);
+        assert!(remaining.is_empty());
+        assert_eq!(allowlisted, vec!["8.8.8.8 -> CDN.Example.Net.".to_string()]);
+    }
+
+    #[test]
+    fn ip_allowlist_matches_equivalent_ipv6_representations() {
+        let new_connections = vec!["2001:0db8:0000:0000:0000:ff00:0042:8329".to_string()];
+        let ip_allowlist: HashSet<String> = ["2001:db8::ff00:42:8329"].into_iter().map(String::from).collect();
+        let (remaining, allowlisted) = filter_allowlisted_new_connections(new_connections, &ip_allowlist);
+        assert!(remaining.is_empty());
+        assert_eq!(allowlisted, vec!["2001:0db8:0000:0000:0000:ff00:0042:8329".to_string()]);
+    }
+
+    // ---------------------------------------------------------------------------
+    // git_clone_behavior_tests (moved from tests/git_clone_behavior_tests.rs)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn detects_new_connection_in_git_clone_simulation() {
+        let clone_ips: HashSet<String> = ["140.82.112.3", "185.199.108.133"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["140.82.112.3"].into_iter().map(String::from).collect();
+        let mut new = find_new_connections(&clone_ips, &baseline_ips);
+        new.sort();
+        assert_eq!(new, vec!["185.199.108.133".to_string()]);
+    }
+
+    #[test]
+    fn no_new_connection_in_git_clone_simulation() {
+        let clone_ips: HashSet<String> = ["140.82.112.3"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["140.82.112.3", "140.82.113.3"].into_iter().map(String::from).collect();
+        assert!(find_new_connections(&clone_ips, &baseline_ips).is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // bun_exec_scan_tests (moved from tests/bun_exec_scan_tests.rs)
+    // ---------------------------------------------------------------------------
+
+    use std::sync::{Mutex, OnceLock};
+
+    struct MockRunner {
+        traces: HashMap<(String, String), String>,
+    }
+
+    impl crate::sandbox::SandboxRunner for MockRunner {
+        fn trace_install(&self, _manager: &str, package: &str, version: &str) -> Result<String, String> {
+            self.traces
+                .get(&(package.to_string(), version.to_string()))
+                .cloned()
+                .ok_or_else(|| format!("missing mock trace for {}@{}", package, version))
+        }
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn policy_with_baseline_and_process_allowlist(
+        package: &str,
+        baseline: &str,
+        process_exec_allowlist: HashSet<String>,
+    ) -> PolicyConfig {
+        PolicyConfig {
+            baseline_count: 1,
+            process_exec_allowlist,
+            baseline_overrides: HashMap::from([(package.to_string(), (Some(baseline.to_string()), None))]),
+            ..PolicyConfig::default()
+        }
+    }
+
+    fn policy_with_baseline_and_git_allowlist(
+        package: &str,
+        baseline: &str,
+        git_clone_allowlist: HashSet<String>,
+    ) -> PolicyConfig {
+        PolicyConfig {
+            baseline_count: 1,
+            git_clone_allowlist,
+            baseline_overrides: HashMap::from([(package.to_string(), (Some(baseline.to_string()), None))]),
+            ..PolicyConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn flags_newly_introduced_bun_execution() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (("evil-pkg".to_string(), "1.3.0".to_string()),
+                 "execve(\"/tmp/b/bun\", [\"/tmp/b/bun\", \"run\", \"_index.js\"], 0x7ff) = 0\n".to_string()),
+                (("evil-pkg".to_string(), "1.2.0".to_string()),
+                 "execve(\"/usr/bin/node\", [\"node\", \"index.js\"], 0x7ff) = 0\n".to_string()),
+            ]),
+        };
+        let results = scan_packages_versions(&runner, "npm", &[("evil-pkg".to_string(), "1.3.0".to_string())],
+            &policy_with_baseline_and_process_allowlist("evil-pkg", "1.2.0", HashSet::new())).await;
+        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        assert_eq!(results.get("evil-pkg|1.3.0").map(|r| r.allowed), Some(false));
+    }
+
+    #[tokio::test]
+    async fn flags_existing_bun_with_additional_invocation() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (("buildy".to_string(), "2.1.0".to_string()),
+                 "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"build\"], 0x7ff) = 0\nexecve(\"/tmp/b/bun\", [\"bun\", \"run\", \"_index.js\"], 0x7ff) = 0\n".to_string()),
+                (("buildy".to_string(), "2.0.0".to_string()),
+                 "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"build\"], 0x7ff) = 0\n".to_string()),
+            ]),
+        };
+        let results = scan_packages_versions(&runner, "npm", &[("buildy".to_string(), "2.1.0".to_string())],
+            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new())).await;
+        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(false));
+    }
+
+    #[tokio::test]
+    async fn allows_when_bun_behavior_matches_baseline() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        let trace = "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"build\"], 0x7ff) = 0\n".to_string();
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (("buildy".to_string(), "2.1.0".to_string()), trace.clone()),
+                (("buildy".to_string(), "2.0.0".to_string()), trace),
+            ]),
+        };
+        let results = scan_packages_versions(&runner, "npm", &[("buildy".to_string(), "2.1.0".to_string())],
+            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new())).await;
+        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(true));
+    }
+
+    #[tokio::test]
+    async fn allows_new_bun_when_allowlisted() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (("buildy".to_string(), "2.1.0".to_string()),
+                 "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"approved-task\"], 0x7ff) = 0\n".to_string()),
+                (("buildy".to_string(), "2.0.0".to_string()),
+                 "execve(\"/usr/bin/node\", [\"node\", \"index.js\"], 0x7ff) = 0\n".to_string()),
+            ]),
+        };
+        let allowlist: HashSet<String> = ["bun|run|approved-task".to_string()].into_iter().collect();
+        let results = scan_packages_versions(&runner, "npm", &[("buildy".to_string(), "2.1.0".to_string())],
+            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", allowlist)).await;
+        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(true));
+    }
+
+    // ---------------------------------------------------------------------------
+    // git_clone_scan_tests (moved from tests/git_clone_scan_tests.rs)
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn scan_flags_new_install_time_git_clone_behavior() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (("pkg-a".to_string(), "1.3.0".to_string()),
+                 "execve(\"/usr/bin/git\", [\"git\", \"clone\", \"https://github.com/evil/repo.git\"], 0x7ff) = 0\n".to_string()),
+                (("pkg-a".to_string(), "1.2.0".to_string()),
+                 "execve(\"/usr/bin/sh\", [\"sh\", \"-c\", \"echo ok\"], 0x7ff) = 0\n".to_string()),
+            ]),
+        };
+        let results = scan_packages_versions(&runner, "npm", &[("pkg-a".to_string(), "1.3.0".to_string())],
+            &policy_with_baseline_and_git_allowlist("pkg-a", "1.2.0", HashSet::new())).await;
+        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        assert_eq!(results.get("pkg-a|1.3.0").map(|r| r.allowed), Some(false));
+    }
+
+    #[tokio::test]
+    async fn scan_allows_when_install_time_git_clone_behavior_matches_baseline() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        let trace = "execve(\"/usr/bin/git\", [\"git\", \"clone\", \"https://github.com/acme/repo.git\"], 0x7ff) = 0\n".to_string();
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (("pkg-b".to_string(), "1.3.0".to_string()), trace.clone()),
+                (("pkg-b".to_string(), "1.2.0".to_string()), trace),
+            ]),
+        };
+        let results = scan_packages_versions(&runner, "npm", &[("pkg-b".to_string(), "1.3.0".to_string())],
+            &policy_with_baseline_and_git_allowlist("pkg-b", "1.2.0", HashSet::new())).await;
+        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        assert_eq!(results.get("pkg-b|1.3.0").map(|r| r.allowed), Some(true));
+    }
+
+    #[tokio::test]
+    async fn scan_allows_new_git_clone_behavior_when_target_is_allowlisted() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (("pkg-c".to_string(), "1.3.0".to_string()),
+                 "execve(\"/usr/bin/git\", [\"git\", \"clone\", \"https://github.com/acme/approved.git\"], 0x7ff) = 0\n".to_string()),
+                (("pkg-c".to_string(), "1.2.0".to_string()),
+                 "execve(\"/usr/bin/sh\", [\"sh\", \"-c\", \"echo ok\"], 0x7ff) = 0\n".to_string()),
+            ]),
+        };
+        let git_clone_allowlist: HashSet<String> = ["https://github.com/acme/approved.git".to_string()].into_iter().collect();
+        let results = scan_packages_versions(&runner, "npm", &[("pkg-c".to_string(), "1.3.0".to_string())],
+            &policy_with_baseline_and_git_allowlist("pkg-c", "1.2.0", git_clone_allowlist)).await;
+        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        assert_eq!(results.get("pkg-c|1.3.0").map(|r| r.allowed), Some(true));
+    }
+
+    // --- gap #13: filter_allowlisted_git_clone_signatures — recursive suffix stripped before match ---
+
+    #[test]
+    fn git_clone_allowlist_matches_recursive_clone_of_allowed_url() {
+        // The allowlist stores the URL; the signature includes |recursive. The URL
+        // must be extracted before comparison so the recursive flag does not prevent
+        // the allowlisted URL from matching.
+        let signatures = vec![
+            "https://github.com/acme/repo.git|recursive".to_string(),
+        ];
+        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()].into_iter().collect();
+        let (remaining, allowlisted) = filter_allowlisted_git_clone_signatures(signatures, &allowlist);
+        assert!(remaining.is_empty(), "recursive clone of an allowed URL must be allowlisted");
+        assert_eq!(allowlisted, vec!["https://github.com/acme/repo.git|recursive".to_string()]);
+    }
+
+    #[test]
+    fn git_clone_allowlist_matches_non_recursive_clone_of_allowed_url() {
+        let signatures = vec!["https://github.com/acme/repo.git|non-recursive".to_string()];
+        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()].into_iter().collect();
+        let (remaining, allowlisted) = filter_allowlisted_git_clone_signatures(signatures, &allowlist);
+        assert!(remaining.is_empty());
+        assert_eq!(allowlisted.len(), 1);
+    }
+
+    #[test]
+    fn git_clone_allowlist_does_not_match_different_url() {
+        let signatures = vec!["https://github.com/evil/repo.git|non-recursive".to_string()];
+        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()].into_iter().collect();
+        let (remaining, allowlisted) = filter_allowlisted_git_clone_signatures(signatures, &allowlist);
+        assert_eq!(remaining.len(), 1);
+        assert!(allowlisted.is_empty());
+    }
+
+    // --- gap #14: select_effective_baselines — override version equal to current ---
+
+    #[test]
+    fn override_equal_to_current_is_included_as_baseline_producing_empty_diff() {
+        // An override that pins the same version as `current` means the baseline IS
+        // the current version. The diff will always be empty — no anomaly ever fires.
+        // This is a footgun: the test documents the behavior so a future change that
+        // guards against it is visible and deliberate.
+        let override_pair = (Some("3.0.0".to_string()), None);
+        let out = select_effective_baselines(
+            "3.0.0",
+            vec!["2.9.0".to_string()],
+            Some(&override_pair),
+            2,
+        );
+        // The override version equals current; it ends up in the baseline set.
+        // Any scan using this baseline will produce an empty diff — always allowed.
+        assert!(out.contains(&"3.0.0".to_string()),
+            "override equal to current is currently included; if this changes, update the override validation in load_policy_config");
+    }
+
+    #[test]
+    fn override_different_from_current_is_used_normally() {
+        let override_pair = (Some("2.8.0".to_string()), None);
+        let out = select_effective_baselines(
+            "3.0.0",
+            vec!["2.9.0".to_string(), "2.7.0".to_string()],
+            Some(&override_pair),
+            2,
+        );
+        assert!(out.contains(&"2.8.0".to_string()));
+        assert!(!out.contains(&"3.0.0".to_string()));
+    }
+
+    // --- gap #15: scan_packages_versions — missing baseline trace fails closed ---
+
+    #[tokio::test]
+    async fn scan_fails_closed_when_one_baseline_trace_is_missing() {
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+
+        // Runner has trace for current and baseline-1 but NOT baseline-2.
+        // With baseline_count=2 both baselines are in the plan; the missing one
+        // must cause a fail-closed result rather than a silent partial diff.
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (("pkg".to_string(), "2.0.0".to_string()),
+                 "sin_addr=inet_addr(\"1.2.3.4\")\n".to_string()),
+                (("pkg".to_string(), "1.9.0".to_string()),
+                 "sin_addr=inet_addr(\"1.2.3.4\")\n".to_string()),
+                // baseline-2 ("1.8.0") intentionally absent from the map
+            ]),
+        };
+
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            baseline_overrides: HashMap::from([(
+                "pkg".to_string(),
+                (Some("1.9.0".to_string()), Some("1.8.0".to_string())),
+            )]),
+            ..PolicyConfig::default()
+        };
+
+        let results = scan_packages_versions(&runner, "pip", &[("pkg".to_string(), "2.0.0".to_string())], &policy).await;
+
+        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+
+        assert_eq!(results.get("pkg|2.0.0").map(|r| r.allowed), Some(false),
+            "missing baseline trace must fail closed, not silently allow");
+    }
+
 }
 
-pub async fn scan_package_versions(
+pub(crate) async fn scan_package_versions(
     runner: &dyn SandboxRunner,
     manager: &str,
     pkg_name: &str,
