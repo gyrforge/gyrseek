@@ -1,0 +1,54 @@
+#!/bin/bash
+
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+auto/cargo-build
+
+VERSION="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+VERSION_SUFFIX=""
+if [[ -n "$VERSION" ]]; then
+	VERSION_SUFFIX="-v$VERSION"
+fi
+
+if [[ "$(uname -s)" == "Darwin" ]]; then
+	BIN_NAME="gyrseek"
+	VERSIONED_BIN_NAME="${BIN_NAME}${VERSION_SUFFIX}"
+	SRC_BIN="target/release/$BIN_NAME"
+	DEST_DIR=""
+
+	for dir in /opt/homebrew/bin /usr/local/bin; do
+		if [[ -d "$dir" && -w "$dir" ]]; then
+			DEST_DIR="$dir"
+			break
+		fi
+	done
+
+	if [[ -z "$DEST_DIR" ]]; then
+		DEST_DIR="$HOME/.local/bin"
+		mkdir -p "$DEST_DIR"
+	fi
+
+	cp "$SRC_BIN" "$DEST_DIR/$VERSIONED_BIN_NAME"
+	cp "$SRC_BIN" "$DEST_DIR/$BIN_NAME"
+	chmod +x "$DEST_DIR/$VERSIONED_BIN_NAME" "$DEST_DIR/$BIN_NAME"
+	echo "Installed $VERSIONED_BIN_NAME to $DEST_DIR/$VERSIONED_BIN_NAME"
+	echo "Updated callable binary at $DEST_DIR/$BIN_NAME"
+
+	# We install to exactly one directory (DEST_DIR). Any other gyrseek copy on a
+	# standard bin dir will shadow it depending on PATH order / the shell's command
+	# hash, leaving you running a stale binary. Warn loudly so it can be removed.
+	stale_found=0
+	for dir in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin"; do
+		[[ "$dir" == "$DEST_DIR" ]] && continue
+		if [[ -e "$dir/$BIN_NAME" ]]; then
+			echo "⚠️  Stale gyrseek found at $dir/$BIN_NAME (shadows $DEST_DIR/$BIN_NAME)."
+			echo "    Remove it with: rm -f $dir/$BIN_NAME $dir/${BIN_NAME}-v*"
+			echo "    (prefix with sudo if it is owned by root)"
+			stale_found=1
+		fi
+	done
+	if [[ "$stale_found" -eq 1 ]]; then
+		echo "    Then run 'hash -r' to clear your shell's cached command path."
+	fi
+fi

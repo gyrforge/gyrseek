@@ -738,6 +738,15 @@ async fn scan_many_with_cache(
 }
 
 pub async fn run(args: Vec<String>) {
+    // Handle --version/-V as a top-level flag before anything else so it works
+    // without a config file, Docker, or a recognized manager subcommand. Only
+    // the first arg is checked so a forwarded command's own --version flag
+    // (e.g. `gyrseek pip install foo --version`) is left untouched.
+    if matches!(args.first().map(String::as_str), Some("--version") | Some("-V")) {
+        println!("gyrseek {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let (args, config_path, config_explicit) = match parse_global_options(args) {
         Ok(v) => v,
         Err(e) => {
