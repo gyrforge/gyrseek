@@ -21,7 +21,7 @@
 - Run lint checks: just lint
 - Format code: just fmt
 - Run inline tests for one module: cargo test --lib scanning / cargo test --lib parsing / cargo test --lib
-- Run CLI integration tests (spawn binary): cargo test --test cli_burst_exit_tests / cargo test --test forward_fail_closed_tests
+- Run CLI integration tests (spawn binary): cargo test --test cli_burst_exit_tests / cargo test --test forward_fail_closed_tests / cargo test --test lock_routing_tests / cargo test --test version_flag_tests
 
 ## Policy Config Surface
 - Primary policy file: gyrseek.yaml (or override with --config / GYRSEEK_CONFIG).
@@ -33,6 +33,7 @@
 	- baseline_count
 	- min_baseline_age_hours
 	- new_package_exemptions
+	- internal_package_exemptions (skip first-party/private-index packages entirely — no fetch/probe/diff)
 	- minimum_release_age_package
 	- release_burst_threshold
 	- release_burst_window_hours
@@ -54,8 +55,8 @@
 
 ## Test Locations
 - Follow Rust convention: unit tests for private/internal functions live inline in the module's `#[cfg(test)] mod tests` (they can see private items); integration tests that exercise the public API or need a real subprocess live under tests/.
-- Pure-function unit tests live inline in their src/ module (version ordering, trace extraction, FCrDNS, bracketed-argv parsing, docker arg construction, SYS_PTRACE, PEP 508 extras stripping, poetry/uv local-source exclusion, npm non-registry filtering, git-clone allowlist matching, missing-baseline fail-closed, uv lock upgrade arg edge cases); keep these alongside the code they cover.
-- Anything that can only be observed from outside the process belongs in tests/ — e.g. host exit-status propagation (`std::process::exit`) is covered in tests/forward_fail_closed_tests.rs because exit codes are only visible to a spawning parent.
+- Pure-function unit tests live inline in their src/ module (version ordering, trace extraction including sandbox-local IP filtering / `::ffff:` collapse / metadata-IP preservation, FCrDNS, bracketed-argv parsing, docker arg construction, SYS_PTRACE, PEP 508 extras stripping, poetry/uv local-source exclusion, npm non-registry filtering, git-clone allowlist matching, IP allowlist IPv4-mapped/bare equivalence, internal-package-exemption skip, missing-baseline fail-closed, uv lock upgrade arg edge cases); keep these alongside the code they cover.
+- Anything that can only be observed from outside the process belongs in tests/ — e.g. host exit-status propagation (`std::process::exit`) in tests/forward_fail_closed_tests.rs, command routing (bare `poetry lock`/`uv lock` reaching the scan branch) in tests/lock_routing_tests.rs, and the `--version` short-circuit in tests/version_flag_tests.rs, because these are only visible to a spawning parent.
 
 ## Required Change Hygiene
 After every repository change:

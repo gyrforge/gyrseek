@@ -40,6 +40,8 @@ struct GyrseekConfig {
     #[serde(default)]
     new_package_exemptions: Vec<String>,
     #[serde(default)]
+    internal_package_exemptions: Vec<String>,
+    #[serde(default)]
     release_burst_threshold: Option<usize>,
     #[serde(default)]
     release_burst_window_hours: Option<usize>,
@@ -196,6 +198,15 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         new_package_exemptions.insert(package);
     }
 
+    let mut internal_package_exemptions = HashSet::new();
+    for package in cfg.internal_package_exemptions {
+        let package = package.trim().to_string();
+        if package.is_empty() {
+            continue;
+        }
+        internal_package_exemptions.insert(package);
+    }
+
     let release_burst_threshold = match cfg.release_burst_threshold {
         Some(0) => {
             println!(
@@ -256,6 +267,7 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         baseline_count,
         min_baseline_age_hours_by_package: min_baseline_age_hours,
         new_package_exemptions,
+        internal_package_exemptions,
         release_burst_threshold,
         release_burst_window_hours,
         minimum_release_age_package,
@@ -399,6 +411,34 @@ mod config_tests {
         assert!(cfg.new_package_exemptions.contains("requests"));
         assert!(cfg.new_package_exemptions.contains("lodash"));
         assert_eq!(cfg.new_package_exemptions.len(), 2);
+    }
+
+    #[test]
+    fn parses_internal_package_exemptions() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(
+            file,
+            "internal_package_exemptions:\n  - internal-pkg-logger\n  - '  internal-thing  '\n  - '  '"
+        )
+        .expect("config should be written");
+
+        let cfg = load(&file);
+        assert!(
+            cfg.internal_package_exemptions
+                .contains("internal-pkg-logger")
+        );
+        // Trimmed of surrounding whitespace, blank entries dropped.
+        assert!(cfg.internal_package_exemptions.contains("internal-thing"));
+        assert_eq!(cfg.internal_package_exemptions.len(), 2);
+    }
+
+    #[test]
+    fn missing_internal_package_exemptions_defaults_empty() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "baseline_count: 2").expect("config should be written");
+
+        let cfg = load(&file);
+        assert!(cfg.internal_package_exemptions.is_empty());
     }
 
     #[test]
@@ -808,6 +848,12 @@ pub async fn run(args: Vec<String>) {
         println!(
             "ℹ️ [gyrseek] Loaded new package exemptions for {} package(s)",
             policy.new_package_exemptions.len()
+        );
+    }
+    if !policy.internal_package_exemptions.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] Loaded internal package exemptions for {} package(s)",
+            policy.internal_package_exemptions.len()
         );
     }
     if let Some(threshold) = policy.release_burst_threshold {

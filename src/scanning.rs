@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Duration, Utc};
@@ -21,6 +21,11 @@ pub(crate) struct PolicyConfig {
     pub baseline_count: usize,
     pub min_baseline_age_hours_by_package: HashMap<String, usize>,
     pub new_package_exemptions: HashSet<String>,
+    /// Packages that are skipped entirely — no registry history fetch, no
+    /// sandbox install, no diff. Intended for first-party / internal packages
+    /// served from a private index (e.g. Nexus) that gyrseek's open-source
+    /// registry lookups cannot resolve, so scanning them only produces noise.
+    pub internal_package_exemptions: HashSet<String>,
     pub release_burst_threshold: Option<usize>,
     pub release_burst_window_hours: usize,
     pub minimum_release_age_package: Option<usize>,
@@ -51,6 +56,7 @@ impl Default for PolicyConfig {
             baseline_count: 2,
             min_baseline_age_hours_by_package: HashMap::new(),
             new_package_exemptions: HashSet::new(),
+            internal_package_exemptions: HashSet::new(),
             release_burst_threshold: None,
             release_burst_window_hours: 24,
             minimum_release_age_package: None,
@@ -138,6 +144,56 @@ struct NpmResponse {
 
 const DEFAULT_MIN_BASELINE_AGE_HOURS: i64 = 2;
 
+/// The cloud instance metadata endpoint (link-local by address, but a real
+/// SSRF / credential-theft target). We never filter it as "local noise" so a
+/// package reaching for it is always surfaced.
+const CLOUD_METADATA_IPV4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
+
+/// Canonicalises an IP string for comparison. Beyond `IpAddr`'s own
+/// normalisation (textual IPv6 forms), this collapses IPv4-mapped IPv6
+/// (`::ffff:172.17.0.2`) down to its bare IPv4 form (`172.17.0.2`) so the two
+/// representations compare equal against baselines and allowlists. Unparseable
+/// inputs are returned unchanged.
+pub(crate) fn normalize_ip_string(ip: &str) -> String {
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V6(v6)) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => IpAddr::V6(v6).to_string(),
+        },
+        Ok(addr) => addr.to_string(),
+        Err(_) => ip.to_string(),
+    }
+}
+
+/// True for addresses that are sandbox plumbing rather than meaningful
+/// destinations: loopback, link-local, and private (RFC1918 / Docker bridge /
+/// Docker Desktop gateway) ranges. These can never represent exfiltration off
+/// the host from inside an isolated single-container sandbox, so filtering them
+/// before the baseline diff removes a whole class of harness-nondeterminism
+/// false positives. The cloud metadata endpoint is deliberately exempt.
+pub(crate) fn is_sandbox_local_ip(ip: &str) -> bool {
+    // Compare on the IPv4-mapped-collapsed form so `::ffff:10.0.0.1` is judged
+    // by its IPv4 semantics.
+    let addr: IpAddr = match normalize_ip_string(ip).parse() {
+        Ok(addr) => addr,
+        Err(_) => return false,
+    };
+
+    match addr {
+        IpAddr::V4(v4) => {
+            if v4 == CLOUD_METADATA_IPV4 {
+                return false;
+            }
+            v4.is_loopback() || v4.is_private() || v4.is_link_local()
+        }
+        IpAddr::V6(v6) => {
+            // fe80::/10 link-local (no stable std helper) plus loopback.
+            let is_link_local = (v6.segments()[0] & 0xffc0) == 0xfe80;
+            v6.is_loopback() || is_link_local
+        }
+    }
+}
+
 /// Returns connections present in the current version but absent in baseline versions.
 pub(crate) fn find_new_connections(
     ips_curr: &HashSet<String>,
@@ -155,13 +211,16 @@ pub(crate) fn filter_allowlisted_new_connections(
 
     let canonical_allowlist: HashSet<String> = ip_allowlist
         .iter()
-        .filter_map(|ip| ip.parse::<IpAddr>().ok().map(|addr| addr.to_string()))
+        .filter_map(|ip| ip.parse::<IpAddr>().ok().map(|_| normalize_ip_string(ip)))
         .collect();
 
     for ip in new_connections {
         match ip.parse::<IpAddr>() {
-            Ok(addr) => {
-                let canonical = addr.to_string();
+            Ok(_) => {
+                // Compare on the IPv4-mapped-collapsed form so an allowlist
+                // entry of `172.17.0.2` matches a `::ffff:172.17.0.2` hit and
+                // vice versa.
+                let canonical = normalize_ip_string(&ip);
                 if canonical_allowlist.contains(&canonical) {
                     allowlisted.push(ip);
                 } else {
@@ -445,9 +504,16 @@ fn trace_sandbox_install_matrix(
 ///
 /// IPv4 appears as `sin_addr=inet_addr("1.2.3.4")`. IPv6 appears as
 /// `sin6_addr=inet_pton(AF_INET6, "2001:db8::1", ...)` (and the abbreviated
-/// `inet_pton("2001:db8::1")` form some strace builds emit). Captured IPv6
-/// values are normalised through `IpAddr` so equivalent textual forms compare
-/// equal against baselines and allowlists.
+/// `inet_pton("2001:db8::1")` form some strace builds emit). Captured values
+/// are run through [`normalize_ip_string`] so equivalent textual forms — and
+/// IPv4-mapped IPv6 (`::ffff:1.2.3.4`) vs bare IPv4 — compare equal against
+/// baselines and allowlists.
+///
+/// Sandbox-local addresses (loopback / link-local / private — see
+/// [`is_sandbox_local_ip`]) are dropped here, before any baseline diff, because
+/// inside an isolated single-container sandbox they are the container's own
+/// plumbing (Docker bridge, host gateway, DNS resolver) and can never be a
+/// meaningful exfiltration signal. The cloud metadata endpoint is exempt.
 fn extract_connection_ips(trace: &str) -> HashSet<String> {
     static V4: OnceLock<Regex> = OnceLock::new();
     static V6: OnceLock<Regex> = OnceLock::new();
@@ -460,16 +526,17 @@ fn extract_connection_ips(trace: &str) -> HashSet<String> {
 
     let mut ips = HashSet::new();
     for cap in v4.captures_iter(trace) {
-        ips.insert(cap[1].to_string());
+        let canonical = normalize_ip_string(&cap[1]);
+        if !is_sandbox_local_ip(&canonical) {
+            ips.insert(canonical);
+        }
     }
     for cap in v6.captures_iter(trace) {
         if let Some(raw) = cap.get(1).or_else(|| cap.get(2)) {
-            let raw = raw.as_str();
-            let canonical = raw
-                .parse::<IpAddr>()
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|_| raw.to_string());
-            ips.insert(canonical);
+            let canonical = normalize_ip_string(raw.as_str());
+            if !is_sandbox_local_ip(&canonical) {
+                ips.insert(canonical);
+            }
         }
     }
     ips
@@ -840,6 +907,25 @@ pub(crate) async fn scan_packages_versions(
 
     let mut plans = Vec::new();
     for (pkg_name, tgt_version) in pkg_targets {
+        // Internal packages are skipped before any network call: they live on a
+        // private index gyrseek can't query, so a history fetch would 404 and
+        // every endpoint would look "new" against an empty baseline. Allow them
+        // through unscanned, pinned to whatever version was requested.
+        if policy.internal_package_exemptions.contains(pkg_name) {
+            println!(
+                "⏭️ [gyrseek] Package '{}' is listed in internal_package_exemptions; skipping scan (private/first-party index).",
+                pkg_name
+            );
+            results.insert(
+                format!("{}|{}", pkg_name, tgt_version),
+                ScanReport {
+                    allowed: true,
+                    resolved_version: tgt_version.clone(),
+                },
+            );
+            continue;
+        }
+
         let min_baseline_age_hours = policy
             .min_baseline_age_hours_by_package
             .get(pkg_name)
@@ -1197,8 +1283,9 @@ mod tests {
         filter_allowlisted_git_clone_signatures, filter_allowlisted_new_connections,
         filter_allowlisted_process_exec_signatures, filter_domain_allowlisted_new_connections_with,
         find_new_connections, find_new_process_exec_signatures, forward_confirmed_hostname,
-        minimum_release_age_policy_warning, npm_published_times, scan_packages_versions,
-        select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
+        is_sandbox_local_ip, minimum_release_age_policy_warning, normalize_ip_string,
+        npm_published_times, scan_packages_versions, select_age_eligible_baselines,
+        select_effective_baselines, sort_versions_ascending,
     };
     use chrono::Duration;
     use std::cmp::Ordering;
@@ -1298,12 +1385,90 @@ mod tests {
     fn extract_connection_ips_handles_mixed_v4_and_v6() {
         let trace = r#"
 sin_addr=inet_addr("8.8.8.8")
-sin6_addr=inet_pton(AF_INET6, "fe80::1")
+sin6_addr=inet_pton(AF_INET6, "2606:2800:220:1:248:1893:25c8:1946")
 "#;
         let ips = extract_connection_ips(trace);
         assert!(ips.contains("8.8.8.8"));
-        assert!(ips.contains("fe80::1"));
+        assert!(ips.contains("2606:2800:220:1:248:1893:25c8:1946"));
         assert_eq!(ips.len(), 2);
+    }
+
+    // --- Sandbox-local IPs are dropped at extraction, before the baseline diff ---
+
+    #[test]
+    fn extract_connection_ips_drops_loopback_link_local_and_private() {
+        let trace = r#"
+sin_addr=inet_addr("8.8.8.8")
+sin_addr=inet_addr("127.0.0.1")
+sin_addr=inet_addr("172.17.0.2")
+sin_addr=inet_addr("192.168.65.7")
+sin_addr=inet_addr("10.1.2.3")
+sin6_addr=inet_pton(AF_INET6, "::1")
+sin6_addr=inet_pton(AF_INET6, "fe80::1")
+"#;
+        let ips = extract_connection_ips(trace);
+        // Only the public address survives; all sandbox plumbing is filtered.
+        assert_eq!(ips, ["8.8.8.8".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn extract_connection_ips_collapses_ipv4_mapped_ipv6() {
+        // A Docker-bridge hit seen as IPv4-mapped IPv6 must be recognised as the
+        // private IPv4 address it really is, and dropped.
+        let trace = r#"sin6_addr=inet_pton(AF_INET6, "::ffff:172.17.0.2")"#;
+        let ips = extract_connection_ips(trace);
+        assert!(ips.is_empty());
+    }
+
+    #[test]
+    fn extract_connection_ips_keeps_public_ipv4_mapped_ipv6_as_ipv4() {
+        let trace = r#"sin6_addr=inet_pton(AF_INET6, "::ffff:8.8.8.8")"#;
+        let ips = extract_connection_ips(trace);
+        // Collapsed to its bare IPv4 form so it diffs/allowlists consistently.
+        assert_eq!(ips, ["8.8.8.8".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn extract_connection_ips_keeps_cloud_metadata_endpoint() {
+        // 169.254.169.254 is link-local by address but a real SSRF target, so it
+        // must NOT be filtered as local noise.
+        let trace = r#"sin_addr=inet_addr("169.254.169.254")"#;
+        let ips = extract_connection_ips(trace);
+        assert!(ips.contains("169.254.169.254"));
+    }
+
+    #[test]
+    fn is_sandbox_local_ip_classification() {
+        for local in [
+            "127.0.0.1",
+            "::1",
+            "10.0.0.1",
+            "172.17.0.2",
+            "192.168.65.7",
+            "fe80::1",
+            "::ffff:172.17.0.2",
+        ] {
+            assert!(is_sandbox_local_ip(local), "{local} should be local");
+        }
+        for public in [
+            "8.8.8.8",
+            "151.101.0.223",
+            "169.254.169.254",
+            "2606:2800::1",
+        ] {
+            assert!(!is_sandbox_local_ip(public), "{public} should not be local");
+        }
+    }
+
+    #[test]
+    fn normalize_ip_string_collapses_mapped_and_preserves_others() {
+        assert_eq!(normalize_ip_string("::ffff:172.17.0.2"), "172.17.0.2");
+        assert_eq!(normalize_ip_string("8.8.8.8"), "8.8.8.8");
+        assert_eq!(
+            normalize_ip_string("2001:0db8:0000:0000:0000:0000:0000:0001"),
+            "2001:db8::1"
+        );
+        assert_eq!(normalize_ip_string("not-an-ip"), "not-an-ip");
     }
 
     // --- #6 created/modified must not inflate the release-burst count ---
@@ -1931,6 +2096,25 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         );
     }
 
+    #[test]
+    fn ip_allowlist_matches_across_ipv4_mapped_and_bare_forms() {
+        // A bare-IPv4 allowlist entry must match an IPv4-mapped IPv6 hit...
+        let (remaining, allowlisted) = filter_allowlisted_new_connections(
+            vec!["::ffff:203.0.113.5".to_string()],
+            &["203.0.113.5".to_string()].into_iter().collect(),
+        );
+        assert!(remaining.is_empty());
+        assert_eq!(allowlisted, vec!["::ffff:203.0.113.5".to_string()]);
+
+        // ...and an IPv4-mapped allowlist entry must match a bare-IPv4 hit.
+        let (remaining, allowlisted) = filter_allowlisted_new_connections(
+            vec!["203.0.113.5".to_string()],
+            &["::ffff:203.0.113.5".to_string()].into_iter().collect(),
+        );
+        assert!(remaining.is_empty());
+        assert_eq!(allowlisted, vec!["203.0.113.5".to_string()]);
+    }
+
     // ---------------------------------------------------------------------------
     // git_clone_behavior_tests (moved from tests/git_clone_behavior_tests.rs)
     // ---------------------------------------------------------------------------
@@ -2360,6 +2544,99 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             results.get("pkg|2.0.0").map(|r| r.allowed),
             Some(false),
             "missing baseline trace must fail closed, not silently allow"
+        );
+    }
+
+    #[tokio::test]
+    async fn internal_package_exemption_skips_scan_entirely() {
+        // An empty runner has NO traces, so any sandbox install would error and
+        // fail closed. The internal exemption must short-circuit before the
+        // registry fetch and the sandbox matrix, yielding an allowed result
+        // pinned to the requested version.
+        let runner = MockRunner {
+            traces: HashMap::new(),
+        };
+
+        let policy = PolicyConfig {
+            internal_package_exemptions: ["internal-pkg-logger".to_string()].into_iter().collect(),
+            ..PolicyConfig::default()
+        };
+
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("internal-pkg-logger".to_string(), "0.5.0".to_string())],
+            &policy,
+        )
+        .await;
+
+        let report = results
+            .get("internal-pkg-logger|0.5.0")
+            .expect("result present");
+        assert!(report.allowed, "internal-exempt package must be allowed");
+        assert_eq!(
+            report.resolved_version, "0.5.0",
+            "internal-exempt package keeps its requested version (no resolution)"
+        );
+    }
+
+    #[tokio::test]
+    async fn internal_package_exemption_only_skips_listed_package() {
+        // A non-exempt package alongside an exempt one must still be scanned.
+        // The exempt one is skipped without a trace; the scanned one diffs
+        // cleanly against its baseline and is allowed.
+        let _guard = env_lock().lock().expect("env lock");
+        unsafe {
+            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        }
+
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (
+                    ("public-pkg".to_string(), "2.0.0".to_string()),
+                    "sin_addr=inet_addr(\"1.2.3.4\")\n".to_string(),
+                ),
+                (
+                    ("public-pkg".to_string(), "1.9.0".to_string()),
+                    "sin_addr=inet_addr(\"1.2.3.4\")\n".to_string(),
+                ),
+            ]),
+        };
+
+        let policy = PolicyConfig {
+            baseline_count: 1,
+            internal_package_exemptions: ["internal-pkg".to_string()].into_iter().collect(),
+            baseline_overrides: HashMap::from([(
+                "public-pkg".to_string(),
+                (Some("1.9.0".to_string()), None),
+            )]),
+            ..PolicyConfig::default()
+        };
+
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[
+                ("internal-pkg".to_string(), "0.1.0".to_string()),
+                ("public-pkg".to_string(), "2.0.0".to_string()),
+            ],
+            &policy,
+        )
+        .await;
+
+        unsafe {
+            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
+        }
+
+        assert_eq!(
+            results.get("internal-pkg|0.1.0").map(|r| r.allowed),
+            Some(true),
+            "exempt package skipped and allowed"
+        );
+        assert_eq!(
+            results.get("public-pkg|2.0.0").map(|r| r.allowed),
+            Some(true),
+            "non-exempt package still scanned (clean diff -> allowed)"
         );
     }
 }
