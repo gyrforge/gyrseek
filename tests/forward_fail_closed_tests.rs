@@ -34,7 +34,11 @@ fn forwarding_a_missing_host_binary_fails_closed() {
         .output()
         .expect("gyrseek process should run");
 
-    assert_eq!(output.status.code(), Some(1), "should exit non-zero when host binary is missing");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "should exit non-zero when host binary is missing"
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(

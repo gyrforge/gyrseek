@@ -50,9 +50,7 @@ fn exits_with_code_1_and_warning_when_release_burst_threshold_triggers() {
 
 #[test]
 fn exits_with_code_1_and_uses_configured_release_burst_window_hours() {
-    let output = run_with_config(
-        "release_burst_threshold: 3\nrelease_burst_window_hours: 12\n",
-    );
+    let output = run_with_config("release_burst_threshold: 3\nrelease_burst_window_hours: 12\n");
 
     assert_eq!(output.status.code(), Some(1));
 

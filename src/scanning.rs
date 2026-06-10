@@ -139,7 +139,10 @@ struct NpmResponse {
 const DEFAULT_MIN_BASELINE_AGE_HOURS: i64 = 2;
 
 /// Returns connections present in the current version but absent in baseline versions.
-pub(crate) fn find_new_connections(ips_curr: &HashSet<String>, baseline_ips: &HashSet<String>) -> Vec<String> {
+pub(crate) fn find_new_connections(
+    ips_curr: &HashSet<String>,
+    baseline_ips: &HashSet<String>,
+) -> Vec<String> {
     ips_curr.difference(baseline_ips).cloned().collect()
 }
 
@@ -280,9 +283,10 @@ pub(crate) async fn fetch_history_with_baselines(
     let forced_releases_last_24h = std::env::var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H")
         .ok()
         .and_then(|v| v.parse::<usize>().ok());
-    let forced_current_release_age_days = std::env::var("GYRSEEK_TEST_FORCE_CURRENT_RELEASE_AGE_DAYS")
-        .ok()
-        .and_then(|v| v.parse::<i64>().ok());
+    let forced_current_release_age_days =
+        std::env::var("GYRSEEK_TEST_FORCE_CURRENT_RELEASE_AGE_DAYS")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok());
     if forced_releases_last_24h.is_some() || forced_current_release_age_days.is_some() {
         return (
             target_v.to_string(),
@@ -292,95 +296,122 @@ pub(crate) async fn fetch_history_with_baselines(
         );
     }
 
-    println!("🔍 [gyrseek] Fetching version matrix from registry for '{}'...", package);
+    println!(
+        "🔍 [gyrseek] Fetching version matrix from registry for '{}'...",
+        package
+    );
     let client = reqwest::Client::new();
 
     if manager == "npm" {
         let encoded = package.replace('/', "%2f");
         let url = format!("https://registry.npmjs.org/{}", encoded);
         if let Ok(res) = client.get(&url).send().await
-            && let Ok(data) = res.json::<NpmResponse>().await {
-                let mut versions: Vec<String> = data.versions.keys().cloned().collect();
-                sort_versions_ascending(manager, &mut versions);
+            && let Ok(data) = res.json::<NpmResponse>().await
+        {
+            let mut versions: Vec<String> = data.versions.keys().cloned().collect();
+            sort_versions_ascending(manager, &mut versions);
 
-                let current = if target_v == "latest" {
-                    versions.last().cloned().unwrap_or_else(|| target_v.to_string())
-                } else {
-                    target_v.to_string()
-                };
+            let current = if target_v == "latest" {
+                versions
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| target_v.to_string())
+            } else {
+                target_v.to_string()
+            };
 
-                if let Some(idx) = versions.iter().position(|v| v == &current) {
-                    let now = Utc::now();
-                    let cutoff = now - Duration::hours(min_baseline_age_hours.max(0));
-                    let version_keys: HashSet<String> = data.versions.keys().cloned().collect();
-                    let published_at = npm_published_times(&data.time, &version_keys);
-                    let releases_last_24h = count_releases_in_window(
-                        &published_at,
-                        now - Duration::hours(release_burst_window_hours.max(1)),
-                        now,
-                    );
-                    let current_release_age_days = published_at
-                        .get(&current)
-                        .map(|ts| (now - *ts).num_days());
-                    let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
-                    let baselines =
-                        select_age_eligible_baselines(candidates, &published_at, cutoff, baseline_count);
-                    return (current, baselines, releases_last_24h, current_release_age_days);
-                }
+            if let Some(idx) = versions.iter().position(|v| v == &current) {
+                let now = Utc::now();
+                let cutoff = now - Duration::hours(min_baseline_age_hours.max(0));
+                let version_keys: HashSet<String> = data.versions.keys().cloned().collect();
+                let published_at = npm_published_times(&data.time, &version_keys);
+                let releases_last_24h = count_releases_in_window(
+                    &published_at,
+                    now - Duration::hours(release_burst_window_hours.max(1)),
+                    now,
+                );
+                let current_release_age_days =
+                    published_at.get(&current).map(|ts| (now - *ts).num_days());
+                let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
+                let baselines = select_age_eligible_baselines(
+                    candidates,
+                    &published_at,
+                    cutoff,
+                    baseline_count,
+                );
+                return (
+                    current,
+                    baselines,
+                    releases_last_24h,
+                    current_release_age_days,
+                );
             }
+        }
     } else {
         let url = format!("https://pypi.org/pypi/{}/json", package);
         if let Ok(res) = client.get(&url).send().await
-            && let Ok(data) = res.json::<PyPiResponse>().await {
-                let mut versions: Vec<String> = data.releases.keys().cloned().collect();
-                sort_versions_ascending(manager, &mut versions);
+            && let Ok(data) = res.json::<PyPiResponse>().await
+        {
+            let mut versions: Vec<String> = data.releases.keys().cloned().collect();
+            sort_versions_ascending(manager, &mut versions);
 
-                let current = if target_v == "latest" {
-                    versions.last().cloned().unwrap_or_else(|| target_v.to_string())
-                } else {
-                    target_v.to_string()
-                };
+            let current = if target_v == "latest" {
+                versions
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| target_v.to_string())
+            } else {
+                target_v.to_string()
+            };
 
-                if let Some(idx) = versions.iter().position(|v| v == &current) {
-                    let now = Utc::now();
-                    let cutoff = now - Duration::hours(min_baseline_age_hours.max(0));
-                    let mut published_at: HashMap<String, DateTime<Utc>> = HashMap::new();
+            if let Some(idx) = versions.iter().position(|v| v == &current) {
+                let now = Utc::now();
+                let cutoff = now - Duration::hours(min_baseline_age_hours.max(0));
+                let mut published_at: HashMap<String, DateTime<Utc>> = HashMap::new();
 
-                    for (version, files) in data.releases {
-                        let mut earliest: Option<DateTime<Utc>> = None;
-                        for file in files {
-                            let parsed = file
-                                .upload_time_iso_8601
-                                .as_deref()
-                                .or(file.upload_time.as_deref())
-                                .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
-                                .map(|dt| dt.with_timezone(&Utc));
-                            if let Some(parsed) = parsed {
-                                earliest = match earliest {
-                                    Some(curr) if curr <= parsed => Some(curr),
-                                    _ => Some(parsed),
-                                };
-                            }
-                        }
-                        if let Some(ts) = earliest {
-                            published_at.insert(version, ts);
+                for (version, files) in data.releases {
+                    let mut earliest: Option<DateTime<Utc>> = None;
+                    for file in files {
+                        let parsed = file
+                            .upload_time_iso_8601
+                            .as_deref()
+                            .or(file.upload_time.as_deref())
+                            .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                            .map(|dt| dt.with_timezone(&Utc));
+                        if let Some(parsed) = parsed {
+                            earliest = match earliest {
+                                Some(curr) if curr <= parsed => Some(curr),
+                                _ => Some(parsed),
+                            };
                         }
                     }
-                    let releases_last_24h = count_releases_in_window(
-                        &published_at,
-                        now - Duration::hours(release_burst_window_hours.max(1)),
-                        now,
-                    );
-                    let current_release_age_days = published_at
-                        .get(&current)
-                        .map(|ts| (now - *ts).num_days());
-
-                    let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
-                    let baselines =
-                        select_age_eligible_baselines(candidates, &published_at, cutoff, baseline_count);
-                    return (current, baselines, releases_last_24h, current_release_age_days);
+                    if let Some(ts) = earliest {
+                        published_at.insert(version, ts);
+                    }
                 }
+                let releases_last_24h = count_releases_in_window(
+                    &published_at,
+                    now - Duration::hours(release_burst_window_hours.max(1)),
+                    now,
+                );
+                let current_release_age_days =
+                    published_at.get(&current).map(|ts| (now - *ts).num_days());
+
+                let candidates: Vec<String> = versions[..idx].iter().rev().cloned().collect();
+                let baselines = select_age_eligible_baselines(
+                    candidates,
+                    &published_at,
+                    cutoff,
+                    baseline_count,
+                );
+                return (
+                    current,
+                    baselines,
+                    releases_last_24h,
+                    current_release_age_days,
+                );
             }
+        }
     }
 
     (target_v.to_string(), Vec::new(), 0, None)
@@ -399,7 +430,10 @@ fn trace_sandbox_install_matrix(
         let signals = TraceSignals {
             ips: extract_connection_ips(&stderr_str),
             git_clone_signatures: extract_git_clone_signatures(&stderr_str),
-            process_exec_signatures: extract_process_exec_signatures(&stderr_str, watched_executables),
+            process_exec_signatures: extract_process_exec_signatures(
+                &stderr_str,
+                watched_executables,
+            ),
         };
         by_probe.insert((package, version), signals);
     }
@@ -655,9 +689,10 @@ fn select_effective_baselines(
             merged.push(v);
         }
         if let Some(v) = override_m2.clone()
-            && !merged.contains(&v) {
-                merged.push(v);
-            }
+            && !merged.contains(&v)
+        {
+            merged.push(v);
+        }
 
         for v in &baselines {
             if merged.len() >= baseline_count {
@@ -687,12 +722,13 @@ fn select_age_eligible_baselines(
     let mut selected = Vec::new();
     for version in candidates_newest_first {
         if let Some(ts) = published_at.get(&version)
-            && *ts <= cutoff {
-                selected.push(version);
-                if selected.len() >= baseline_count {
-                    break;
-                }
+            && *ts <= cutoff
+        {
+            selected.push(version);
+            if selected.len() >= baseline_count {
+                break;
             }
+        }
     }
     selected
 }
@@ -774,9 +810,7 @@ fn minimum_release_age_policy_warning(
     if age_days < required_days as i64 {
         return Some(format!(
             "⚠️ [gyrseek] minimum_release_age_package triggered for '{}': current release age is {} day(s), required >= {} day(s).",
-            package,
-            age_days,
-            required_days
+            package, age_days, required_days
         ));
     }
 
@@ -810,7 +844,8 @@ pub(crate) async fn scan_packages_versions(
             .min_baseline_age_hours_by_package
             .get(pkg_name)
             .copied()
-            .unwrap_or(DEFAULT_MIN_BASELINE_AGE_HOURS as usize) as i64;
+            .unwrap_or(DEFAULT_MIN_BASELINE_AGE_HOURS as usize)
+            as i64;
 
         let fetch_count = policy.baseline_count.max(2);
         let (v_curr, fetched_baselines, releases_last_24h, current_release_age_days) =
@@ -833,7 +868,10 @@ pub(crate) async fn scan_packages_versions(
             println!("Aborting host operation securely.");
             results.insert(
                 format!("{}|{}", pkg_name, tgt_version),
-                ScanReport { allowed: false, resolved_version: v_curr.clone() },
+                ScanReport {
+                    allowed: false,
+                    resolved_version: v_curr.clone(),
+                },
             );
             continue;
         }
@@ -848,7 +886,10 @@ pub(crate) async fn scan_packages_versions(
             println!("Aborting host operation securely.");
             results.insert(
                 format!("{}|{}", pkg_name, tgt_version),
-                ScanReport { allowed: false, resolved_version: v_curr.clone() },
+                ScanReport {
+                    allowed: false,
+                    resolved_version: v_curr.clone(),
+                },
             );
             continue;
         }
@@ -863,7 +904,8 @@ pub(crate) async fn scan_packages_versions(
         );
 
         let new_package_exempt = policy.new_package_exemptions.contains(pkg_name);
-        let (_, should_warn_exemption) = exemption_behavior(new_package_exempt, eligible_baseline_versions);
+        let (_, should_warn_exemption) =
+            exemption_behavior(new_package_exempt, eligible_baseline_versions);
         if should_warn_exemption {
             println!(
                 "⚠️ [gyrseek] Package '{}' is listed in new_package_exemptions but now has {} eligible baseline versions; consider removing the exemption.",
@@ -874,8 +916,7 @@ pub(crate) async fn scan_packages_versions(
         if policy.baseline_overrides.contains_key(pkg_name) {
             println!(
                 "ℹ️ [gyrseek] Applying baseline override(s) for '{}': baseline set={:?}",
-                pkg_name,
-                baselines
+                pkg_name, baselines
             );
         }
 
@@ -910,25 +951,38 @@ pub(crate) async fn scan_packages_versions(
         }
     }
 
-    let traces_by_probe = match trace_sandbox_install_matrix(runner, manager, &probes, &policy.watched_executables) {
-        Ok(v) => v,
-        Err(e) => {
-            for plan in &plans {
-                println!("❌ [gyrseek] Sandbox execution failed for '{}': {}", plan.package, e);
-                results.insert(
-                    format!("{}|{}", plan.package, plan.target_version),
-                    ScanReport { allowed: false, resolved_version: plan.current.clone() },
-                );
+    let traces_by_probe =
+        match trace_sandbox_install_matrix(runner, manager, &probes, &policy.watched_executables) {
+            Ok(v) => v,
+            Err(e) => {
+                for plan in &plans {
+                    println!(
+                        "❌ [gyrseek] Sandbox execution failed for '{}': {}",
+                        plan.package, e
+                    );
+                    results.insert(
+                        format!("{}|{}", plan.package, plan.target_version),
+                        ScanReport {
+                            allowed: false,
+                            resolved_version: plan.current.clone(),
+                        },
+                    );
+                }
+                return results;
             }
-            return results;
-        }
-    };
+        };
 
     for plan in plans {
         let key = format!("{}|{}", plan.package, plan.target_version);
         let resolved_version = plan.current.clone();
         let blocked = |results: &mut HashMap<String, ScanReport>, key: String| {
-            results.insert(key, ScanReport { allowed: false, resolved_version: resolved_version.clone() });
+            results.insert(
+                key,
+                ScanReport {
+                    allowed: false,
+                    resolved_version: resolved_version.clone(),
+                },
+            );
         };
         let current_key = (plan.package.clone(), plan.current.clone());
         let current_signals = match traces_by_probe.get(&current_key) {
@@ -983,7 +1037,13 @@ pub(crate) async fn scan_packages_versions(
                 "⚠️ [gyrseek] New package exemption applied for '{}': only {} eligible baseline version(s) available (<2). Skipping anomaly block for now.",
                 plan.package, plan.eligible_baseline_versions
             );
-            results.insert(key, ScanReport { allowed: true, resolved_version });
+            results.insert(
+                key,
+                ScanReport {
+                    allowed: true,
+                    resolved_version,
+                },
+            );
             continue;
         }
 
@@ -1014,7 +1074,9 @@ pub(crate) async fn scan_packages_versions(
                 "Package '{}', version '{}' introduced new watched-process execution (for example bun/deno) not seen in baseline versions ({}): {:?}",
                 plan.package, plan.current, baseline_label, new_process_exec_signatures
             );
-            println!("This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload).");
+            println!(
+                "This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload)."
+            );
             println!("Aborting host operation securely.");
             blocked(&mut results, key);
             continue;
@@ -1023,7 +1085,10 @@ pub(crate) async fn scan_packages_versions(
         let new_git_clone_signatures =
             find_new_git_clone_signatures(&git_curr, &baseline_git_clone_signatures);
         let (new_git_clone_signatures, allowlisted_git_clone_signatures) =
-            filter_allowlisted_git_clone_signatures(new_git_clone_signatures, &policy.git_clone_allowlist);
+            filter_allowlisted_git_clone_signatures(
+                new_git_clone_signatures,
+                &policy.git_clone_allowlist,
+            );
 
         if !allowlisted_git_clone_signatures.is_empty() {
             println!(
@@ -1052,11 +1117,12 @@ pub(crate) async fn scan_packages_versions(
         let new_connections = find_new_connections(&ips_curr, &baseline_ips);
         let (new_connections, allowlisted_connections) =
             filter_allowlisted_new_connections(new_connections, &policy.ip_allowlist);
-        let (new_connections, allowlisted_domain_connections) = filter_domain_allowlisted_new_connections_with(
-            new_connections,
-            &policy.domain_allowlist,
-            reverse_dns_domain,
-        );
+        let (new_connections, allowlisted_domain_connections) =
+            filter_domain_allowlisted_new_connections_with(
+                new_connections,
+                &policy.domain_allowlist,
+                reverse_dns_domain,
+            );
 
         if !allowlisted_connections.is_empty() {
             println!(
@@ -1078,8 +1144,11 @@ pub(crate) async fn scan_packages_versions(
                 plan.baselines.join(", ")
             };
 
-            let (new_ip_domain_context, new_ip_domain_matches) =
-                enrich_new_connection_domains_with(&new_connections, &baseline_ips, reverse_dns_domain);
+            let (new_ip_domain_context, new_ip_domain_matches) = enrich_new_connection_domains_with(
+                &new_connections,
+                &baseline_ips,
+                reverse_dns_domain,
+            );
 
             println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
             println!(
@@ -1103,7 +1172,13 @@ pub(crate) async fn scan_packages_versions(
             continue;
         }
 
-        results.insert(key, ScanReport { allowed: true, resolved_version });
+        results.insert(
+            key,
+            ScanReport {
+                allowed: true,
+                resolved_version,
+            },
+        );
     }
 
     results
@@ -1116,16 +1191,14 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{
-        burst_policy_warning, burst_triggered, compare_version_strings, count_releases_in_window,
-        default_watched_executables, enrich_new_connection_domains_with, exemption_behavior,
-        extract_connection_ips, extract_process_exec_signatures,
+        PolicyConfig, burst_policy_warning, burst_triggered, compare_version_strings,
+        count_releases_in_window, default_watched_executables, enrich_new_connection_domains_with,
+        exemption_behavior, extract_connection_ips, extract_process_exec_signatures,
         filter_allowlisted_git_clone_signatures, filter_allowlisted_new_connections,
-        filter_allowlisted_process_exec_signatures,
-        filter_domain_allowlisted_new_connections_with, find_new_connections,
-        find_new_process_exec_signatures, forward_confirmed_hostname,
+        filter_allowlisted_process_exec_signatures, filter_domain_allowlisted_new_connections_with,
+        find_new_connections, find_new_process_exec_signatures, forward_confirmed_hostname,
         minimum_release_age_policy_warning, npm_published_times, scan_packages_versions,
         select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
-        PolicyConfig,
     };
     use chrono::Duration;
     use std::cmp::Ordering;
@@ -1182,8 +1255,14 @@ mod tests {
     #[test]
     fn unparseable_versions_sort_below_parseable_ones() {
         // Junk must never be selected as "latest" over a real version.
-        assert_eq!(compare_version_strings("npm", "not-a-version", "1.0.0"), Ordering::Less);
-        assert_eq!(compare_version_strings("npm", "1.0.0", "not-a-version"), Ordering::Greater);
+        assert_eq!(
+            compare_version_strings("npm", "not-a-version", "1.0.0"),
+            Ordering::Less
+        );
+        assert_eq!(
+            compare_version_strings("npm", "1.0.0", "not-a-version"),
+            Ordering::Greater
+        );
 
         let mut versions = vec!["garbage".to_string(), "1.2.3".to_string()];
         sort_versions_ascending("npm", &mut versions);
@@ -1232,13 +1311,20 @@ sin6_addr=inet_pton(AF_INET6, "fe80::1")
     #[test]
     fn npm_published_times_excludes_created_and_modified_keys() {
         let time = HashMap::from([
-            ("created".to_string(), "2020-01-01T00:00:00.000Z".to_string()),
-            ("modified".to_string(), "2026-01-01T00:00:00.000Z".to_string()),
+            (
+                "created".to_string(),
+                "2020-01-01T00:00:00.000Z".to_string(),
+            ),
+            (
+                "modified".to_string(),
+                "2026-01-01T00:00:00.000Z".to_string(),
+            ),
             ("1.0.0".to_string(), "2026-06-01T00:00:00.000Z".to_string()),
             ("1.0.1".to_string(), "2026-06-02T00:00:00.000Z".to_string()),
         ]);
-        let version_keys: HashSet<String> =
-            ["1.0.0".to_string(), "1.0.1".to_string()].into_iter().collect();
+        let version_keys: HashSet<String> = ["1.0.0".to_string(), "1.0.1".to_string()]
+            .into_iter()
+            .collect();
 
         let published = npm_published_times(&time, &version_keys);
         assert_eq!(published.len(), 2);
@@ -1251,9 +1337,18 @@ sin6_addr=inet_pton(AF_INET6, "fe80::1")
     #[test]
     fn npm_published_times_ignores_time_keys_without_a_matching_version() {
         let time = HashMap::from([
-            ("created".to_string(), "2020-01-01T00:00:00.000Z".to_string()),
-            ("modified".to_string(), "2026-01-01T00:00:00.000Z".to_string()),
-            ("9.9.9-yanked".to_string(), "2026-06-01T00:00:00.000Z".to_string()),
+            (
+                "created".to_string(),
+                "2020-01-01T00:00:00.000Z".to_string(),
+            ),
+            (
+                "modified".to_string(),
+                "2026-01-01T00:00:00.000Z".to_string(),
+            ),
+            (
+                "9.9.9-yanked".to_string(),
+                "2026-06-01T00:00:00.000Z".to_string(),
+            ),
         ]);
         // Only 1.0.0 is a real version; the time map has stale extras.
         let version_keys: HashSet<String> = ["1.0.0".to_string()].into_iter().collect();
@@ -1460,7 +1555,11 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     fn baseline_count_limits_fetched_baselines_without_overrides() {
         let out = select_effective_baselines(
             "3.0.0",
-            vec!["2.9.0".to_string(), "2.8.0".to_string(), "2.7.0".to_string()],
+            vec![
+                "2.9.0".to_string(),
+                "2.8.0".to_string(),
+                "2.7.0".to_string(),
+            ],
             None,
             2,
         );
@@ -1472,13 +1571,21 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         let override_pair = (Some("2.5.0".to_string()), None);
         let out = select_effective_baselines(
             "3.0.0",
-            vec!["2.9.0".to_string(), "2.8.0".to_string(), "2.7.0".to_string()],
+            vec![
+                "2.9.0".to_string(),
+                "2.8.0".to_string(),
+                "2.7.0".to_string(),
+            ],
             Some(&override_pair),
             3,
         );
         assert_eq!(
             out,
-            vec!["2.5.0".to_string(), "2.9.0".to_string(), "2.8.0".to_string()]
+            vec![
+                "2.5.0".to_string(),
+                "2.9.0".to_string(),
+                "2.8.0".to_string()
+            ]
         );
     }
 
@@ -1539,7 +1646,11 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[test]
     fn age_filter_skips_candidates_without_publish_timestamps() {
-        let candidates = vec!["2.9.0".to_string(), "2.8.0".to_string(), "2.7.0".to_string()];
+        let candidates = vec![
+            "2.9.0".to_string(),
+            "2.8.0".to_string(),
+            "2.7.0".to_string(),
+        ];
         let cutoff = Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap();
 
         let mut published = HashMap::new();
@@ -1612,7 +1723,11 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         let override_pair = (Some("2.7.0".to_string()), Some("2.6.0".to_string()));
         let out = select_effective_baselines(
             "3.0.0",
-            vec!["2.9.0".to_string(), "2.8.0".to_string(), "2.7.0".to_string()],
+            vec![
+                "2.9.0".to_string(),
+                "2.8.0".to_string(),
+                "2.7.0".to_string(),
+            ],
             Some(&override_pair),
             4,
         );
@@ -1680,7 +1795,10 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[test]
     fn detects_anomalous_new_connection() {
-        let ips_curr: HashSet<String> = ["1.1.1.1", "8.8.8.8"].into_iter().map(String::from).collect();
+        let ips_curr: HashSet<String> = ["1.1.1.1", "8.8.8.8"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
         let mut new = find_new_connections(&ips_curr, &baseline_ips);
         new.sort();
@@ -1690,13 +1808,19 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn no_anomaly_when_connections_match_baseline() {
         let ips_curr: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
-        let baseline_ips: HashSet<String> = ["1.1.1.1", "9.9.9.9"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1", "9.9.9.9"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         assert!(find_new_connections(&ips_curr, &baseline_ips).is_empty());
     }
 
     #[test]
     fn dns_enrichment_reports_context_and_domain_overlap_matches() {
-        let baseline_ips: HashSet<String> = ["1.1.1.1", "9.9.9.9"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1", "9.9.9.9"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         let new_connections = vec!["8.8.8.8".to_string(), "5.5.5.5".to_string()];
         let resolver = |ip: &str| match ip {
             "1.1.1.1" => Some("example.net".to_string()),
@@ -1705,10 +1829,17 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             "5.5.5.5" => Some("new.net".to_string()),
             _ => None,
         };
-        let (mut context, mut matches) = enrich_new_connection_domains_with(&new_connections, &baseline_ips, resolver);
+        let (mut context, mut matches) =
+            enrich_new_connection_domains_with(&new_connections, &baseline_ips, resolver);
         context.sort();
         matches.sort();
-        assert_eq!(context, vec!["5.5.5.5 -> new.net".to_string(), "8.8.8.8 -> example.net".to_string()]);
+        assert_eq!(
+            context,
+            vec![
+                "5.5.5.5 -> new.net".to_string(),
+                "8.8.8.8 -> example.net".to_string()
+            ]
+        );
         assert_eq!(matches, vec!["8.8.8.8 -> example.net".to_string()]);
     }
 
@@ -1716,7 +1847,8 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     fn dns_enrichment_ignores_unresolved_ips_without_failing() {
         let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
         let new_connections = vec!["8.8.8.8".to_string()];
-        let (context, matches) = enrich_new_connection_domains_with(&new_connections, &baseline_ips, |_| None);
+        let (context, matches) =
+            enrich_new_connection_domains_with(&new_connections, &baseline_ips, |_| None);
         assert!(context.is_empty());
         assert!(matches.is_empty());
     }
@@ -1725,7 +1857,8 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     fn ip_allowlist_filters_new_ips_before_blocking() {
         let new_connections = vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()];
         let ip_allowlist: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
-        let (mut remaining, mut allowlisted) = filter_allowlisted_new_connections(new_connections, &ip_allowlist);
+        let (mut remaining, mut allowlisted) =
+            filter_allowlisted_new_connections(new_connections, &ip_allowlist);
         remaining.sort();
         allowlisted.sort();
         assert_eq!(remaining, vec!["8.8.8.8".to_string()]);
@@ -1735,13 +1868,18 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn domain_allowlist_filters_resolved_domains_before_blocking() {
         let new_connections = vec!["8.8.8.8".to_string(), "5.5.5.5".to_string()];
-        let domain_allowlist: HashSet<String> = ["example.net"].into_iter().map(String::from).collect();
+        let domain_allowlist: HashSet<String> =
+            ["example.net"].into_iter().map(String::from).collect();
         let resolver = |ip: &str| match ip {
             "8.8.8.8" => Some("cdn.example.net".to_string()),
             "5.5.5.5" => Some("other.net".to_string()),
             _ => None,
         };
-        let (mut remaining, mut allowlisted) = filter_domain_allowlisted_new_connections_with(new_connections, &domain_allowlist, resolver);
+        let (mut remaining, mut allowlisted) = filter_domain_allowlisted_new_connections_with(
+            new_connections,
+            &domain_allowlist,
+            resolver,
+        );
         remaining.sort();
         allowlisted.sort();
         assert_eq!(remaining, vec!["5.5.5.5".to_string()]);
@@ -1751,8 +1889,13 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn domain_allowlist_does_not_filter_when_lookup_fails() {
         let new_connections = vec!["8.8.8.8".to_string()];
-        let domain_allowlist: HashSet<String> = ["example.net"].into_iter().map(String::from).collect();
-        let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(new_connections, &domain_allowlist, |_| None);
+        let domain_allowlist: HashSet<String> =
+            ["example.net"].into_iter().map(String::from).collect();
+        let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(
+            new_connections,
+            &domain_allowlist,
+            |_| None,
+        );
         assert_eq!(remaining, vec!["8.8.8.8".to_string()]);
         assert!(allowlisted.is_empty());
     }
@@ -1760,9 +1903,14 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot() {
         let new_connections = vec!["8.8.8.8".to_string()];
-        let domain_allowlist: HashSet<String> = [" Example.NET. "].into_iter().map(String::from).collect();
+        let domain_allowlist: HashSet<String> =
+            [" Example.NET. "].into_iter().map(String::from).collect();
         let resolver = |_ip: &str| Some("CDN.Example.Net.".to_string());
-        let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(new_connections, &domain_allowlist, resolver);
+        let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(
+            new_connections,
+            &domain_allowlist,
+            resolver,
+        );
         assert!(remaining.is_empty());
         assert_eq!(allowlisted, vec!["8.8.8.8 -> CDN.Example.Net.".to_string()]);
     }
@@ -1770,10 +1918,17 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn ip_allowlist_matches_equivalent_ipv6_representations() {
         let new_connections = vec!["2001:0db8:0000:0000:0000:ff00:0042:8329".to_string()];
-        let ip_allowlist: HashSet<String> = ["2001:db8::ff00:42:8329"].into_iter().map(String::from).collect();
-        let (remaining, allowlisted) = filter_allowlisted_new_connections(new_connections, &ip_allowlist);
+        let ip_allowlist: HashSet<String> = ["2001:db8::ff00:42:8329"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let (remaining, allowlisted) =
+            filter_allowlisted_new_connections(new_connections, &ip_allowlist);
         assert!(remaining.is_empty());
-        assert_eq!(allowlisted, vec!["2001:0db8:0000:0000:0000:ff00:0042:8329".to_string()]);
+        assert_eq!(
+            allowlisted,
+            vec!["2001:0db8:0000:0000:0000:ff00:0042:8329".to_string()]
+        );
     }
 
     // ---------------------------------------------------------------------------
@@ -1782,8 +1937,12 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[test]
     fn detects_new_connection_in_git_clone_simulation() {
-        let clone_ips: HashSet<String> = ["140.82.112.3", "185.199.108.133"].into_iter().map(String::from).collect();
-        let baseline_ips: HashSet<String> = ["140.82.112.3"].into_iter().map(String::from).collect();
+        let clone_ips: HashSet<String> = ["140.82.112.3", "185.199.108.133"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let baseline_ips: HashSet<String> =
+            ["140.82.112.3"].into_iter().map(String::from).collect();
         let mut new = find_new_connections(&clone_ips, &baseline_ips);
         new.sort();
         assert_eq!(new, vec!["185.199.108.133".to_string()]);
@@ -1792,7 +1951,10 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn no_new_connection_in_git_clone_simulation() {
         let clone_ips: HashSet<String> = ["140.82.112.3"].into_iter().map(String::from).collect();
-        let baseline_ips: HashSet<String> = ["140.82.112.3", "140.82.113.3"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["140.82.112.3", "140.82.113.3"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         assert!(find_new_connections(&clone_ips, &baseline_ips).is_empty());
     }
 
@@ -1807,7 +1969,12 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     }
 
     impl crate::sandbox::SandboxRunner for MockRunner {
-        fn trace_install(&self, _manager: &str, package: &str, version: &str) -> Result<String, String> {
+        fn trace_install(
+            &self,
+            _manager: &str,
+            package: &str,
+            version: &str,
+        ) -> Result<String, String> {
             self.traces
                 .get(&(package.to_string(), version.to_string()))
                 .cloned()
@@ -1828,7 +1995,10 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         PolicyConfig {
             baseline_count: 1,
             process_exec_allowlist,
-            baseline_overrides: HashMap::from([(package.to_string(), (Some(baseline.to_string()), None))]),
+            baseline_overrides: HashMap::from([(
+                package.to_string(),
+                (Some(baseline.to_string()), None),
+            )]),
             ..PolicyConfig::default()
         }
     }
@@ -1841,7 +2011,10 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         PolicyConfig {
             baseline_count: 1,
             git_clone_allowlist,
-            baseline_overrides: HashMap::from([(package.to_string(), (Some(baseline.to_string()), None))]),
+            baseline_overrides: HashMap::from([(
+                package.to_string(),
+                (Some(baseline.to_string()), None),
+            )]),
             ..PolicyConfig::default()
         }
     }
@@ -1849,25 +2022,44 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[tokio::test]
     async fn flags_newly_introduced_bun_execution() {
         let _guard = env_lock().lock().expect("env lock");
-        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        unsafe {
+            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        }
         let runner = MockRunner {
             traces: HashMap::from([
-                (("evil-pkg".to_string(), "1.3.0".to_string()),
-                 "execve(\"/tmp/b/bun\", [\"/tmp/b/bun\", \"run\", \"_index.js\"], 0x7ff) = 0\n".to_string()),
-                (("evil-pkg".to_string(), "1.2.0".to_string()),
-                 "execve(\"/usr/bin/node\", [\"node\", \"index.js\"], 0x7ff) = 0\n".to_string()),
+                (
+                    ("evil-pkg".to_string(), "1.3.0".to_string()),
+                    "execve(\"/tmp/b/bun\", [\"/tmp/b/bun\", \"run\", \"_index.js\"], 0x7ff) = 0\n"
+                        .to_string(),
+                ),
+                (
+                    ("evil-pkg".to_string(), "1.2.0".to_string()),
+                    "execve(\"/usr/bin/node\", [\"node\", \"index.js\"], 0x7ff) = 0\n".to_string(),
+                ),
             ]),
         };
-        let results = scan_packages_versions(&runner, "npm", &[("evil-pkg".to_string(), "1.3.0".to_string())],
-            &policy_with_baseline_and_process_allowlist("evil-pkg", "1.2.0", HashSet::new())).await;
-        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
-        assert_eq!(results.get("evil-pkg|1.3.0").map(|r| r.allowed), Some(false));
+        let results = scan_packages_versions(
+            &runner,
+            "npm",
+            &[("evil-pkg".to_string(), "1.3.0".to_string())],
+            &policy_with_baseline_and_process_allowlist("evil-pkg", "1.2.0", HashSet::new()),
+        )
+        .await;
+        unsafe {
+            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
+        }
+        assert_eq!(
+            results.get("evil-pkg|1.3.0").map(|r| r.allowed),
+            Some(false)
+        );
     }
 
     #[tokio::test]
     async fn flags_existing_bun_with_additional_invocation() {
         let _guard = env_lock().lock().expect("env lock");
-        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        unsafe {
+            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        }
         let runner = MockRunner {
             traces: HashMap::from([
                 (("buildy".to_string(), "2.1.0".to_string()),
@@ -1876,45 +2068,77 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
                  "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"build\"], 0x7ff) = 0\n".to_string()),
             ]),
         };
-        let results = scan_packages_versions(&runner, "npm", &[("buildy".to_string(), "2.1.0".to_string())],
-            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new())).await;
-        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        let results = scan_packages_versions(
+            &runner,
+            "npm",
+            &[("buildy".to_string(), "2.1.0".to_string())],
+            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new()),
+        )
+        .await;
+        unsafe {
+            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
+        }
         assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(false));
     }
 
     #[tokio::test]
     async fn allows_when_bun_behavior_matches_baseline() {
         let _guard = env_lock().lock().expect("env lock");
-        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
-        let trace = "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"build\"], 0x7ff) = 0\n".to_string();
+        unsafe {
+            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        }
+        let trace =
+            "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"build\"], 0x7ff) = 0\n".to_string();
         let runner = MockRunner {
             traces: HashMap::from([
                 (("buildy".to_string(), "2.1.0".to_string()), trace.clone()),
                 (("buildy".to_string(), "2.0.0".to_string()), trace),
             ]),
         };
-        let results = scan_packages_versions(&runner, "npm", &[("buildy".to_string(), "2.1.0".to_string())],
-            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new())).await;
-        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        let results = scan_packages_versions(
+            &runner,
+            "npm",
+            &[("buildy".to_string(), "2.1.0".to_string())],
+            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new()),
+        )
+        .await;
+        unsafe {
+            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
+        }
         assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(true));
     }
 
     #[tokio::test]
     async fn allows_new_bun_when_allowlisted() {
         let _guard = env_lock().lock().expect("env lock");
-        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        unsafe {
+            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        }
         let runner = MockRunner {
             traces: HashMap::from([
-                (("buildy".to_string(), "2.1.0".to_string()),
-                 "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"approved-task\"], 0x7ff) = 0\n".to_string()),
-                (("buildy".to_string(), "2.0.0".to_string()),
-                 "execve(\"/usr/bin/node\", [\"node\", \"index.js\"], 0x7ff) = 0\n".to_string()),
+                (
+                    ("buildy".to_string(), "2.1.0".to_string()),
+                    "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"approved-task\"], 0x7ff) = 0\n"
+                        .to_string(),
+                ),
+                (
+                    ("buildy".to_string(), "2.0.0".to_string()),
+                    "execve(\"/usr/bin/node\", [\"node\", \"index.js\"], 0x7ff) = 0\n".to_string(),
+                ),
             ]),
         };
-        let allowlist: HashSet<String> = ["bun|run|approved-task".to_string()].into_iter().collect();
-        let results = scan_packages_versions(&runner, "npm", &[("buildy".to_string(), "2.1.0".to_string())],
-            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", allowlist)).await;
-        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        let allowlist: HashSet<String> =
+            ["bun|run|approved-task".to_string()].into_iter().collect();
+        let results = scan_packages_versions(
+            &runner,
+            "npm",
+            &[("buildy".to_string(), "2.1.0".to_string())],
+            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", allowlist),
+        )
+        .await;
+        unsafe {
+            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
+        }
         assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(true));
     }
 
@@ -1925,7 +2149,9 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[tokio::test]
     async fn scan_flags_new_install_time_git_clone_behavior() {
         let _guard = env_lock().lock().expect("env lock");
-        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        unsafe {
+            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        }
         let runner = MockRunner {
             traces: HashMap::from([
                 (("pkg-a".to_string(), "1.3.0".to_string()),
@@ -1934,16 +2160,25 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
                  "execve(\"/usr/bin/sh\", [\"sh\", \"-c\", \"echo ok\"], 0x7ff) = 0\n".to_string()),
             ]),
         };
-        let results = scan_packages_versions(&runner, "npm", &[("pkg-a".to_string(), "1.3.0".to_string())],
-            &policy_with_baseline_and_git_allowlist("pkg-a", "1.2.0", HashSet::new())).await;
-        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        let results = scan_packages_versions(
+            &runner,
+            "npm",
+            &[("pkg-a".to_string(), "1.3.0".to_string())],
+            &policy_with_baseline_and_git_allowlist("pkg-a", "1.2.0", HashSet::new()),
+        )
+        .await;
+        unsafe {
+            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
+        }
         assert_eq!(results.get("pkg-a|1.3.0").map(|r| r.allowed), Some(false));
     }
 
     #[tokio::test]
     async fn scan_allows_when_install_time_git_clone_behavior_matches_baseline() {
         let _guard = env_lock().lock().expect("env lock");
-        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        unsafe {
+            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        }
         let trace = "execve(\"/usr/bin/git\", [\"git\", \"clone\", \"https://github.com/acme/repo.git\"], 0x7ff) = 0\n".to_string();
         let runner = MockRunner {
             traces: HashMap::from([
@@ -1951,16 +2186,25 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
                 (("pkg-b".to_string(), "1.2.0".to_string()), trace),
             ]),
         };
-        let results = scan_packages_versions(&runner, "npm", &[("pkg-b".to_string(), "1.3.0".to_string())],
-            &policy_with_baseline_and_git_allowlist("pkg-b", "1.2.0", HashSet::new())).await;
-        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        let results = scan_packages_versions(
+            &runner,
+            "npm",
+            &[("pkg-b".to_string(), "1.3.0".to_string())],
+            &policy_with_baseline_and_git_allowlist("pkg-b", "1.2.0", HashSet::new()),
+        )
+        .await;
+        unsafe {
+            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
+        }
         assert_eq!(results.get("pkg-b|1.3.0").map(|r| r.allowed), Some(true));
     }
 
     #[tokio::test]
     async fn scan_allows_new_git_clone_behavior_when_target_is_allowlisted() {
         let _guard = env_lock().lock().expect("env lock");
-        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        unsafe {
+            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        }
         let runner = MockRunner {
             traces: HashMap::from([
                 (("pkg-c".to_string(), "1.3.0".to_string()),
@@ -1969,10 +2213,20 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
                  "execve(\"/usr/bin/sh\", [\"sh\", \"-c\", \"echo ok\"], 0x7ff) = 0\n".to_string()),
             ]),
         };
-        let git_clone_allowlist: HashSet<String> = ["https://github.com/acme/approved.git".to_string()].into_iter().collect();
-        let results = scan_packages_versions(&runner, "npm", &[("pkg-c".to_string(), "1.3.0".to_string())],
-            &policy_with_baseline_and_git_allowlist("pkg-c", "1.2.0", git_clone_allowlist)).await;
-        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        let git_clone_allowlist: HashSet<String> =
+            ["https://github.com/acme/approved.git".to_string()]
+                .into_iter()
+                .collect();
+        let results = scan_packages_versions(
+            &runner,
+            "npm",
+            &[("pkg-c".to_string(), "1.3.0".to_string())],
+            &policy_with_baseline_and_git_allowlist("pkg-c", "1.2.0", git_clone_allowlist),
+        )
+        .await;
+        unsafe {
+            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
+        }
         assert_eq!(results.get("pkg-c|1.3.0").map(|r| r.allowed), Some(true));
     }
 
@@ -1983,20 +2237,30 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         // The allowlist stores the URL; the signature includes |recursive. The URL
         // must be extracted before comparison so the recursive flag does not prevent
         // the allowlisted URL from matching.
-        let signatures = vec![
-            "https://github.com/acme/repo.git|recursive".to_string(),
-        ];
-        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()].into_iter().collect();
-        let (remaining, allowlisted) = filter_allowlisted_git_clone_signatures(signatures, &allowlist);
-        assert!(remaining.is_empty(), "recursive clone of an allowed URL must be allowlisted");
-        assert_eq!(allowlisted, vec!["https://github.com/acme/repo.git|recursive".to_string()]);
+        let signatures = vec!["https://github.com/acme/repo.git|recursive".to_string()];
+        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
+            .into_iter()
+            .collect();
+        let (remaining, allowlisted) =
+            filter_allowlisted_git_clone_signatures(signatures, &allowlist);
+        assert!(
+            remaining.is_empty(),
+            "recursive clone of an allowed URL must be allowlisted"
+        );
+        assert_eq!(
+            allowlisted,
+            vec!["https://github.com/acme/repo.git|recursive".to_string()]
+        );
     }
 
     #[test]
     fn git_clone_allowlist_matches_non_recursive_clone_of_allowed_url() {
         let signatures = vec!["https://github.com/acme/repo.git|non-recursive".to_string()];
-        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()].into_iter().collect();
-        let (remaining, allowlisted) = filter_allowlisted_git_clone_signatures(signatures, &allowlist);
+        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
+            .into_iter()
+            .collect();
+        let (remaining, allowlisted) =
+            filter_allowlisted_git_clone_signatures(signatures, &allowlist);
         assert!(remaining.is_empty());
         assert_eq!(allowlisted.len(), 1);
     }
@@ -2004,8 +2268,11 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn git_clone_allowlist_does_not_match_different_url() {
         let signatures = vec!["https://github.com/evil/repo.git|non-recursive".to_string()];
-        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()].into_iter().collect();
-        let (remaining, allowlisted) = filter_allowlisted_git_clone_signatures(signatures, &allowlist);
+        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
+            .into_iter()
+            .collect();
+        let (remaining, allowlisted) =
+            filter_allowlisted_git_clone_signatures(signatures, &allowlist);
         assert_eq!(remaining.len(), 1);
         assert!(allowlisted.is_empty());
     }
@@ -2019,16 +2286,14 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         // This is a footgun: the test documents the behavior so a future change that
         // guards against it is visible and deliberate.
         let override_pair = (Some("3.0.0".to_string()), None);
-        let out = select_effective_baselines(
-            "3.0.0",
-            vec!["2.9.0".to_string()],
-            Some(&override_pair),
-            2,
-        );
+        let out =
+            select_effective_baselines("3.0.0", vec!["2.9.0".to_string()], Some(&override_pair), 2);
         // The override version equals current; it ends up in the baseline set.
         // Any scan using this baseline will produce an empty diff — always allowed.
-        assert!(out.contains(&"3.0.0".to_string()),
-            "override equal to current is currently included; if this changes, update the override validation in load_policy_config");
+        assert!(
+            out.contains(&"3.0.0".to_string()),
+            "override equal to current is currently included; if this changes, update the override validation in load_policy_config"
+        );
     }
 
     #[test]
@@ -2049,17 +2314,23 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[tokio::test]
     async fn scan_fails_closed_when_one_baseline_trace_is_missing() {
         let _guard = env_lock().lock().expect("env lock");
-        unsafe { std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0"); }
+        unsafe {
+            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        }
 
         // Runner has trace for current and baseline-1 but NOT baseline-2.
         // With baseline_count=2 both baselines are in the plan; the missing one
         // must cause a fail-closed result rather than a silent partial diff.
         let runner = MockRunner {
             traces: HashMap::from([
-                (("pkg".to_string(), "2.0.0".to_string()),
-                 "sin_addr=inet_addr(\"1.2.3.4\")\n".to_string()),
-                (("pkg".to_string(), "1.9.0".to_string()),
-                 "sin_addr=inet_addr(\"1.2.3.4\")\n".to_string()),
+                (
+                    ("pkg".to_string(), "2.0.0".to_string()),
+                    "sin_addr=inet_addr(\"1.2.3.4\")\n".to_string(),
+                ),
+                (
+                    ("pkg".to_string(), "1.9.0".to_string()),
+                    "sin_addr=inet_addr(\"1.2.3.4\")\n".to_string(),
+                ),
                 // baseline-2 ("1.8.0") intentionally absent from the map
             ]),
         };
@@ -2073,14 +2344,24 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             ..PolicyConfig::default()
         };
 
-        let results = scan_packages_versions(&runner, "pip", &[("pkg".to_string(), "2.0.0".to_string())], &policy).await;
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await;
 
-        unsafe { std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H"); }
+        unsafe {
+            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
+        }
 
-        assert_eq!(results.get("pkg|2.0.0").map(|r| r.allowed), Some(false),
-            "missing baseline trace must fail closed, not silently allow");
+        assert_eq!(
+            results.get("pkg|2.0.0").map(|r| r.allowed),
+            Some(false),
+            "missing baseline trace must fail closed, not silently allow"
+        );
     }
-
 }
 
 pub(crate) async fn scan_package_versions(

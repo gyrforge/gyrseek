@@ -12,18 +12,14 @@ use std::process::Command;
 use serde::Deserialize;
 
 use parsing::{
-    parse_npm_install_packages_from_args,
-    parse_pip_install_packages_from_args,
-    parse_poetry_lock_packages_from_content,
-    parse_pylock_packages_from_content,
-    parse_requirements_packages_from_content,
-    parse_uv_lock_upgrade_packages_from_args,
-    parse_uv_lock_packages_from_content,
-    rewrite_args_with_pinned_versions,
+    parse_npm_install_packages_from_args, parse_pip_install_packages_from_args,
+    parse_poetry_lock_packages_from_content, parse_pylock_packages_from_content,
+    parse_requirements_packages_from_content, parse_uv_lock_packages_from_content,
+    parse_uv_lock_upgrade_packages_from_args, rewrite_args_with_pinned_versions,
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
-use sandbox::{build_runner_from_env, list_docker_runtimes, SandboxRunner};
-use scanning::{scan_package_versions, scan_packages_versions, PolicyConfig, ScanReport};
+use sandbox::{SandboxRunner, build_runner_from_env, list_docker_runtimes};
+use scanning::{PolicyConfig, ScanReport, scan_package_versions, scan_packages_versions};
 
 const DEFAULT_CONFIG_PATH: &str = "gyrseek.yaml";
 
@@ -64,7 +60,8 @@ struct BaselineOverrideConfig {
 }
 
 fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool), String> {
-    let mut cfg_path = env::var("GYRSEEK_CONFIG").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
+    let mut cfg_path =
+        env::var("GYRSEEK_CONFIG").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
     let mut cfg_explicit = env::var("GYRSEEK_CONFIG").is_ok();
     let mut idx = 0usize;
 
@@ -201,7 +198,9 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
 
     let release_burst_threshold = match cfg.release_burst_threshold {
         Some(0) => {
-            println!("⚠️ [gyrseek] Ignoring invalid release_burst_threshold=0; disabling burst checker");
+            println!(
+                "⚠️ [gyrseek] Ignoring invalid release_burst_threshold=0; disabling burst checker"
+            );
             None
         }
         Some(v) => Some(v),
@@ -210,7 +209,9 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
 
     let release_burst_window_hours = match cfg.release_burst_window_hours {
         Some(0) => {
-            println!("⚠️ [gyrseek] Ignoring invalid release_burst_window_hours=0; using default 24");
+            println!(
+                "⚠️ [gyrseek] Ignoring invalid release_burst_window_hours=0; using default 24"
+            );
             24
         }
         Some(v) => v,
@@ -279,7 +280,8 @@ mod config_tests {
             "lodash".to_string(),
         ];
 
-        let (manager_args, path, explicit) = parse_global_options(args).expect("parse should succeed");
+        let (manager_args, path, explicit) =
+            parse_global_options(args).expect("parse should succeed");
         assert_eq!(manager_args, vec!["npm", "install", "lodash"]);
         assert_eq!(path, "my-policy.yaml");
         assert!(explicit);
@@ -293,11 +295,8 @@ mod config_tests {
     }
 
     fn load(file: &NamedTempFile) -> super::PolicyConfig {
-        load_policy_config(
-            file.path().to_str().expect("path should be utf8"),
-            true,
-        )
-        .expect("config should parse")
+        load_policy_config(file.path().to_str().expect("path should be utf8"), true)
+            .expect("config should parse")
     }
 
     #[test]
@@ -319,7 +318,8 @@ mod config_tests {
     #[test]
     fn missing_explicit_config_fails_closed() {
         let missing = "gyrseek-config-does-not-exist.yaml";
-        let err = load_policy_config(missing, true).expect_err("explicit config missing should fail");
+        let err =
+            load_policy_config(missing, true).expect_err("explicit config missing should fail");
         assert!(err.contains("Failed to read config file"));
     }
 
@@ -375,8 +375,14 @@ mod config_tests {
         .expect("config should be written");
 
         let cfg = load(&file);
-        assert_eq!(cfg.min_baseline_age_hours_by_package.get("requests"), Some(&6));
-        assert_eq!(cfg.min_baseline_age_hours_by_package.get("lodash"), Some(&12));
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("requests"),
+            Some(&6)
+        );
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("lodash"),
+            Some(&12)
+        );
         assert!(!cfg.min_baseline_age_hours_by_package.contains_key("badpkg"));
     }
 
@@ -435,7 +441,10 @@ mod config_tests {
             cfg.baseline_overrides.get("requests"),
             Some(&(Some("2.30.0".to_string()), None))
         );
-        assert_eq!(cfg.min_baseline_age_hours_by_package.get("requests"), Some(&6));
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("requests"),
+            Some(&6)
+        );
     }
 
     #[test]
@@ -469,10 +478,17 @@ mod config_tests {
     #[test]
     fn parses_git_clone_allowlist() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
-        writeln!(file, "git_clone_allowlist:\n  - https://github.com/acme/repo.git\n  - '  '").expect("config should be written");
+        writeln!(
+            file,
+            "git_clone_allowlist:\n  - https://github.com/acme/repo.git\n  - '  '"
+        )
+        .expect("config should be written");
 
         let cfg = load(&file);
-        assert!(cfg.git_clone_allowlist.contains("https://github.com/acme/repo.git"));
+        assert!(
+            cfg.git_clone_allowlist
+                .contains("https://github.com/acme/repo.git")
+        );
         assert_eq!(cfg.git_clone_allowlist.len(), 1);
     }
 
@@ -483,8 +499,11 @@ mod config_tests {
         // A valid (if unusual) config path that begins with '-' must not be mistaken
         // for a flag and must be forwarded verbatim to load_policy_config.
         let args = vec![
-            "--config".to_string(), "-relative.yaml".to_string(),
-            "npm".to_string(), "install".to_string(), "pkg".to_string(),
+            "--config".to_string(),
+            "-relative.yaml".to_string(),
+            "npm".to_string(),
+            "install".to_string(),
+            "pkg".to_string(),
         ];
         let (manager_args, path, explicit) = parse_global_options(args).expect("should parse");
         assert_eq!(path, "-relative.yaml");
@@ -497,7 +516,9 @@ mod config_tests {
         // --config=path=with=equals.yaml: only the first '=' is the separator.
         let args = vec![
             "--config=path=with=equals.yaml".to_string(),
-            "pip".to_string(), "install".to_string(), "requests".to_string(),
+            "pip".to_string(),
+            "install".to_string(),
+            "requests".to_string(),
         ];
         let (manager_args, path, explicit) = parse_global_options(args).expect("should parse");
         assert_eq!(path, "path=with=equals.yaml");
@@ -514,7 +535,12 @@ pub struct GyrSeek {
 struct NoopRunner;
 
 impl SandboxRunner for NoopRunner {
-    fn trace_install(&self, _manager: &str, _package: &str, _version: &str) -> Result<String, String> {
+    fn trace_install(
+        &self,
+        _manager: &str,
+        _package: &str,
+        _version: &str,
+    ) -> Result<String, String> {
         Err("noop runner invoked".to_string())
     }
 }
@@ -696,7 +722,10 @@ async fn scan_many_with_cache(
         let report = batch_results
             .get(&format!("{}|{}", pkg_name, tgt_version))
             .cloned()
-            .unwrap_or_else(|| ScanReport { allowed: false, resolved_version: tgt_version.clone() });
+            .unwrap_or_else(|| ScanReport {
+                allowed: false,
+                resolved_version: tgt_version.clone(),
+            });
         let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
         cache.insert(key, report.clone());
         if !report.allowed {
@@ -753,7 +782,10 @@ pub async fn run(args: Vec<String>) {
             config_path
         );
     }
-    println!("ℹ️ [gyrseek] Using baseline_count={}", policy.baseline_count);
+    println!(
+        "ℹ️ [gyrseek] Using baseline_count={}",
+        policy.baseline_count
+    );
     if !policy.min_baseline_age_hours_by_package.is_empty() {
         println!(
             "ℹ️ [gyrseek] Loaded per-package min_baseline_age_hours for {} package(s)",
@@ -769,8 +801,7 @@ pub async fn run(args: Vec<String>) {
     if let Some(threshold) = policy.release_burst_threshold {
         println!(
             "ℹ️ [gyrseek] Release burst checker enabled (threshold={} releases/{}h)",
-            threshold,
-            policy.release_burst_window_hours
+            threshold, policy.release_burst_window_hours
         );
     }
     if let Some(days) = policy.minimum_release_age_package {
@@ -804,7 +835,10 @@ pub async fn run(args: Vec<String>) {
                 if runtimes.is_empty() {
                     println!("ℹ️ [gyrseek] Docker reports no configured runtimes.");
                 } else {
-                    println!("ℹ️ [gyrseek] Detected Docker runtimes: {}", runtimes.join(", "));
+                    println!(
+                        "ℹ️ [gyrseek] Detected Docker runtimes: {}",
+                        runtimes.join(", ")
+                    );
                 }
             }
             Err(e) => {
@@ -830,7 +864,10 @@ pub async fn run(args: Vec<String>) {
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("lock") {
         let upgrade_packages = eye.parse_uv_lock_upgrade_packages();
-        let upgrade_all = eye.passthrough_args.iter().any(|arg| arg == "-U" || arg == "--upgrade");
+        let upgrade_all = eye
+            .passthrough_args
+            .iter()
+            .any(|arg| arg == "-U" || arg == "--upgrade");
 
         if !upgrade_packages.is_empty() {
             println!(
@@ -842,14 +879,22 @@ pub async fn run(args: Vec<String>) {
                 .into_iter()
                 .map(|pkg_name| (pkg_name, "latest".to_string()))
                 .collect();
-            if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets, &policy)
-                .await
-                .is_none()
+            if scan_many_with_cache(
+                &mut scan_cache,
+                runner.as_ref(),
+                &eye.manager,
+                targets,
+                &policy,
+            )
+            .await
+            .is_none()
             {
                 std::process::exit(1);
             }
 
-            println!("\n✅ [gyrseek] Clear behavioral report for uv lock update targets. Forwarding command safely...");
+            println!(
+                "\n✅ [gyrseek] Clear behavioral report for uv lock update targets. Forwarding command safely..."
+            );
             eye.forward_original_command();
             return;
         }
@@ -862,21 +907,33 @@ pub async fn run(args: Vec<String>) {
             std::process::exit(1);
         }
 
-        let lock_label = if upgrade_all { "uv lock --upgrade" } else { "uv lock" };
+        let lock_label = if upgrade_all {
+            "uv lock --upgrade"
+        } else {
+            "uv lock"
+        };
         println!(
             "🛡️ [gyrseek] '{}' detected. Testing {} locked package(s) from uv.lock...",
             lock_label,
             lock_packages.len()
         );
 
-        if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages, &policy)
-            .await
-            .is_none()
+        if scan_many_with_cache(
+            &mut scan_cache,
+            runner.as_ref(),
+            &eye.manager,
+            lock_packages,
+            &policy,
+        )
+        .await
+        .is_none()
         {
             std::process::exit(1);
         }
 
-        println!("\n✅ [gyrseek] Clear behavioral report for uv lock package set. Forwarding command safely...");
+        println!(
+            "\n✅ [gyrseek] Clear behavioral report for uv lock package set. Forwarding command safely..."
+        );
         eye.forward_original_command();
         return;
     }
@@ -886,7 +943,11 @@ pub async fn run(args: Vec<String>) {
             || eye.passthrough_args.get(1).map(String::as_str) == Some("update")
             || eye.passthrough_args.get(1).map(String::as_str) == Some("lock"))
     {
-        let poetry_cmd = eye.passthrough_args.get(1).map(String::as_str).unwrap_or("install");
+        let poetry_cmd = eye
+            .passthrough_args
+            .get(1)
+            .map(String::as_str)
+            .unwrap_or("install");
         let lock_packages = eye.parse_poetry_lock_packages();
         if lock_packages.is_empty() {
             println!(
@@ -902,9 +963,15 @@ pub async fn run(args: Vec<String>) {
             lock_packages.len()
         );
 
-        if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages, &policy)
-            .await
-            .is_none()
+        if scan_many_with_cache(
+            &mut scan_cache,
+            runner.as_ref(),
+            &eye.manager,
+            lock_packages,
+            &policy,
+        )
+        .await
+        .is_none()
         {
             std::process::exit(1);
         }
@@ -936,17 +1003,28 @@ pub async fn run(args: Vec<String>) {
         let targets: Vec<(String, String)> = sync_packages
             .into_iter()
             .map(|(pkg_name, maybe_version)| {
-                (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
+                (
+                    pkg_name,
+                    maybe_version.unwrap_or_else(|| "latest".to_string()),
+                )
             })
             .collect();
-        if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets, &policy)
-            .await
-            .is_none()
+        if scan_many_with_cache(
+            &mut scan_cache,
+            runner.as_ref(),
+            &eye.manager,
+            targets,
+            &policy,
+        )
+        .await
+        .is_none()
         {
             std::process::exit(1);
         }
 
-        println!("\n✅ [gyrseek] Clear behavioral report for sync package set. Forwarding command safely...");
+        println!(
+            "\n✅ [gyrseek] Clear behavioral report for sync package set. Forwarding command safely..."
+        );
         eye.forward_original_command();
         return;
     }
@@ -965,14 +1043,22 @@ pub async fn run(args: Vec<String>) {
             lock_packages.len()
         );
 
-        if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages, &policy)
-            .await
-            .is_none()
+        if scan_many_with_cache(
+            &mut scan_cache,
+            runner.as_ref(),
+            &eye.manager,
+            lock_packages,
+            &policy,
+        )
+        .await
+        .is_none()
         {
             std::process::exit(1);
         }
 
-        println!("\n✅ [gyrseek] Clear behavioral report for all locked packages. Forwarding command safely...");
+        println!(
+            "\n✅ [gyrseek] Clear behavioral report for all locked packages. Forwarding command safely..."
+        );
         eye.forward_original_command();
         return;
     }
@@ -997,15 +1083,28 @@ pub async fn run(args: Vec<String>) {
         let targets: Vec<(String, String)> = pip_packages
             .into_iter()
             .map(|(pkg_name, maybe_version)| {
-                (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
+                (
+                    pkg_name,
+                    maybe_version.unwrap_or_else(|| "latest".to_string()),
+                )
             })
             .collect();
-        let pins = match scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets, &policy).await {
+        let pins = match scan_many_with_cache(
+            &mut scan_cache,
+            runner.as_ref(),
+            &eye.manager,
+            targets,
+            &policy,
+        )
+        .await
+        {
             Some(pins) => pins,
             None => std::process::exit(1),
         };
 
-        println!("\n✅ [gyrseek] Clear behavioral report for pip package set. Forwarding command safely...");
+        println!(
+            "\n✅ [gyrseek] Clear behavioral report for pip package set. Forwarding command safely..."
+        );
         eye.forward_pinned_command(&pins);
         return;
     }
@@ -1019,29 +1118,48 @@ pub async fn run(args: Vec<String>) {
         if npm_packages.is_empty() {
             println!(
                 "❌ [gyrseek] 'npm {}' detected but no parseable package entries were found. Failing closed.",
-                eye.passthrough_args.get(1).map(String::as_str).unwrap_or("install")
+                eye.passthrough_args
+                    .get(1)
+                    .map(String::as_str)
+                    .unwrap_or("install")
             );
             std::process::exit(1);
         }
 
         println!(
             "🛡️ [gyrseek] '{}' detected. Testing {} package(s)...",
-            eye.passthrough_args.get(1).map(String::as_str).unwrap_or("install"),
+            eye.passthrough_args
+                .get(1)
+                .map(String::as_str)
+                .unwrap_or("install"),
             npm_packages.len()
         );
 
         let targets: Vec<(String, String)> = npm_packages
             .into_iter()
             .map(|(pkg_name, maybe_version)| {
-                (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
+                (
+                    pkg_name,
+                    maybe_version.unwrap_or_else(|| "latest".to_string()),
+                )
             })
             .collect();
-        let pins = match scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, targets, &policy).await {
+        let pins = match scan_many_with_cache(
+            &mut scan_cache,
+            runner.as_ref(),
+            &eye.manager,
+            targets,
+            &policy,
+        )
+        .await
+        {
             Some(pins) => pins,
             None => std::process::exit(1),
         };
 
-        println!("\n✅ [gyrseek] Clear behavioral report for npm package set. Forwarding command safely...");
+        println!(
+            "\n✅ [gyrseek] Clear behavioral report for npm package set. Forwarding command safely..."
+        );
         eye.forward_pinned_command(&pins);
         return;
     }
@@ -1091,7 +1209,11 @@ mod gyrseek_tests {
 
     #[test]
     fn parses_uv_add_as_latest_when_unpinned() {
-        let eye = GyrSeek::new(vec!["uv".to_string(), "add".to_string(), "pytest".to_string()]);
+        let eye = GyrSeek::new(vec![
+            "uv".to_string(),
+            "add".to_string(),
+            "pytest".to_string(),
+        ]);
         let (pkg, version) = eye.parse_package_details();
         assert_eq!(pkg.as_deref(), Some("pytest"));
         assert_eq!(version, None);
@@ -1099,7 +1221,12 @@ mod gyrseek_tests {
 
     #[test]
     fn parses_uv_pip_install_with_pinned_version() {
-        let eye = GyrSeek::new(vec!["uv".to_string(), "pip".to_string(), "install".to_string(), "requests==2.31.0".to_string()]);
+        let eye = GyrSeek::new(vec![
+            "uv".to_string(),
+            "pip".to_string(),
+            "install".to_string(),
+            "requests==2.31.0".to_string(),
+        ]);
         let (pkg, version) = eye.parse_package_details();
         assert_eq!(pkg.as_deref(), Some("requests"));
         assert_eq!(version.as_deref(), Some("2.31.0"));
@@ -1107,7 +1234,11 @@ mod gyrseek_tests {
 
     #[test]
     fn parses_poetry_update_as_latest_when_unpinned() {
-        let eye = GyrSeek::new(vec!["poetry".to_string(), "update".to_string(), "pytest".to_string()]);
+        let eye = GyrSeek::new(vec![
+            "poetry".to_string(),
+            "update".to_string(),
+            "pytest".to_string(),
+        ]);
         let (pkg, version) = eye.parse_package_details();
         assert_eq!(pkg.as_deref(), Some("pytest"));
         assert_eq!(version, None);
@@ -1115,7 +1246,11 @@ mod gyrseek_tests {
 
     #[test]
     fn ignores_non_install_commands() {
-        let eye = GyrSeek::new(vec!["uv".to_string(), "run".to_string(), "script.py".to_string()]);
+        let eye = GyrSeek::new(vec![
+            "uv".to_string(),
+            "run".to_string(),
+            "script.py".to_string(),
+        ]);
         let (pkg, version) = eye.parse_package_details();
         assert_eq!(pkg, None);
         assert_eq!(version, None);
@@ -1123,7 +1258,11 @@ mod gyrseek_tests {
 
     #[test]
     fn parses_npm_install_as_latest_when_unpinned() {
-        let eye = GyrSeek::new(vec!["npm".to_string(), "install".to_string(), "lodash".to_string()]);
+        let eye = GyrSeek::new(vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "lodash".to_string(),
+        ]);
         let (pkg, version) = eye.parse_package_details();
         assert_eq!(pkg.as_deref(), Some("lodash"));
         assert_eq!(version, None);
@@ -1131,7 +1270,11 @@ mod gyrseek_tests {
 
     #[test]
     fn parses_npm_install_with_pinned_version() {
-        let eye = GyrSeek::new(vec!["npm".to_string(), "install".to_string(), "lodash@4.17.21".to_string()]);
+        let eye = GyrSeek::new(vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "lodash@4.17.21".to_string(),
+        ]);
         let (pkg, version) = eye.parse_package_details();
         assert_eq!(pkg.as_deref(), Some("lodash"));
         assert_eq!(version.as_deref(), Some("4.17.21"));

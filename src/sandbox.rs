@@ -65,7 +65,8 @@ struct HostRunner;
 
 impl SandboxRunner for HostRunner {
     fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String> {
-        let temp_dir = tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
+        let temp_dir =
+            tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
         let target_path = temp_dir.path().to_string_lossy().to_string();
 
         let cmd_args = if manager == "npm" {
@@ -129,7 +130,6 @@ impl SandboxRunner for DockerRunner {
     ) -> Result<Vec<ProbeTrace>, String> {
         trace_install_docker_matrix_with_runtime(manager, probes, None)
     }
-
 }
 
 impl SandboxRunner for MicroVmRunner {
@@ -264,7 +264,10 @@ fn scanner_user_setup_steps() -> Vec<String> {
             u = SCANNER_USER
         ),
         "mkdir -p /work".to_string(),
-        format!("chown -R {u} /work >/dev/null 2>&1 || true", u = SCANNER_USER),
+        format!(
+            "chown -R {u} /work >/dev/null 2>&1 || true",
+            u = SCANNER_USER
+        ),
     ]
 }
 
@@ -474,8 +477,8 @@ pub(crate) fn list_docker_runtimes() -> Result<Vec<String>, String> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).map_err(|e| format!("failed to parse docker runtimes JSON: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .map_err(|e| format!("failed to parse docker runtimes JSON: {e}"))?;
 
     let mut runtimes = Vec::new();
     if let Some(obj) = parsed.as_object() {
@@ -493,8 +496,8 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_docker_run_args, build_matrix_script, build_single_script, strace_install_command,
-        SCANNER_USER,
+        SCANNER_USER, build_docker_run_args, build_matrix_script, build_single_script,
+        strace_install_command,
     };
 
     // --- #4 strace must not truncate argv/addresses ---
@@ -530,7 +533,10 @@ mod tests {
         let cmd = strace_install_command("npm", "left-pad@1.3.0", Some("/out/gyrseek_trace_0.log"));
         // strace itself runs as root (owns the log) but -u runs the install as
         // the scanner user, which has no write access to root-owned /out.
-        assert!(cmd.contains(&format!("-u {}", SCANNER_USER)), "missing -u: {cmd}");
+        assert!(
+            cmd.contains(&format!("-u {}", SCANNER_USER)),
+            "missing -u: {cmd}"
+        );
         // The log path is owned by strace (root), written before the payload runs.
         assert!(cmd.contains("-o /out/gyrseek_trace_0.log"));
     }
@@ -547,7 +553,10 @@ mod tests {
             .expect("script should reference scanner user");
         let install = script.find("npm install").expect("script should install");
         // User creation must precede the install step.
-        assert!(user_setup < install, "scanner user must be created before install");
+        assert!(
+            user_setup < install,
+            "scanner user must be created before install"
+        );
         assert!(script.contains("chown -R gyrseek /work"));
     }
 
@@ -564,7 +573,10 @@ mod tests {
     #[test]
     fn docker_args_pass_runtime_when_set() {
         let args = build_docker_run_args("img:latest", "/tmp/out", Some("kata-runtime"), "echo hi");
-        let pos = args.iter().position(|a| a == "--runtime").expect("runtime flag present");
+        let pos = args
+            .iter()
+            .position(|a| a == "--runtime")
+            .expect("runtime flag present");
         assert_eq!(args.get(pos + 1).map(String::as_str), Some("kata-runtime"));
     }
 

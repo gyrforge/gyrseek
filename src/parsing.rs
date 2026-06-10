@@ -15,7 +15,10 @@ pub(crate) fn parse_uv_lock_packages_from_content(content: &str) -> Vec<(String,
     let mut version: Option<String> = None;
     let mut local_source = false;
 
-    let finalize_package = |packages: &mut Vec<(String, String)>, name: &mut Option<String>, version: &mut Option<String>, local_source: &mut bool| {
+    let finalize_package = |packages: &mut Vec<(String, String)>,
+                            name: &mut Option<String>,
+                            version: &mut Option<String>,
+                            local_source: &mut bool| {
         if !*local_source {
             if let (Some(n), Some(v)) = (name.take(), version.take()) {
                 packages.push((n, v));
@@ -86,18 +89,19 @@ pub(crate) fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(Str
     let mut source_path: Option<String> = None;
 
     let is_local_location = |value: &str| {
-        value == "." || value.starts_with("./") || value.starts_with("../") || value.starts_with('/')
+        value == "."
+            || value.starts_with("./")
+            || value.starts_with("../")
+            || value.starts_with('/')
     };
 
-    let finalize_package = |
-        packages: &mut Vec<(String, String)>,
-        name: &mut Option<String>,
-        version: &mut Option<String>,
-        local_source: &mut bool,
-        source_type: &mut Option<String>,
-        source_url: &mut Option<String>,
-        source_path: &mut Option<String>,
-    | {
+    let finalize_package = |packages: &mut Vec<(String, String)>,
+                            name: &mut Option<String>,
+                            version: &mut Option<String>,
+                            local_source: &mut bool,
+                            source_type: &mut Option<String>,
+                            source_url: &mut Option<String>,
+                            source_path: &mut Option<String>| {
         let directory_local = source_type.as_deref() == Some("directory")
             && (source_url
                 .as_deref()
@@ -301,9 +305,14 @@ fn parse_requirements_spec(spec: &str) -> Option<(String, Option<String>)> {
     let base = trimmed.split_whitespace().next().unwrap_or(trimmed);
 
     if let Some((name, version)) = base.split_once("==")
-        && !name.is_empty() && !version.is_empty() {
-            return Some((strip_pep508_extras(name).to_string(), Some(version.to_string())));
-        }
+        && !name.is_empty()
+        && !version.is_empty()
+    {
+        return Some((
+            strip_pep508_extras(name).to_string(),
+            Some(version.to_string()),
+        ));
+    }
 
     if base.starts_with('-') || base.starts_with('.') || base.contains("://") {
         return None;
@@ -312,7 +321,9 @@ fn parse_requirements_spec(spec: &str) -> Option<(String, Option<String>)> {
     Some((strip_pep508_extras(base).to_string(), None))
 }
 
-pub(crate) fn parse_requirements_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
+pub(crate) fn parse_requirements_packages_from_content(
+    content: &str,
+) -> Vec<(String, Option<String>)> {
     let mut packages = Vec::new();
 
     for line in content.lines() {
@@ -324,8 +335,12 @@ pub(crate) fn parse_requirements_packages_from_content(content: &str) -> Vec<(St
     packages
 }
 
-pub(crate) fn parse_pip_install_packages_from_args(args: &[String]) -> Vec<(String, Option<String>)> {
-    if args.first().map(String::as_str) != Some("pip") && args.first().map(String::as_str) != Some("pip3") {
+pub(crate) fn parse_pip_install_packages_from_args(
+    args: &[String],
+) -> Vec<(String, Option<String>)> {
+    if args.first().map(String::as_str) != Some("pip")
+        && args.first().map(String::as_str) != Some("pip3")
+    {
         return Vec::new();
     }
     if args.get(1).map(String::as_str) != Some("install") {
@@ -340,9 +355,10 @@ pub(crate) fn parse_pip_install_packages_from_args(args: &[String]) -> Vec<(Stri
 
         if arg == "-r" || arg == "--requirements" {
             if let Some(path) = args.get(idx + 1)
-                && let Ok(content) = fs::read_to_string(path) {
-                    packages.extend(parse_requirements_packages_from_content(&content));
-                }
+                && let Ok(content) = fs::read_to_string(path)
+            {
+                packages.extend(parse_requirements_packages_from_content(&content));
+            }
             idx += 2;
             continue;
         }
@@ -372,20 +388,23 @@ pub(crate) fn parse_pip_install_packages_from_args(args: &[String]) -> Vec<(Stri
 fn parse_npm_spec(arg: &str) -> (String, Option<String>) {
     if arg.starts_with('@') {
         if let Some(idx) = arg.rfind('@')
-            && idx > 0 {
-                let name = &arg[..idx];
-                let version = &arg[idx + 1..];
-                if !version.is_empty() && name.contains('/') {
-                    return (name.to_string(), Some(version.to_string()));
-                }
+            && idx > 0
+        {
+            let name = &arg[..idx];
+            let version = &arg[idx + 1..];
+            if !version.is_empty() && name.contains('/') {
+                return (name.to_string(), Some(version.to_string()));
             }
+        }
         return (arg.to_string(), None);
     }
 
     if let Some((name, version)) = arg.rsplit_once('@')
-        && !name.is_empty() && !version.is_empty() {
-            return (name.to_string(), Some(version.to_string()));
-        }
+        && !name.is_empty()
+        && !version.is_empty()
+    {
+        return (name.to_string(), Some(version.to_string()));
+    }
 
     (arg.to_string(), None)
 }
@@ -429,14 +448,21 @@ fn is_non_registry_npm_spec(spec: &str) -> bool {
         || trimmed.starts_with("link:")
 }
 
-pub(crate) fn parse_npm_packages_from_package_json_content(content: &str) -> Vec<(String, Option<String>)> {
+pub(crate) fn parse_npm_packages_from_package_json_content(
+    content: &str,
+) -> Vec<(String, Option<String>)> {
     let mut packages = Vec::new();
     let parsed: serde_json::Value = match serde_json::from_str(content) {
         Ok(value) => value,
         Err(_) => return packages,
     };
 
-    for section in ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] {
+    for section in [
+        "dependencies",
+        "devDependencies",
+        "optionalDependencies",
+        "peerDependencies",
+    ] {
         if let Some(obj) = parsed.get(section).and_then(serde_json::Value::as_object) {
             for (name, version_val) in obj {
                 if let Some(spec) = version_val.as_str() {
@@ -452,7 +478,9 @@ pub(crate) fn parse_npm_packages_from_package_json_content(content: &str) -> Vec
     packages
 }
 
-pub(crate) fn parse_npm_install_packages_from_args(args: &[String]) -> Vec<(String, Option<String>)> {
+pub(crate) fn parse_npm_install_packages_from_args(
+    args: &[String],
+) -> Vec<(String, Option<String>)> {
     if args.first().map(String::as_str) != Some("npm") {
         return Vec::new();
     }
@@ -498,19 +526,21 @@ pub(crate) fn parse_uv_lock_upgrade_packages_from_args(args: &[String]) -> Vec<S
 
         if arg == "-P" || arg == "--upgrade-package" {
             if let Some(pkg) = args.get(idx + 1)
-                && !pkg.starts_with('-') {
-                    packages.push(pkg.to_string());
-                    idx += 2;
-                } else {
-                    idx += 1;
-                }
+                && !pkg.starts_with('-')
+            {
+                packages.push(pkg.to_string());
+                idx += 2;
+            } else {
+                idx += 1;
+            }
             continue;
         }
 
         if let Some(pkg) = arg.strip_prefix("--upgrade-package=")
-            && !pkg.is_empty() {
-                packages.push(pkg.to_string());
-            }
+            && !pkg.is_empty()
+        {
+            packages.push(pkg.to_string());
+        }
 
         idx += 1;
     }
@@ -560,10 +590,11 @@ pub(crate) fn rewrite_args_with_pinned_versions(
         if manager == "npm" {
             let (name, existing_version) = parse_npm_spec(arg);
             if existing_version.is_none()
-                && let Some(version) = pins.get(&name) {
-                    out.push(format!("{}@{}", name, version));
-                    continue;
-                }
+                && let Some(version) = pins.get(&name)
+            {
+                out.push(format!("{}@{}", name, version));
+                continue;
+            }
             out.push(arg.clone());
             continue;
         }
@@ -593,12 +624,22 @@ pub(crate) fn rewrite_args_with_pinned_versions(
     out
 }
 
-pub(crate) fn parse_package_details(manager: &str, args: &[String]) -> (Option<String>, Option<String>) {
-    if manager == "uv" || manager == "pip" || manager == "pip3" || manager == "poetry" || manager == "npm" {
+pub(crate) fn parse_package_details(
+    manager: &str,
+    args: &[String],
+) -> (Option<String>, Option<String>) {
+    if manager == "uv"
+        || manager == "pip"
+        || manager == "pip3"
+        || manager == "poetry"
+        || manager == "npm"
+    {
         let pkg_arg_start = if manager == "uv" {
             if args.get(1).map(String::as_str) == Some("add") {
                 Some(2)
-            } else if args.get(1).map(String::as_str) == Some("pip") && args.get(2).map(String::as_str) == Some("install") {
+            } else if args.get(1).map(String::as_str) == Some("pip")
+                && args.get(2).map(String::as_str) == Some("install")
+            {
                 Some(3)
             } else {
                 None
@@ -660,8 +701,10 @@ pub(crate) fn parse_package_details(manager: &str, args: &[String]) -> (Option<S
 pub(crate) fn should_enforce_package_detection(manager: &str, args: &[String]) -> bool {
     if manager == "uv" {
         return args.get(1).map(String::as_str) == Some("add")
-            || (args.get(1).map(String::as_str) == Some("pip") && args.get(2).map(String::as_str) == Some("install"))
-            || (args.get(1).map(String::as_str) == Some("pip") && args.get(2).map(String::as_str) == Some("sync"))
+            || (args.get(1).map(String::as_str) == Some("pip")
+                && args.get(2).map(String::as_str) == Some("install"))
+            || (args.get(1).map(String::as_str) == Some("pip")
+                && args.get(2).map(String::as_str) == Some("sync"))
             || args.get(1).map(String::as_str) == Some("sync");
     }
 
@@ -786,62 +829,97 @@ version = "2.31.0"
     #[test]
     fn pins_unpinned_npm_install_to_resolved_version() {
         let pins = std::collections::HashMap::from([("left-pad".to_string(), "1.3.0".to_string())]);
-        let out = rewrite_args_with_pinned_versions("npm", &args(&["npm", "install", "left-pad"]), &pins);
+        let out =
+            rewrite_args_with_pinned_versions("npm", &args(&["npm", "install", "left-pad"]), &pins);
         assert_eq!(out, args(&["npm", "install", "left-pad@1.3.0"]));
     }
 
     #[test]
     fn pins_scoped_npm_package() {
-        let pins = std::collections::HashMap::from([("@scope/pkg".to_string(), "2.5.1".to_string())]);
-        let out = rewrite_args_with_pinned_versions("npm", &args(&["npm", "install", "@scope/pkg"]), &pins);
+        let pins =
+            std::collections::HashMap::from([("@scope/pkg".to_string(), "2.5.1".to_string())]);
+        let out = rewrite_args_with_pinned_versions(
+            "npm",
+            &args(&["npm", "install", "@scope/pkg"]),
+            &pins,
+        );
         assert_eq!(out, args(&["npm", "install", "@scope/pkg@2.5.1"]));
     }
 
     #[test]
     fn does_not_repin_npm_package_that_already_has_a_version() {
         let pins = std::collections::HashMap::from([("left-pad".to_string(), "1.3.0".to_string())]);
-        let out = rewrite_args_with_pinned_versions("npm", &args(&["npm", "install", "left-pad@1.2.0"]), &pins);
+        let out = rewrite_args_with_pinned_versions(
+            "npm",
+            &args(&["npm", "install", "left-pad@1.2.0"]),
+            &pins,
+        );
         assert_eq!(out, args(&["npm", "install", "left-pad@1.2.0"]));
     }
 
     #[test]
     fn pins_unpinned_pip_install_to_resolved_version() {
-        let pins = std::collections::HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
-        let out = rewrite_args_with_pinned_versions("pip", &args(&["pip", "install", "requests"]), &pins);
+        let pins =
+            std::collections::HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+        let out =
+            rewrite_args_with_pinned_versions("pip", &args(&["pip", "install", "requests"]), &pins);
         assert_eq!(out, args(&["pip", "install", "requests==2.31.0"]));
     }
 
     #[test]
     fn pins_pip_package_with_extras() {
-        let pins = std::collections::HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
-        let out = rewrite_args_with_pinned_versions("pip", &args(&["pip", "install", "requests[security]"]), &pins);
+        let pins =
+            std::collections::HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+        let out = rewrite_args_with_pinned_versions(
+            "pip",
+            &args(&["pip", "install", "requests[security]"]),
+            &pins,
+        );
         assert_eq!(out, args(&["pip", "install", "requests[security]==2.31.0"]));
     }
 
     #[test]
     fn leaves_pip_flags_and_pinned_specs_untouched() {
-        let pins = std::collections::HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
-        let out = rewrite_args_with_pinned_versions("pip", &args(&["pip", "install", "--no-cache-dir", "requests==2.30.0"]), &pins);
-        assert_eq!(out, args(&["pip", "install", "--no-cache-dir", "requests==2.30.0"]));
+        let pins =
+            std::collections::HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+        let out = rewrite_args_with_pinned_versions(
+            "pip",
+            &args(&["pip", "install", "--no-cache-dir", "requests==2.30.0"]),
+            &pins,
+        );
+        assert_eq!(
+            out,
+            args(&["pip", "install", "--no-cache-dir", "requests==2.30.0"])
+        );
     }
 
     #[test]
     fn pins_uv_pip_install_respecting_three_token_prefix() {
         let pins = std::collections::HashMap::from([("flask".to_string(), "3.0.0".to_string())]);
-        let out = rewrite_args_with_pinned_versions("uv", &args(&["uv", "pip", "install", "flask"]), &pins);
+        let out = rewrite_args_with_pinned_versions(
+            "uv",
+            &args(&["uv", "pip", "install", "flask"]),
+            &pins,
+        );
         assert_eq!(out, args(&["uv", "pip", "install", "flask==3.0.0"]));
     }
 
     #[test]
     fn empty_pins_is_a_noop() {
-        let out = rewrite_args_with_pinned_versions("npm", &args(&["npm", "install", "left-pad"]), &std::collections::HashMap::new());
+        let out = rewrite_args_with_pinned_versions(
+            "npm",
+            &args(&["npm", "install", "left-pad"]),
+            &std::collections::HashMap::new(),
+        );
         assert_eq!(out, args(&["npm", "install", "left-pad"]));
     }
 
     #[test]
     fn does_not_pin_unrelated_packages() {
-        let pins = std::collections::HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
-        let out = rewrite_args_with_pinned_versions("pip", &args(&["pip", "install", "flask"]), &pins);
+        let pins =
+            std::collections::HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+        let out =
+            rewrite_args_with_pinned_versions("pip", &args(&["pip", "install", "flask"]), &pins);
         assert_eq!(out, args(&["pip", "install", "flask"]));
     }
 
@@ -849,7 +927,13 @@ version = "2.31.0"
     fn parses_uv_lock_packages_for_sync_scanning() {
         let lock = "version = 1\n\n[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\n\n[[package]]\nname = \"pytest\"\nversion = \"9.0.1\"\n";
         let parsed = parse_uv_lock_packages_from_content(lock);
-        assert_eq!(parsed, vec![("requests".to_string(), "2.31.0".to_string()), ("pytest".to_string(), "9.0.1".to_string())]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("requests".to_string(), "2.31.0".to_string()),
+                ("pytest".to_string(), "9.0.1".to_string())
+            ]
+        );
     }
 
     #[test]
@@ -863,31 +947,49 @@ version = "2.31.0"
     fn parses_requirements_packages_for_uv_pip_sync() {
         let requirements = "# comment\nrequests==2.31.0\npytest\n-r dev-requirements.txt\n";
         let parsed = parse_requirements_packages_from_content(requirements);
-        assert_eq!(parsed, vec![("requests".to_string(), Some("2.31.0".to_string())), ("pytest".to_string(), None)]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("requests".to_string(), Some("2.31.0".to_string())),
+                ("pytest".to_string(), None)
+            ]
+        );
     }
 
     #[test]
     fn parses_pylock_packages_for_uv_pip_sync() {
         let pylock = "version = 1\n\n[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\n\n[[package]]\nname = \"pytest\"\nversion = \"9.0.1\"\n\n[[package]]\nname = \"local-editable\"\n";
         let parsed = parse_pylock_packages_from_content(pylock);
-        assert_eq!(parsed, vec![
-            ("requests".to_string(), Some("2.31.0".to_string())),
-            ("pytest".to_string(), Some("9.0.1".to_string())),
-            ("local-editable".to_string(), None),
-        ]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("requests".to_string(), Some("2.31.0".to_string())),
+                ("pytest".to_string(), Some("9.0.1".to_string())),
+                ("local-editable".to_string(), None),
+            ]
+        );
     }
 
     #[test]
     fn parses_pip_install_multi_packages_and_requirements_file() {
         let req_path = std::env::temp_dir().join(format!("gyrseek-req-{}.txt", std::process::id()));
         std::fs::write(&req_path, "requests==2.31.0\npytest\n").unwrap();
-        let a = vec!["pip3".to_string(), "install".to_string(), "-r".to_string(), req_path.to_string_lossy().to_string(), "flask==3.0.0".to_string()];
+        let a = vec![
+            "pip3".to_string(),
+            "install".to_string(),
+            "-r".to_string(),
+            req_path.to_string_lossy().to_string(),
+            "flask==3.0.0".to_string(),
+        ];
         let parsed = parse_pip_install_packages_from_args(&a);
-        assert_eq!(parsed, vec![
-            ("requests".to_string(), Some("2.31.0".to_string())),
-            ("pytest".to_string(), None),
-            ("flask".to_string(), Some("3.0.0".to_string())),
-        ]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("requests".to_string(), Some("2.31.0".to_string())),
+                ("pytest".to_string(), None),
+                ("flask".to_string(), Some("3.0.0".to_string())),
+            ]
+        );
         let _ = std::fs::remove_file(req_path);
     }
 
@@ -895,21 +997,49 @@ version = "2.31.0"
     fn parses_poetry_lock_packages_for_install_scanning() {
         let lock = "[[package]]\nname = \"pytest\"\nversion = \"9.0.3\"\n\n[[package]]\nname = \"requests\"\nversion = \"2.31.0\"\n";
         let parsed = parse_poetry_lock_packages_from_content(lock);
-        assert_eq!(parsed, vec![("pytest".to_string(), "9.0.3".to_string()), ("requests".to_string(), "2.31.0".to_string())]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("pytest".to_string(), "9.0.3".to_string()),
+                ("requests".to_string(), "2.31.0".to_string())
+            ]
+        );
     }
 
     #[test]
     fn parses_npm_install_multi_packages_from_args() {
-        let a = vec!["npm".to_string(), "install".to_string(), "lodash@4.17.21".to_string(), "express".to_string()];
+        let a = vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "lodash@4.17.21".to_string(),
+            "express".to_string(),
+        ];
         let parsed = parse_npm_install_packages_from_args(&a);
-        assert_eq!(parsed, vec![("lodash".to_string(), Some("4.17.21".to_string())), ("express".to_string(), None)]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("lodash".to_string(), Some("4.17.21".to_string())),
+                ("express".to_string(), None)
+            ]
+        );
     }
 
     #[test]
     fn parses_npm_update_multi_packages_from_args() {
-        let a = vec!["npm".to_string(), "update".to_string(), "lodash".to_string(), "typescript".to_string()];
+        let a = vec![
+            "npm".to_string(),
+            "update".to_string(),
+            "lodash".to_string(),
+            "typescript".to_string(),
+        ];
         let parsed = parse_npm_install_packages_from_args(&a);
-        assert_eq!(parsed, vec![("lodash".to_string(), None), ("typescript".to_string(), None)]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("lodash".to_string(), None),
+                ("typescript".to_string(), None)
+            ]
+        );
     }
 
     #[test]
@@ -917,23 +1047,36 @@ version = "2.31.0"
         let j = r#"{"name":"demo","dependencies":{"lodash":"^4.17.21","axios":"1.8.2"},"devDependencies":{"vitest":"~1.6.0"}}"#;
         let mut parsed = parse_npm_packages_from_package_json_content(j);
         parsed.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(parsed, vec![
-            ("axios".to_string(), Some("1.8.2".to_string())),
-            ("lodash".to_string(), None),
-            ("vitest".to_string(), None),
-        ]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("axios".to_string(), Some("1.8.2".to_string())),
+                ("lodash".to_string(), None),
+                ("vitest".to_string(), None),
+            ]
+        );
     }
 
     #[test]
     fn skips_local_source_npm_dependencies_from_package_json_content() {
         let j = r#"{"name":"demo","dependencies":{"local-file":"file:../local-file","local-workspace":"workspace:*","git-dep":"git+https://github.com/example/repo.git","url-dep":"https://example.com/pkg.tgz","axios":"1.8.2"}}"#;
         let parsed = parse_npm_packages_from_package_json_content(j);
-        assert_eq!(parsed, vec![("axios".to_string(), Some("1.8.2".to_string()))]);
+        assert_eq!(
+            parsed,
+            vec![("axios".to_string(), Some("1.8.2".to_string()))]
+        );
     }
 
     #[test]
     fn parses_uv_lock_upgrade_packages_multi_targets() {
-        let a = vec!["uv".to_string(), "lock".to_string(), "-P".to_string(), "pytest".to_string(), "--upgrade-package=requests".to_string(), "--dry-run".to_string()];
+        let a = vec![
+            "uv".to_string(),
+            "lock".to_string(),
+            "-P".to_string(),
+            "pytest".to_string(),
+            "--upgrade-package=requests".to_string(),
+            "--dry-run".to_string(),
+        ];
         let parsed = parse_uv_lock_upgrade_packages_from_args(&a);
         assert_eq!(parsed, vec!["pytest".to_string(), "requests".to_string()]);
     }
@@ -984,19 +1127,31 @@ version = "2.31.0"
     fn parses_plural_packages_header_from_pylock() {
         let pylock = "version = 1\n\n[[packages]]\nname = \"requests\"\nversion = \"2.31.0\"\n\n[[packages]]\nname = \"pytest\"\nversion = \"9.0.1\"\n";
         let parsed = parse_pylock_packages_from_content(pylock);
-        assert_eq!(parsed, vec![
-            ("requests".to_string(), Some("2.31.0".to_string())),
-            ("pytest".to_string(), Some("9.0.1".to_string())),
-        ]);
+        assert_eq!(
+            parsed,
+            vec![
+                ("requests".to_string(), Some("2.31.0".to_string())),
+                ("pytest".to_string(), Some("9.0.1".to_string())),
+            ]
+        );
     }
 
     // --- gap #5: requirements URL/VCS specifier filter ---
 
     #[test]
     fn requirements_spec_rejects_vcs_and_url_specifiers() {
-        assert_eq!(parse_requirements_spec("git+https://github.com/example/repo.git#egg=pkg"), None);
-        assert_eq!(parse_requirements_spec("https://files.example.com/pkg-1.0.tar.gz"), None);
-        assert_eq!(parse_requirements_spec("http://internal.corp/pkg.whl"), None);
+        assert_eq!(
+            parse_requirements_spec("git+https://github.com/example/repo.git#egg=pkg"),
+            None
+        );
+        assert_eq!(
+            parse_requirements_spec("https://files.example.com/pkg-1.0.tar.gz"),
+            None
+        );
+        assert_eq!(
+            parse_requirements_spec("http://internal.corp/pkg.whl"),
+            None
+        );
     }
 
     // --- gap #6: parse_npm_spec versioned scoped package ---
@@ -1035,14 +1190,22 @@ version = "2.31.0"
         assert_eq!(normalize_npm_version_spec(""), None);
         assert_eq!(normalize_npm_version_spec("^1.0.0"), None);
         assert_eq!(normalize_npm_version_spec("~1.0.0"), None);
-        assert_eq!(normalize_npm_version_spec("1.2.3"), Some("1.2.3".to_string()));
+        assert_eq!(
+            normalize_npm_version_spec("1.2.3"),
+            Some("1.2.3".to_string())
+        );
     }
 
     // --- gap #9: parse_npm_install_packages_from_args link: spec not filtered ---
 
     #[test]
     fn npm_install_args_skips_link_spec() {
-        let a = vec!["npm".to_string(), "install".to_string(), "link:../local-pkg".to_string(), "lodash".to_string()];
+        let a = vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "link:../local-pkg".to_string(),
+            "lodash".to_string(),
+        ];
         let parsed = parse_npm_install_packages_from_args(&a);
         // link: is a non-registry spec; only lodash (a real package) should be scanned.
         assert_eq!(parsed, vec![("lodash".to_string(), None)]);
@@ -1057,13 +1220,22 @@ version = "2.31.0"
         // Before the fix, idx += 2 was always executed, causing `requests` to be
         // skipped even when present as the *next* -P argument.
         let a = vec![
-            "uv".to_string(), "lock".to_string(),
-            "-P".to_string(), "--dry-run".to_string(),
-            "-P".to_string(), "requests".to_string(),
+            "uv".to_string(),
+            "lock".to_string(),
+            "-P".to_string(),
+            "--dry-run".to_string(),
+            "-P".to_string(),
+            "requests".to_string(),
         ];
         let parsed = parse_uv_lock_upgrade_packages_from_args(&a);
-        assert!(!parsed.contains(&"--dry-run".to_string()), "--dry-run must not be treated as a package");
-        assert!(parsed.contains(&"requests".to_string()), "requests after a separate -P must still be collected");
+        assert!(
+            !parsed.contains(&"--dry-run".to_string()),
+            "--dry-run must not be treated as a package"
+        );
+        assert!(
+            parsed.contains(&"requests".to_string()),
+            "requests after a separate -P must still be collected"
+        );
     }
 
     #[test]
@@ -1086,8 +1258,8 @@ version = "2.31.0"
     #[test]
     fn rewrites_uv_add_preserves_extras_in_forwarded_spec() {
         let pins = std::collections::HashMap::from([("flask".to_string(), "3.0.0".to_string())]);
-        let out = rewrite_args_with_pinned_versions("uv", &args(&["uv", "add", "flask[async]"]), &pins);
+        let out =
+            rewrite_args_with_pinned_versions("uv", &args(&["uv", "add", "flask[async]"]), &pins);
         assert_eq!(out, args(&["uv", "add", "flask[async]==3.0.0"]));
     }
-
 }
