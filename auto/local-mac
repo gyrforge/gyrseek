@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-auto/cargo-build
+just build
 
 VERSION="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
 VERSION_SUFFIX=""
