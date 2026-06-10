@@ -13,13 +13,16 @@ This file stores persistent working memory and agent instructions for this repos
   - src/scanning.rs (registry lookup and anomaly scanning)
   - src/sandbox.rs (sandbox runner backends and mode selection)
 - Build and scripts:
-  - auto/cargo-build — release build (cargo build --release)
-  - auto/cargo-checks — cargo check + clippy + test; run before committing
-  - auto/cargo-test-{npm,pip,uv,poetry} — end-to-end tests per manager using the release binary; require Docker
+  - Justfile is the task runner entrypoint; run `just --list` to see recipes
+  - just build — release build (cargo build --release)
+  - just install — install gyrseek with cargo install --path . --locked
+  - just fmt — format Rust code
+  - just lint — cargo test --all-features --locked + clippy all targets/features + format check; run before committing
+  - just test-{npm,pip,uv,poetry} — end-to-end tests per manager using the release binary; require Docker
 - Test strategy:
   - All unit and integration tests that do not require spawning the compiled binary live inline in their src/ module under `#[cfg(test)]` — this follows Rust convention and lets tests access private items directly
   - Only tests that need to spawn the real binary (CLI exit-code checks, forward behavior) remain in tests/ as integration test files
-  - Run with cargo test or ./auto/cargo-checks
+  - Run with cargo test or just lint
   - src/scanning.rs (inline) — version ordering, IPv4/IPv6 trace extraction, burst filtering, FCrDNS (forward_confirmed_hostname), bracketed-argv preservation, watched-process (bun/deno) detection and allowlisting, git-clone signature diffing, network anomaly detection, DNS enrichment, IP/domain allowlist filtering, git-clone simulation
   - src/sandbox.rs (inline) — SYS_PTRACE capability in docker args, strace-stderr capture, no-truncation flags, unprivileged-payload integrity
   - src/parsing.rs (inline) — PEP 508 extras stripping (strip_pep508_extras), extras-aware pinning, poetry local directory-source exclusion, rewrite_args_with_pinned_versions, lockfile/requirements/npm parsing for all managers

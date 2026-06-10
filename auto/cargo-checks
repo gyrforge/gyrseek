@@ -1,9 +1,0 @@
-#!/bin/bash
-
-set -euo pipefail
-cd "$(dirname "$0")/.."
-
-cargo check
-cargo clippy
-cargo test
-cargo fmt
