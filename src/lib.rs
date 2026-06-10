@@ -742,7 +742,10 @@ pub async fn run(args: Vec<String>) {
     // without a config file, Docker, or a recognized manager subcommand. Only
     // the first arg is checked so a forwarded command's own --version flag
     // (e.g. `gyrseek pip install foo --version`) is left untouched.
-    if matches!(args.first().map(String::as_str), Some("--version") | Some("-V")) {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("--version") | Some("-V")
+    ) {
         println!("gyrseek {}", env!("CARGO_PKG_VERSION"));
         return;
     }
