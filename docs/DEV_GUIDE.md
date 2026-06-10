@@ -2,9 +2,10 @@
 
 ## Local Setup
 1. Install Rust toolchain.
-2. Ensure required package managers are available for your target flows: uv, pip or pip3, poetry, npm.
-3. Ensure Docker CLI is available in PATH for default sandbox mode.
-4. If using host mode (`GYRSEEK_SANDBOX=host`), ensure strace is available in PATH.
+2. Install just.
+3. Ensure required package managers are available for your target flows: uv, pip or pip3, poetry, npm.
+4. Ensure Docker CLI is available in PATH for default sandbox mode.
+5. If using host mode (`GYRSEEK_SANDBOX=host`), ensure strace is available in PATH.
 
 ## Sandbox Mode
 - Default: `GYRSEEK_SANDBOX=docker`
@@ -13,8 +14,12 @@
 
 ## Build and Test
 - Build debug: cargo build
-- Build release: ./auto/cargo-build
-- Run tests: ./auto/cargo-checks (or cargo test directly)
+- Build release: just build
+- Install locally: just install
+- Uninstall locally: just uninstall
+- Run tests: just test (or cargo test directly)
+- Run lint checks: just lint
+- Format code: just fmt
 - Run inline tests for one module: cargo test --lib scanning / cargo test --lib parsing / cargo test --lib
 - Run CLI integration tests (spawn binary): cargo test --test cli_burst_exit_tests / cargo test --test forward_fail_closed_tests / cargo test --test lock_routing_tests / cargo test --test version_flag_tests
 
@@ -58,7 +63,7 @@ After every repository change:
 1. Update .copilot/AGENTS.md.
 2. Update README.md.
 3. Keep docs in docs/ in sync if architecture or workflow changed.
-4. Run cargo test before finishing.
+4. Run just test before finishing.
 
 ## Practical Review Checklist
 - Command path is correctly recognized.

@@ -15,7 +15,7 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 
 - [Introduction](#introduction)
 - [Quick Start](#quick-start)
-- [Scripts](#scripts)
+- [Just Recipes](#just-recipes)
 - [Supported Commands](#supported-commands)
 - [How It Works](#how-it-works)
 - [Usage](#usage)
@@ -55,7 +55,7 @@ We welcome feedback and suggestions to this repository.
 ### 2. Build
 
 ```bash
-./auto/cargo-build
+just build
 # binary is produced at: target/release/gyrseek
 ```
 
@@ -68,36 +68,49 @@ We welcome feedback and suggestions to this repository.
 
 That's it. `gyrseek` resolves the version, runs the sandbox behavioral diff, and either forwards your command or blocks it with an explanation.
 
-## Scripts
+## Just Recipes
 
-The `auto/` directory contains convenience scripts for common tasks. All scripts run from the repo root regardless of where you call them from.
+The `Justfile` contains convenience recipes for common tasks. All recipes run from the repo root regardless of where you call them from.
 
-| Script | What it does |
+| Recipe | What it does |
 |---|---|
-| `./auto/cargo-build` | Builds the release binary (`target/release/gyrseek`). |
-| `./auto/cargo-checks` | Runs `cargo check`, `cargo clippy`, and `cargo test`. Use this before committing. |
-| `./auto/cargo-test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Requires the release binary to be built first. |
-| `./auto/cargo-test-pip` | End-to-end test: creates a venv, then scans and installs `black` and the packages from `tests/pip/requirements.txt` via `pip3`. |
-| `./auto/cargo-test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, and `poetry update` from the `tests/poetry/` fixture. |
-| `./auto/cargo-test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, and `uv sync` from the `tests/uv/` fixture. |
+| `just build` | Builds the release binary (`target/release/gyrseek`). |
+| `just install` | Installs `gyrseek` into Cargo's bin directory with `cargo install --path . --locked`. |
+| `just uninstall` | Uninstalls `gyrseek` with `cargo uninstall gyrseek`. |
+| `just fmt` | Formats the Rust code. |
+| `just test` | Runs `cargo test --all-features --locked`. |
+| `just lint` | Runs clippy for all targets/features and a format check. Use this before committing. |
+| `just test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. |
+| `just test-pip` | End-to-end test: creates a venv, then scans and installs `black` and the packages from `tests/pip/requirements.txt` via `pip3`. Builds the release binary first. |
+| `just test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
+| `just test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
 
 **Typical workflow:**
 
 ```bash
 # Build once
-./auto/cargo-build
+just build
+
+# Install into Cargo's bin directory
+just install
+
+# Uninstall from Cargo's bin directory
+just uninstall
+
+# Run tests
+just test
 
 # Check everything is healthy before pushing
-./auto/cargo-checks
+just lint
 
 # Run a live end-to-end test for the manager you changed
-./auto/cargo-test-npm
-./auto/cargo-test-pip
-./auto/cargo-test-uv
-./auto/cargo-test-poetry
+just test-npm
+just test-pip
+just test-uv
+just test-poetry
 ```
 
-> The end-to-end scripts use `GYRSEEK_SANDBOX=docker` by default (inherited from your environment). Make sure Docker is running before executing them.
+> The end-to-end recipes use `GYRSEEK_SANDBOX=docker` by default (inherited from your environment). Make sure Docker is running before executing them.
 
 ## Supported Commands
 
@@ -556,7 +569,8 @@ Tests follow Rust convention: everything that doesn't need to spawn the compiled
 
 ```bash
 # Run everything
-./auto/cargo-checks
+just test
+just lint
 
 # Or directly:
 cargo test
@@ -582,11 +596,10 @@ cargo test -- --nocapture
 **End-to-end tests** (requires Docker and the release binary):
 
 ```bash
-./auto/cargo-build          # build first
-./auto/cargo-test-npm
-./auto/cargo-test-pip
-./auto/cargo-test-uv
-./auto/cargo-test-poetry
+just test-npm
+just test-pip
+just test-uv
+just test-poetry
 ```
 
 Behavior test coverage includes deterministic DNS-enrichment checks, FCrDNS forward-confirmation, bracketed-argv preservation, watched-process detection, git-clone signature diffing, and release-burst policy enforcement.
@@ -605,11 +618,14 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 - `tests/cli_burst_exit_tests.rs` — release burst and minimum release age CLI exit-code tests (spawn binary)
 - `tests/forward_fail_closed_tests.rs` — fail-closed forwarding and exit-status propagation tests (spawn binary)
 
-**Scripts**
+**Just recipes**
 
-- `auto/cargo-build` — release build
-- `auto/cargo-checks` — check + lint + test
-- `auto/cargo-test-{npm,pip,uv,poetry}` — end-to-end tests per manager
+- `just build` — release build
+- `just install` / `just uninstall` — install or remove the local Cargo binary
+- `just fmt` — format Rust code
+- `just test` — run Rust tests
+- `just lint` — run clippy and format checks
+- `just test-{npm,pip,uv,poetry}` — end-to-end tests per manager
 
 **Collaboration docs** (for multi-developer / multi-LLM work)
 
