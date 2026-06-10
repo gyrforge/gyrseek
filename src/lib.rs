@@ -854,39 +854,37 @@ pub async fn run(args: Vec<String>) {
             return;
         }
 
-        if upgrade_all {
-            let lock_packages = eye.parse_uv_lock_packages();
-            if lock_packages.is_empty() {
-                println!(
-                    "❌ [gyrseek] 'uv lock --upgrade' detected but no packages found in uv.lock. Failing closed."
-                );
-                std::process::exit(1);
-            }
-
+        let lock_packages = eye.parse_uv_lock_packages();
+        if lock_packages.is_empty() {
             println!(
-                "🛡️ [gyrseek] 'uv lock --upgrade' detected. Testing {} locked package(s) from uv.lock...",
-                lock_packages.len()
+                "❌ [gyrseek] 'uv lock' detected but no packages found in uv.lock. Failing closed."
             );
-
-            if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages, &policy)
-                .await
-                .is_none()
-            {
-                std::process::exit(1);
-            }
-
-            println!("\n✅ [gyrseek] Clear behavioral report for uv lock upgrade set. Forwarding command safely...");
-            eye.forward_original_command();
-            return;
+            std::process::exit(1);
         }
 
+        let lock_label = if upgrade_all { "uv lock --upgrade" } else { "uv lock" };
+        println!(
+            "🛡️ [gyrseek] '{}' detected. Testing {} locked package(s) from uv.lock...",
+            lock_label,
+            lock_packages.len()
+        );
+
+        if scan_many_with_cache(&mut scan_cache, runner.as_ref(), &eye.manager, lock_packages, &policy)
+            .await
+            .is_none()
+        {
+            std::process::exit(1);
+        }
+
+        println!("\n✅ [gyrseek] Clear behavioral report for uv lock package set. Forwarding command safely...");
         eye.forward_original_command();
         return;
     }
 
     if eye.manager == "poetry"
         && (eye.passthrough_args.get(1).map(String::as_str) == Some("install")
-            || eye.passthrough_args.get(1).map(String::as_str) == Some("update"))
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("update")
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("lock"))
     {
         let poetry_cmd = eye.passthrough_args.get(1).map(String::as_str).unwrap_or("install");
         let lock_packages = eye.parse_poetry_lock_packages();

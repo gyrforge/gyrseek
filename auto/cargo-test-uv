@@ -7,3 +7,4 @@ cd tests/uv
 ../../target/release/gyrseek uv add black
 ../../target/release/gyrseek uv pip install -r ./pyproject.toml
 ../../target/release/gyrseek uv sync
+../../target/release/gyrseek uv lock

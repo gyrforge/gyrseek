@@ -16,9 +16,10 @@ fn prepend_path(dir: &Path) -> String {
     format!("{}:{}", dir.display(), current)
 }
 
-/// `gyrseek uv lock` (no --upgrade/-P) reaches forward_original_command without
-/// touching the scanner, so it is the right vehicle for testing forward_args
-/// behavior. The runner init is bypassed so no docker call is made.
+/// `gyrseek uv venv` is an unscanned subcommand that reaches
+/// forward_original_command without touching the scanner, so it is the right
+/// vehicle for testing forward_args behavior. The runner init is bypassed so no
+/// docker call is made.
 ///
 /// #7 — When gyrseek forwards to a host binary that does not exist, it must fail
 /// closed (exit 1 with a diagnostic) rather than panicking or silently succeeding.
@@ -27,7 +28,7 @@ fn forwarding_a_missing_host_binary_fails_closed() {
     let dir = tempfile::tempdir().unwrap();
     // Restrict PATH to only the empty temp dir so no real `uv` is reachable.
     let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
-        .args(["uv", "lock"])
+        .args(["uv", "venv"])
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
         .env("PATH", dir.path())
         .output()
@@ -51,7 +52,7 @@ fn forwarding_propagates_host_nonzero_exit_status() {
     fake_binary(dir.path(), "uv", 42);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
-        .args(["uv", "lock"])
+        .args(["uv", "venv"])
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
         .env("PATH", prepend_path(dir.path()))
         .output()
@@ -72,7 +73,7 @@ fn forwarding_preserves_host_success_exit_status() {
     fake_binary(dir.path(), "uv", 0);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
-        .args(["uv", "lock"])
+        .args(["uv", "venv"])
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
         .env("PATH", prepend_path(dir.path()))
         .output()
