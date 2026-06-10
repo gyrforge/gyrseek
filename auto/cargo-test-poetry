@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+auto/cargo-build
 cd tests/poetry
 ../../target/release/gyrseek poetry add black
 ../../target/release/gyrseek poetry install --no-root

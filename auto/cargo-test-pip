@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+auto/cargo-build
 cd tests/pip
 python3 -m venv .venv
 source .venv/bin/activate

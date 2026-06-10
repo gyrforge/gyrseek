@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+auto/cargo-build
 cd tests/uv
 ../../target/release/gyrseek uv add black
 ../../target/release/gyrseek uv pip install -r ./pyproject.toml

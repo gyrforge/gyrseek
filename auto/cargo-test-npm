@@ -3,6 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+auto/cargo-build
 cd tests/npm
 ../../target/release/gyrseek npm install lodash
 ../../target/release/gyrseek npm update
