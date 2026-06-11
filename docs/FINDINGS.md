@@ -35,7 +35,7 @@ Each finding has:
 | 10 | `scanning.rs` | 654  | Critical | Self-referencing baseline override disables all anomaly detection     | ⚠️ Open  |
 | 11 | `parsing.rs`  | 468  | High     | All-non-registry npm CLI args trigger package.json fallback           | ⚠️ Open  |
 | 12 | `lib.rs`      | 1021 | High     | All-non-registry npm CLI args + no package.json → valid install blocked | ⚠️ Open |
-| 13 | `scanning.rs` | 1852 | Medium   | Async tests set env var without drop-guard — panic leaves it set      | ⚠️ Open  |
+| 13 | `scanning.rs` | 1852 | Medium   | Async tests set env var without drop-guard — panic leaves it set      | ✅ Fixed  |
 | 14 | `parsing.rs`  | 880  | Low      | Temp file not cleaned up on test assertion failure                    | ⚠️ Open  |
 
 **Chains:**
@@ -224,7 +224,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 13 — Medium | `scanning.rs:1852` | ⚠️ Open
+## Finding 13 — Medium | `scanning.rs:1852` | ✅ Fixed
 
 **Summary:** Async scan tests set/remove an env var with bare `unsafe` calls and no drop-guard; a panic between the two leaves the var set and may poison the shared `Mutex`, masking the real failure with cascade lock-poison panics.
 
@@ -239,6 +239,8 @@ impl Drop for EnvGuard {
     fn drop(&mut self) { unsafe { std::env::remove_var(self.0) } }
 }
 ```
+
+**✅ Fix status — FIXED (RAII guard that also holds the lock).** A single `EnvVarGuard` now owns both concerns: `EnvVarGuard::set(key, "0")` acquires `env_lock`, sets the var, and stores the `MutexGuard`; `Drop` removes the var. Because the guard is bound to a `let _env = …` at the top of each test, the lock is held for the **entire** test body — including the scan `.await` that reads the var — so cross-test serialization is preserved (an intermediate fix that released the lock during the await would have reintroduced the race). `Drop` runs on panic, so a failing assertion can never leave the var set, and the lock is acquired with `unwrap_or_else(|p| p.into_inner())` so a panicking test does not cascade `PoisonError` into every subsequent test. (`scanning.rs`; all 8 affected tests converted, `env_lock` retained and used by the guard.)
 
 ---
 
@@ -308,6 +310,13 @@ An external "is this idiomatic Rust?" review was run (by ChatGPT) and the verdic
 
 **Legitimate (generic but worth acting on) — the only parts of the review with value:**
 
-- **`run()` is a god function.** Fair. ~480 lines; the per-manager branches (uv lock / poetry / uv pip sync / uv sync / pip / npm) are near-identical (parse → `scan_many_with_cache` → exit-or-forward) and could collapse into table-driven dispatch. Independently corroborated by the knowledge-graph build (2026-06-11): `run()` has the highest betweenness centrality in the codebase (0.272), bridging five communities; its home cluster and the parsing cluster are the two least-cohesive. ⚠️ Open — refactor candidate, not a defect.
+- **`run()` is a god function.** Fair. ~480 lines; the per-manager branches (uv lock / poetry / uv pip sync / uv sync / pip / npm) were near-identical (parse → `scan_many_with_cache` → exit-or-forward) and have now been collapsed into a `bulk_scan!` macro with `ForwardMode` dispatch and `scan_targets`/`exit_with` helpers. `run()` went from ~300 lines of branch logic to ~200. Independently corroborated by the knowledge-graph build (2026-06-11): `run()` has the highest betweenness centrality in the codebase (0.272), bridging five communities; its home cluster and the parsing cluster are the two least-cohesive. ✅ Completed — refactor applied, **byte-identical stdout** (each branch passes its own `$empty_msg`/`$testing_msg`/`$clear_noun` into the macro, so control flow, security semantics, and console output are all unchanged; verified against `HEAD` and by the full test suite). See **Round 3 fixes** below.
 - **Async entrypoint + blocking work.** Confirmed via the graph (2026-06-11). The async call chain is `run()` → `scan_packages_versions()` (async) → `trace_sandbox_install_matrix()` → `SandboxRunner` → `trace_install_docker_matrix_with_runtime()`. At the leaf, the `SandboxRunner::trace_install` trait method is **synchronous** (`fn`, not `async fn`) and shells out to Docker via blocking `std::process::Command`, and `spawn_blocking` appears nowhere in `src/`. So the tokio runtime does call straight into blocking Docker I/O on its worker thread. Real, but practical impact is near zero for a run-once-and-exit CLI that does one scan batch. ⚠️ Open — wrap the Docker shell-outs in `spawn_blocking` if the tool ever scans concurrently.
 - **No structured logging.** Uses `println!`; `tracing` would suit an audit-trail security tool. Already tracked under ROADMAP "structured logging mode for CI". ⚠️ Open.
+
+### Round 3 fixes — 2026-06-11
+
+The two actionable items from the Round 3 assessment that were code (not roadmap) were applied, plus Finding 13 closed. All 165 tests pass; `cargo clippy --all-targets` and `cargo fmt --check` clean.
+
+- **`run()` de-duplication (`bulk_scan!`).** Extracted `enum ForwardMode { Original, Pinned }`, a `scan_targets` wrapper, and an `exit_with(msg) -> !` helper, and folded the four explicit-list manager branches (`uv pip sync`, `pip`/`pip3`, `npm`) into a `bulk_scan!` macro. **Important correctness note:** an intermediate version of this refactor changed several diagnostic log strings (e.g. `'pip' detected.` instead of `'pip install' detected.`, `for install package set` instead of `for npm package set`, and dropped `from sync sources`). That was caught on review and corrected — the macro now takes the empty-case message, a count-closure for the "testing" line, and the clear-report noun per branch, so stdout is byte-for-byte identical to the pre-refactor output. The lockfile-driven branches (`uv lock`, bare `uv sync`, `poetry`) were intentionally left as explicit blocks because their messages and `Original`-only forwarding do not fit the macro's shape cleanly.
+- **Finding 13 — `EnvVarGuard` (RAII, lock-holding).** See Finding 13 above. The naive fix (split lock into set/remove scopes) was rejected because it released `env_lock` during the scan `.await` that reads the env var, reintroducing the cross-test race the lock exists to prevent. The applied fix holds the lock for the whole test via the guard and recovers from poisoning, satisfying both the panic-safety the finding asked for and the serialization the original design required.

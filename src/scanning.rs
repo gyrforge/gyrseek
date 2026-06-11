@@ -1274,6 +1274,24 @@ pub(crate) async fn scan_packages_versions(
     results
 }
 
+pub(crate) async fn scan_package_versions(
+    runner: &dyn SandboxRunner,
+    manager: &str,
+    pkg_name: &str,
+    tgt_version: &str,
+    policy: &PolicyConfig,
+) -> ScanReport {
+    let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
+    let outcome = scan_packages_versions(runner, manager, &targets, policy).await;
+    outcome
+        .get(&format!("{}|{}", pkg_name, tgt_version))
+        .cloned()
+        .unwrap_or_else(|| ScanReport {
+            allowed: false,
+            resolved_version: tgt_version.to_string(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -2186,6 +2204,38 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         ENV_LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    /// RAII guard for a test env var. Acquiring it locks `env_lock` for the whole
+    /// lifetime of the guard (serializing every test that reads the var, including
+    /// across the scan `.await`) and sets the var; dropping it removes the var.
+    /// Drop runs on panic too, so a failing assertion can never leave the var set.
+    /// The lock is recovered from poisoning (`into_inner`) so one panicking test
+    /// does not cascade into PoisonError panics in every subsequent test —
+    /// closes FINDINGS.md #13 without reintroducing the cross-test race.
+    struct EnvVarGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        key: &'static str,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let lock = env_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { _lock: lock, key }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
     fn policy_with_baseline_and_process_allowlist(
         package: &str,
         baseline: &str,
@@ -2220,10 +2270,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[tokio::test]
     async fn flags_newly_introduced_bun_execution() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
-        }
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
         let runner = MockRunner {
             traces: HashMap::from([
                 (
@@ -2244,9 +2291,6 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy_with_baseline_and_process_allowlist("evil-pkg", "1.2.0", HashSet::new()),
         )
         .await;
-        unsafe {
-            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
-        }
         assert_eq!(
             results.get("evil-pkg|1.3.0").map(|r| r.allowed),
             Some(false)
@@ -2255,10 +2299,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[tokio::test]
     async fn flags_existing_bun_with_additional_invocation() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
-        }
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
         let runner = MockRunner {
             traces: HashMap::from([
                 (("buildy".to_string(), "2.1.0".to_string()),
@@ -2274,18 +2315,12 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new()),
         )
         .await;
-        unsafe {
-            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
-        }
         assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(false));
     }
 
     #[tokio::test]
     async fn allows_when_bun_behavior_matches_baseline() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
-        }
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
         let trace =
             "execve(\"/usr/bin/bun\", [\"bun\", \"run\", \"build\"], 0x7ff) = 0\n".to_string();
         let runner = MockRunner {
@@ -2301,18 +2336,12 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new()),
         )
         .await;
-        unsafe {
-            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
-        }
         assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(true));
     }
 
     #[tokio::test]
     async fn allows_new_bun_when_allowlisted() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
-        }
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
         let runner = MockRunner {
             traces: HashMap::from([
                 (
@@ -2335,9 +2364,6 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", allowlist),
         )
         .await;
-        unsafe {
-            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
-        }
         assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(true));
     }
 
@@ -2347,10 +2373,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[tokio::test]
     async fn scan_flags_new_install_time_git_clone_behavior() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
-        }
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
         let runner = MockRunner {
             traces: HashMap::from([
                 (("pkg-a".to_string(), "1.3.0".to_string()),
@@ -2366,18 +2389,12 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy_with_baseline_and_git_allowlist("pkg-a", "1.2.0", HashSet::new()),
         )
         .await;
-        unsafe {
-            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
-        }
         assert_eq!(results.get("pkg-a|1.3.0").map(|r| r.allowed), Some(false));
     }
 
     #[tokio::test]
     async fn scan_allows_when_install_time_git_clone_behavior_matches_baseline() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
-        }
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
         let trace = "execve(\"/usr/bin/git\", [\"git\", \"clone\", \"https://github.com/acme/repo.git\"], 0x7ff) = 0\n".to_string();
         let runner = MockRunner {
             traces: HashMap::from([
@@ -2392,18 +2409,12 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy_with_baseline_and_git_allowlist("pkg-b", "1.2.0", HashSet::new()),
         )
         .await;
-        unsafe {
-            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
-        }
         assert_eq!(results.get("pkg-b|1.3.0").map(|r| r.allowed), Some(true));
     }
 
     #[tokio::test]
     async fn scan_allows_new_git_clone_behavior_when_target_is_allowlisted() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
-        }
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
         let runner = MockRunner {
             traces: HashMap::from([
                 (("pkg-c".to_string(), "1.3.0".to_string()),
@@ -2423,9 +2434,6 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy_with_baseline_and_git_allowlist("pkg-c", "1.2.0", git_clone_allowlist),
         )
         .await;
-        unsafe {
-            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
-        }
         assert_eq!(results.get("pkg-c|1.3.0").map(|r| r.allowed), Some(true));
     }
 
@@ -2512,10 +2520,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[tokio::test]
     async fn scan_fails_closed_when_one_baseline_trace_is_missing() {
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
-        }
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
 
         // Runner has trace for current and baseline-1 but NOT baseline-2.
         // With baseline_count=2 both baselines are in the plan; the missing one
@@ -2550,10 +2555,6 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy,
         )
         .await;
-
-        unsafe {
-            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
-        }
 
         assert_eq!(
             results.get("pkg|2.0.0").map(|r| r.allowed),
@@ -2600,10 +2601,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         // A non-exempt package alongside an exempt one must still be scanned.
         // The exempt one is skipped without a trace; the scanned one diffs
         // cleanly against its baseline and is allowed.
-        let _guard = env_lock().lock().expect("env lock");
-        unsafe {
-            std::env::set_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
-        }
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
 
         let runner = MockRunner {
             traces: HashMap::from([
@@ -2639,10 +2637,6 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         )
         .await;
 
-        unsafe {
-            std::env::remove_var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H");
-        }
-
         assert_eq!(
             results.get("internal-pkg|0.1.0").map(|r| r.allowed),
             Some(true),
@@ -2654,22 +2648,4 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             "non-exempt package still scanned (clean diff -> allowed)"
         );
     }
-}
-
-pub(crate) async fn scan_package_versions(
-    runner: &dyn SandboxRunner,
-    manager: &str,
-    pkg_name: &str,
-    tgt_version: &str,
-    policy: &PolicyConfig,
-) -> ScanReport {
-    let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
-    let outcome = scan_packages_versions(runner, manager, &targets, policy).await;
-    outcome
-        .get(&format!("{}|{}", pkg_name, tgt_version))
-        .cloned()
-        .unwrap_or_else(|| ScanReport {
-            allowed: false,
-            resolved_version: tgt_version.to_string(),
-        })
 }

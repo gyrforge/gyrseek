@@ -777,6 +777,26 @@ async fn scan_many_with_cache(
     Some(pins)
 }
 
+enum ForwardMode {
+    Original,
+    Pinned,
+}
+
+async fn scan_targets(
+    scan_cache: &mut HashMap<String, ScanReport>,
+    runner: &dyn SandboxRunner,
+    manager: &str,
+    targets: Vec<(String, String)>,
+    policy: &PolicyConfig,
+) -> Option<HashMap<String, String>> {
+    scan_many_with_cache(scan_cache, runner, manager, targets, policy).await
+}
+
+fn exit_with(msg: &str) -> ! {
+    println!("❌ [gyrseek] {}", msg);
+    std::process::exit(1)
+}
+
 pub async fn run(args: Vec<String>) {
     // Handle --version/-V as a top-level flag before anything else so it works
     // without a config file, Docker, or a recognized manager subcommand. Only
@@ -928,16 +948,15 @@ pub async fn run(args: Vec<String>) {
             .any(|arg| arg == "-U" || arg == "--upgrade");
 
         if !upgrade_packages.is_empty() {
-            println!(
-                "🛡️ [gyrseek] 'uv lock' update detected. Testing {} target package(s)...",
-                upgrade_packages.len()
-            );
-
             let targets: Vec<(String, String)> = upgrade_packages
                 .into_iter()
                 .map(|pkg_name| (pkg_name, "latest".to_string()))
                 .collect();
-            if scan_many_with_cache(
+            println!(
+                "🛡️ [gyrseek] 'uv lock' update detected. Testing {} target package(s)...",
+                targets.len()
+            );
+            if scan_targets(
                 &mut scan_cache,
                 runner.as_ref(),
                 &eye.manager,
@@ -949,7 +968,6 @@ pub async fn run(args: Vec<String>) {
             {
                 std::process::exit(1);
             }
-
             println!(
                 "\n✅ [gyrseek] Clear behavioral report for uv lock update targets. Forwarding command safely..."
             );
@@ -959,10 +977,7 @@ pub async fn run(args: Vec<String>) {
 
         let lock_packages = eye.parse_uv_lock_packages();
         if lock_packages.is_empty() {
-            println!(
-                "❌ [gyrseek] 'uv lock' detected but no packages found in uv.lock. Failing closed."
-            );
-            std::process::exit(1);
+            exit_with("'uv lock' detected but no packages found in uv.lock. Failing closed.");
         }
 
         let lock_label = if upgrade_all {
@@ -976,7 +991,7 @@ pub async fn run(args: Vec<String>) {
             lock_packages.len()
         );
 
-        if scan_many_with_cache(
+        if scan_targets(
             &mut scan_cache,
             runner.as_ref(),
             &eye.manager,
@@ -988,7 +1003,6 @@ pub async fn run(args: Vec<String>) {
         {
             std::process::exit(1);
         }
-
         println!(
             "\n✅ [gyrseek] Clear behavioral report for uv lock package set. Forwarding command safely..."
         );
@@ -1008,11 +1022,10 @@ pub async fn run(args: Vec<String>) {
             .unwrap_or("install");
         let lock_packages = eye.parse_poetry_lock_packages();
         if lock_packages.is_empty() {
-            println!(
-                "❌ [gyrseek] 'poetry {}' detected but no packages found in poetry.lock. Failing closed.",
+            exit_with(&format!(
+                "'poetry {}' detected but no packages found in poetry.lock. Failing closed.",
                 poetry_cmd
-            );
-            std::process::exit(1);
+            ));
         }
 
         println!(
@@ -1021,7 +1034,7 @@ pub async fn run(args: Vec<String>) {
             lock_packages.len()
         );
 
-        if scan_many_with_cache(
+        if scan_targets(
             &mut scan_cache,
             runner.as_ref(),
             &eye.manager,
@@ -1041,67 +1054,76 @@ pub async fn run(args: Vec<String>) {
         return;
     }
 
+    // Shared bulk-scan body for the manager branches that parse a package list,
+    // scan it, and forward on a clean report. Only the diagnostic strings differ
+    // between branches, so they are passed in verbatim ($empty_msg, $testing_msg,
+    // $clear_noun) to keep stdout byte-for-byte identical to the pre-refactor
+    // per-branch code — the control flow and security semantics are the dedup.
+    // $testing_msg is a closure of the package count so each branch keeps its own
+    // wording around the count.
+    macro_rules! bulk_scan {
+        ($packages:expr, $mode:ident, $clear_noun:expr, $empty_msg:expr, $testing_msg:expr $(,)?) => {{
+            let packages = $packages;
+            if packages.is_empty() {
+                exit_with($empty_msg);
+            }
+            println!("{}", ($testing_msg)(packages.len()));
+            let targets: Vec<(String, String)> = packages
+                .into_iter()
+                .map(|(pkg_name, maybe_version)| {
+                    (pkg_name, maybe_version.unwrap_or_else(|| "latest".to_string()))
+                })
+                .collect();
+            let pins = match scan_targets(
+                &mut scan_cache,
+                runner.as_ref(),
+                &eye.manager,
+                targets,
+                &policy,
+            )
+            .await
+            {
+                Some(p) => p,
+                None => std::process::exit(1),
+            };
+            println!(
+                "\n✅ [gyrseek] Clear behavioral report for {} package set. Forwarding command safely...",
+                $clear_noun
+            );
+            match ForwardMode::$mode {
+                ForwardMode::Original => eye.forward_original_command(),
+                ForwardMode::Pinned => eye.forward_pinned_command(&pins),
+            }
+            return;
+        }};
+    }
+
     if eye.manager == "uv"
         && eye.passthrough_args.get(1).map(String::as_str) == Some("pip")
         && eye.passthrough_args.get(2).map(String::as_str) == Some("sync")
     {
-        let sync_packages = eye.parse_uv_pip_sync_packages();
-        if sync_packages.is_empty() {
-            println!(
-                "❌ [gyrseek] 'uv pip sync' detected but no parseable package entries were found. Failing closed."
-            );
-            std::process::exit(1);
-        }
-
-        println!(
-            "🛡️ [gyrseek] 'uv pip sync' detected. Testing {} package(s) from sync sources...",
-            sync_packages.len()
+        bulk_scan!(
+            eye.parse_uv_pip_sync_packages(),
+            Original,
+            "sync",
+            "'uv pip sync' detected but no parseable package entries were found. Failing closed.",
+            |n| format!(
+                "🛡️ [gyrseek] 'uv pip sync' detected. Testing {} package(s) from sync sources...",
+                n
+            )
         );
-
-        let targets: Vec<(String, String)> = sync_packages
-            .into_iter()
-            .map(|(pkg_name, maybe_version)| {
-                (
-                    pkg_name,
-                    maybe_version.unwrap_or_else(|| "latest".to_string()),
-                )
-            })
-            .collect();
-        if scan_many_with_cache(
-            &mut scan_cache,
-            runner.as_ref(),
-            &eye.manager,
-            targets,
-            &policy,
-        )
-        .await
-        .is_none()
-        {
-            std::process::exit(1);
-        }
-
-        println!(
-            "\n✅ [gyrseek] Clear behavioral report for sync package set. Forwarding command safely..."
-        );
-        eye.forward_original_command();
-        return;
     }
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("sync") {
         let lock_packages = eye.parse_uv_lock_packages();
         if lock_packages.is_empty() {
-            println!(
-                "❌ [gyrseek] 'uv sync' detected but no packages found in uv.lock. Failing closed."
-            );
-            std::process::exit(1);
+            exit_with("'uv sync' detected but no packages found in uv.lock. Failing closed.");
         }
-
         println!(
             "🛡️ [gyrseek] 'uv sync' detected. Testing {} locked package(s) from uv.lock...",
             lock_packages.len()
         );
-
-        if scan_many_with_cache(
+        if scan_targets(
             &mut scan_cache,
             runner.as_ref(),
             &eye.manager,
@@ -1113,7 +1135,6 @@ pub async fn run(args: Vec<String>) {
         {
             std::process::exit(1);
         }
-
         println!(
             "\n✅ [gyrseek] Clear behavioral report for all locked packages. Forwarding command safely..."
         );
@@ -1124,47 +1145,17 @@ pub async fn run(args: Vec<String>) {
     if (eye.manager == "pip" || eye.manager == "pip3")
         && eye.passthrough_args.get(1).map(String::as_str) == Some("install")
     {
-        let pip_packages = eye.parse_pip_install_packages();
-        if pip_packages.is_empty() {
-            println!(
-                "❌ [gyrseek] 'pip install' detected but no parseable package entries were found. Failing closed."
-            );
-            std::process::exit(1);
-        }
-
-        println!(
-            "🛡️ [gyrseek] '{}' install detected. Testing {} package(s)...",
-            eye.manager,
-            pip_packages.len()
+        let manager = eye.manager.clone();
+        bulk_scan!(
+            eye.parse_pip_install_packages(),
+            Pinned,
+            "pip",
+            "'pip install' detected but no parseable package entries were found. Failing closed.",
+            |n| format!(
+                "🛡️ [gyrseek] '{}' install detected. Testing {} package(s)...",
+                manager, n
+            )
         );
-
-        let targets: Vec<(String, String)> = pip_packages
-            .into_iter()
-            .map(|(pkg_name, maybe_version)| {
-                (
-                    pkg_name,
-                    maybe_version.unwrap_or_else(|| "latest".to_string()),
-                )
-            })
-            .collect();
-        let pins = match scan_many_with_cache(
-            &mut scan_cache,
-            runner.as_ref(),
-            &eye.manager,
-            targets,
-            &policy,
-        )
-        .await
-        {
-            Some(pins) => pins,
-            None => std::process::exit(1),
-        };
-
-        println!(
-            "\n✅ [gyrseek] Clear behavioral report for pip package set. Forwarding command safely..."
-        );
-        eye.forward_pinned_command(&pins);
-        return;
     }
 
     if (eye.manager == "npm" || eye.manager == "pnpm")
@@ -1174,55 +1165,25 @@ pub async fn run(args: Vec<String>) {
             || (eye.manager == "pnpm"
                 && eye.passthrough_args.get(1).map(String::as_str) == Some("add")))
     {
-        let npm_packages = eye.parse_npm_install_packages();
-        if npm_packages.is_empty() {
-            println!(
-                "❌ [gyrseek] '{} {}' detected but no parseable package entries were found. Failing closed.",
-                eye.manager,
-                eye.passthrough_args
-                    .get(1)
-                    .map(String::as_str)
-                    .unwrap_or("install")
-            );
-            std::process::exit(1);
-        }
-
-        println!(
-            "🛡️ [gyrseek] '{}' detected. Testing {} package(s)...",
-            eye.passthrough_args
-                .get(1)
-                .map(String::as_str)
-                .unwrap_or("install"),
-            npm_packages.len()
+        let npm_sub = eye
+            .passthrough_args
+            .get(1)
+            .map(String::as_str)
+            .unwrap_or("install")
+            .to_string();
+        bulk_scan!(
+            eye.parse_npm_install_packages(),
+            Pinned,
+            eye.manager.as_str(),
+            &format!(
+                "'{} {}' detected but no parseable package entries were found. Failing closed.",
+                eye.manager, npm_sub
+            ),
+            |n| format!(
+                "🛡️ [gyrseek] '{}' detected. Testing {} package(s)...",
+                npm_sub, n
+            )
         );
-
-        let targets: Vec<(String, String)> = npm_packages
-            .into_iter()
-            .map(|(pkg_name, maybe_version)| {
-                (
-                    pkg_name,
-                    maybe_version.unwrap_or_else(|| "latest".to_string()),
-                )
-            })
-            .collect();
-        let pins = match scan_many_with_cache(
-            &mut scan_cache,
-            runner.as_ref(),
-            &eye.manager,
-            targets,
-            &policy,
-        )
-        .await
-        {
-            Some(pins) => pins,
-            None => std::process::exit(1),
-        };
-
-        println!(
-            "\n✅ [gyrseek] Clear behavioral report for package set. Forwarding command safely..."
-        );
-        eye.forward_pinned_command(&pins);
-        return;
     }
 
     let (package, target_v) = eye.parse_package_details();
