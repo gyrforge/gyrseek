@@ -1,16 +1,16 @@
-# Graph Report - gyrseek  (2026-06-11)
+# Graph Report - gyrseek  (2026-06-12)
 
 ## Corpus Check
-- 23 files · ~40,932 words
+- 22 files · ~41,156 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 566 nodes · 1216 edges · 27 communities (20 shown, 7 thin omitted)
+- 566 nodes · 1217 edges · 27 communities (20 shown, 7 thin omitted)
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 34 edges (avg confidence: 0.82)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `92b2033a`
+- Built from commit: `e6081cd2`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -49,8 +49,8 @@
 5. `HashSet` - 23 edges
 6. `extract_process_exec_signatures()` - 23 edges
 7. `String` - 21 edges
-8. `String` - 20 edges
-9. `gyrseek` - 20 edges
+8. `gyrseek` - 21 edges
+9. `String` - 20 edges
 10. `Security & Correctness Findings` - 19 edges
 
 ## Surprising Connections (you probably didn't know these)
@@ -155,7 +155,7 @@ Cohesion: 0.20
 Nodes (9): Best Practices, Collaboration, Completed, Direct Git Clone Runtime Support, Generated File Comparison Across Versions, Hardening, Mid Term, Near Term (+1 more)
 
 ## Knowledge Gaps
-- **127 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Self`, `ForwardMode` (+122 more)
+- **126 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Self`, `ForwardMode` (+121 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **7 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -173,6 +173,6 @@ _Questions this graph is uniquely positioned to answer:_
 - **Are the 2 inferred relationships involving `rewrite_args_with_pinned_versions()` (e.g. with `.forward_pinned_command()` and `Resolved-Version Pinning`) actually correct?**
   _`rewrite_args_with_pinned_versions()` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `$schema`, `plugin`, `BaselineOverrideConfig` to the rest of the system?**
-  _129 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _128 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.061708860759493674 - nodes in this community are weakly interconnected._
