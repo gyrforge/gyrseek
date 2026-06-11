@@ -387,7 +387,8 @@ fn build_artifact_scan_steps(idx: usize) -> Vec<String> {
 
 /// Builds the full `sh -lc` script for the matrix (multi-probe) run: per-probe
 /// strace logs written to /out, payload dropped to the scanner user, followed
-/// by a targeted artifact scan of the installed file tree.
+/// by a targeted artifact scan of the installed file tree and — for Python
+/// managers — an import probe to catch import-time hooks (T2/T3 attack vectors).
 fn build_matrix_script(manager: &str, probes: &[(String, String)], prebuilt: bool) -> String {
     let mut steps = image_setup_steps(manager, prebuilt);
     steps.extend(scanner_user_setup_steps());
@@ -406,7 +407,39 @@ fn build_matrix_script(manager: &str, probes: &[(String, String)], prebuilt: boo
             strace_install_command(manager, &spec, Some(&log)),
             err
         ));
-        // After each install, scan the installed tree for suspicious artifacts.
+
+        // For Python packages, exercise the import path to catch import-time
+        // behavior (execve, network) from __init__.py hooks and .abi3.so init
+        // routines. Import signals are appended to the same trace file so they
+        // participate in the baseline diff automatically. Multiple import name
+        // candidates are tried (heuristic → original) as a best-effort mapping.
+        // This runs BEFORE the artifact scan so any files the import hook writes
+        // to disk are captured in the inventory.
+        if is_python_manager(manager) {
+            let import_names = package_name_to_import_names(package);
+            let import_cmds: Vec<String> = import_names
+                .iter()
+                .map(|n| {
+                    format!(
+                        "env HOME=/work PYTHONPATH=/work python -c \"import {}\" 2>/dev/null",
+                        n
+                    )
+                })
+                .collect();
+            let import_log = format!("/out/gyrseek_trace_{}_import.log", idx);
+            let import_err = format!("/out/gyrseek_import_err_{}.log", idx);
+            steps.push(format!(
+                "{} sh -c '{}' >/dev/null 2>{} || true",
+                strace_import_prefix(&import_log),
+                import_cmds.join(" || "),
+                import_err,
+            ));
+            steps.push(format!("cat {} >> {} 2>/dev/null || true", import_log, log,));
+        }
+
+        // After each install (and optional import probe), scan the installed tree
+        // for suspicious artifacts. Running after the import ensures any files the
+        // import hook writes to disk are also inventoried.
         steps.extend(build_artifact_scan_steps(idx));
     }
 
@@ -414,12 +447,60 @@ fn build_matrix_script(manager: &str, probes: &[(String, String)], prebuilt: boo
 }
 
 /// Builds the `sh -lc` script for the single-probe fallback (trace to stderr).
+/// For Python managers, also exercises the package import path to catch
+/// import-time hooks.
 fn build_single_script(manager: &str, package: &str, version: &str, prebuilt: bool) -> String {
     let mut steps = image_setup_steps(manager, prebuilt);
     steps.extend(scanner_user_setup_steps());
 
     let spec = package_spec(manager, package, version);
-    steps.push(strace_install_command(manager, &spec, None));
+    let trace_file = "/tmp/gtrace.log";
+    let err_file = "/tmp/gterr.log";
+    let strace_base = format!(
+        "strace -f -s 4096 -v -u {u} -e trace=network,execve -o {t}",
+        u = SCANNER_USER,
+        t = trace_file,
+    );
+
+    steps.push(format!(
+        "{} {} >/dev/null 2>{} || true",
+        strace_base,
+        install_invocation(manager, &spec),
+        err_file,
+    ));
+
+    if is_python_manager(manager) {
+        let import_trace = "/tmp/gtrace_import.log";
+        let strace_import = format!(
+            "strace -f -s 4096 -v -u {u} -e trace=network,execve -o {t}",
+            u = SCANNER_USER,
+            t = import_trace,
+        );
+        let import_names = package_name_to_import_names(package);
+        let import_cmds: Vec<String> = import_names
+            .iter()
+            .map(|n| {
+                format!(
+                    "env HOME=/work PYTHONPATH=/work python -c \"import {}\" 2>/dev/null",
+                    n
+                )
+            })
+            .collect();
+        steps.push(format!(
+            "{} sh -c '{}' >/dev/null 2>>{} || true",
+            strace_import,
+            import_cmds.join(" || "),
+            err_file,
+        ));
+        steps.push(format!(
+            "cat {} >> {} 2>/dev/null || true",
+            import_trace, trace_file
+        ));
+    }
+
+    // Dump combined trace to stderr (the caller reads stderr for the trace).
+    steps.push(format!("cat {} >&2 2>/dev/null || true", trace_file));
+    steps.push(format!("cat {} >&2 2>/dev/null || true", err_file));
 
     steps.join("; ")
 }
@@ -562,11 +643,40 @@ fn shell_single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+/// Returns one or more likely Python import names for a given distribution
+/// package name. Dots are preserved (namespace packages like `zope.interface`
+/// are imported as `zope.interface`). The heuristic name (lowercase, hyphens
+/// to underscores) is listed first; the original name is included as a
+/// fallback since some package import names diverge from convention.
+fn package_name_to_import_names(name: &str) -> Vec<String> {
+    let heuristic = name.to_lowercase().replace('-', "_");
+    if heuristic == name {
+        vec![heuristic]
+    } else {
+        vec![heuristic, name.to_string()]
+    }
+}
+
+/// Returns `true` for managers that install Python packages.
+fn is_python_manager(manager: &str) -> bool {
+    !(manager == "npm" || manager == "pnpm")
+}
+
+/// A strace prefix for running import-tests, writing to a separate log so
+/// import-time signals can later be appended to the main install trace.
+fn strace_import_prefix(out_log: &str) -> String {
+    format!(
+        "strace -f -s 4096 -v -u {u} -e trace=network,execve -o {log}",
+        u = SCANNER_USER,
+        log = out_log,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         SCANNER_USER, build_artifact_scan_steps, build_docker_run_args, build_matrix_script,
-        build_single_script, strace_install_command,
+        build_single_script, package_name_to_import_names, strace_install_command,
     };
 
     // --- #4 strace must not truncate argv/addresses ---
@@ -776,5 +886,113 @@ mod tests {
             probe1_artifacts > probe1_install,
             "artifact scan must follow install for probe 1"
         );
+    }
+
+    // --- post-install import step for Python packages ---
+
+    #[test]
+    fn python_matrix_script_includes_import_step() {
+        let script = build_matrix_script(
+            "pip",
+            &[("requests".to_string(), "2.31.0".to_string())],
+            true,
+        );
+        assert!(
+            script.contains("python -c \"import requests\""),
+            "import step should be present for Python manager: {script}"
+        );
+        assert!(
+            script.contains("PYTHONPATH=/work"),
+            "import step should set PYTHONPATH: {script}"
+        );
+        assert!(
+            script.contains("gyrseek_trace_0_import.log"),
+            "import step should write to separate trace log: {script}"
+        );
+    }
+
+    #[test]
+    fn python_matrix_script_appends_import_trace_to_main_trace() {
+        let script = build_matrix_script(
+            "pip",
+            &[("requests".to_string(), "2.31.0".to_string())],
+            true,
+        );
+        assert!(
+            script.contains("cat /out/gyrseek_trace_0_import.log >> /out/gyrseek_trace_0.log"),
+            "import trace should be appended to main trace: {script}"
+        );
+    }
+
+    #[test]
+    fn npm_matrix_script_omits_import_step() {
+        let script = build_matrix_script(
+            "npm",
+            &[("left-pad".to_string(), "1.3.0".to_string())],
+            true,
+        );
+        assert!(
+            !script.contains("python -c \"import"),
+            "import step should be absent for npm: {script}"
+        );
+        assert!(
+            !script.contains("PYTHONPATH"),
+            "PYTHONPATH should be absent for npm: {script}"
+        );
+    }
+
+    #[test]
+    fn pnpm_matrix_script_omits_import_step() {
+        let script = build_matrix_script(
+            "pnpm",
+            &[("left-pad".to_string(), "1.3.0".to_string())],
+            true,
+        );
+        assert!(
+            !script.contains("python -c \"import"),
+            "import step should be absent for pnpm: {script}"
+        );
+    }
+
+    #[test]
+    fn import_step_runs_before_artifact_scan() {
+        let script = build_matrix_script("uv", &[("flask".to_string(), "3.0.0".to_string())], true);
+        let artifacts_pos = script
+            .find("gyrseek_artifacts_0.log")
+            .expect("artifact scan log");
+        let import_pos = script
+            .find("gyrseek_trace_0_import.log")
+            .expect("import trace log");
+        assert!(
+            import_pos < artifacts_pos,
+            "import step should run before artifact scan so hook-dropped files are inventoried"
+        );
+    }
+
+    #[test]
+    fn package_name_to_import_names_returns_candidates() {
+        // Packages whose heuristic name equals the original: single entry.
+        let names = package_name_to_import_names("requests");
+        assert_eq!(names, vec!["requests"]);
+
+        // Hyphens become underscores in the heuristic; original preserved.
+        let names = package_name_to_import_names("Some-CAPitalized-Pkg");
+        assert_eq!(names, vec!["some_capitalized_pkg", "Some-CAPitalized-Pkg"]);
+
+        // Dots are preserved (namespace packages).
+        let names = package_name_to_import_names("zope.interface");
+        assert_eq!(names, vec!["zope.interface"]);
+
+        // Hyphens and dots: both handled correctly.
+        let names = package_name_to_import_names("My-Lib.foo");
+        assert_eq!(names, vec!["my_lib.foo", "My-Lib.foo"]);
+
+        // Underscores and lowercase match the heuristic, single entry.
+        let names = package_name_to_import_names("mcp_sdk");
+        assert_eq!(names, vec!["mcp_sdk"]);
+
+        // Heuristic differs from original: two candidates.
+        let names = package_name_to_import_names("PyYAML");
+        assert_eq!(names, vec!["pyyaml", "PyYAML"]);
     }
 }

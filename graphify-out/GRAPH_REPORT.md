@@ -1,16 +1,16 @@
 # Graph Report - gyrseek  (2026-06-12)
 
 ## Corpus Check
-- 22 files · ~41,156 words
+- 22 files · ~42,515 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 566 nodes · 1217 edges · 27 communities (20 shown, 7 thin omitted)
+- 568 nodes · 1233 edges · 27 communities (20 shown, 7 thin omitted)
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 34 edges (avg confidence: 0.82)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e6081cd2`
+- Built from commit: `ac804d20`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -29,7 +29,7 @@
 - [[_COMMUNITY_Community 11|Community 11]]
 - [[_COMMUNITY_Community 12|Community 12]]
 - [[_COMMUNITY_Community 13|Community 13]]
-- [[_COMMUNITY_Community 15|Community 15]]
+- [[_COMMUNITY_Community 14|Community 14]]
 - [[_COMMUNITY_Community 16|Community 16]]
 - [[_COMMUNITY_Community 17|Community 17]]
 - [[_COMMUNITY_Community 19|Community 19]]
@@ -46,14 +46,16 @@
 2. `scan_packages_versions()` - 40 edges
 3. `run()` - 37 edges
 4. `rewrite_args_with_pinned_versions()` - 27 edges
-5. `HashSet` - 23 edges
-6. `extract_process_exec_signatures()` - 23 edges
-7. `String` - 21 edges
+5. `String` - 23 edges
+6. `HashSet` - 23 edges
+7. `extract_process_exec_signatures()` - 23 edges
 8. `gyrseek` - 21 edges
 9. `String` - 20 edges
-10. `Security & Correctness Findings` - 19 edges
+10. `build_matrix_script()` - 20 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `Policy Config Surface` --references--> `PolicyConfig`  [INFERRED]
+  docs/DEV_GUIDE.md → src/scanning.rs
 - `In-Run Scan Cache` --references--> `scan_with_cache()`  [INFERRED]
   docs/ARCHITECTURE.md → src/lib.rs
 - `Finding 12: Non-Registry npm Args + No package.json Blocks Install (Open)` --references--> `run()`  [EXTRACTED]
@@ -62,8 +64,6 @@
   docs/FINDINGS.md → src/lib.rs
 - `run()` --implements--> `Fail-Closed Guarantee`  [INFERRED]
   src/lib.rs → README.md
-- `rewrite_args_with_pinned_versions()` --implements--> `Resolved-Version Pinning`  [INFERRED]
-  src/parsing.rs → README.md
 
 ## Import Cycles
 - 1-file cycle: `tests/forward_fail_closed_tests.rs -> tests/forward_fail_closed_tests.rs`
@@ -91,24 +91,24 @@ Cohesion: 0.07
 Nodes (62): BaselineOverrideConfig, test: minimum_release_age_package not met exits 1, test: release_burst_threshold triggers exit 1, In-Run Scan Cache, test: bare uv lock routed to lockfile scan, test: bare poetry lock routed to lockfile scan, NamedTempFile, PolicyConfig (+54 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.10
-Nodes (48): Box, CAP_SYS_PTRACE for Cross-UID Tracing, Unprivileged-Payload Trace Integrity (strace -u), MicroVM Sandbox Backend (planned hardening), ProbeTrace, artifact_scan_steps_inventory_all_files(), artifact_scan_steps_output_to_correct_log(), artifact_scan_steps_pipe_char_in_content_replaced() (+40 more)
+Cohesion: 0.08
+Nodes (57): Box, CAP_SYS_PTRACE for Cross-UID Tracing, Unprivileged-Payload Trace Integrity (strace -u), MicroVM Sandbox Backend (planned hardening), ProbeTrace, artifact_scan_steps_inventory_all_files(), artifact_scan_steps_output_to_correct_log(), artifact_scan_steps_pipe_char_in_content_replaced() (+49 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.08
-Nodes (30): Finding 10: Self-Referencing Baseline Override (Open), artifact_findings_empty_for_clean_install(), baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_returns_no_effective_baselines(), classify_inventory_benign_pth(), classify_inventory_binary_elf(), classify_inventory_empty_input(), classify_inventory_large_file() (+22 more)
+Cohesion: 0.07
+Nodes (39): Semantic Version Ordering (semver / PEP 440), Finding 10: Self-Referencing Baseline Override (Open), Ordering, artifact_findings_empty_for_clean_install(), baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_returns_no_effective_baselines(), classify_inventory_benign_pth(), classify_inventory_binary_elf() (+31 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.10
 Nodes (34): Behavioral Diffing Across Versions, Finding 3: Argv Regex Truncation at ], Direct Git Clone Runtime Interception, F, HashSet, PyPiReleaseFile, artifact_allowlist_matches_exact_finding_and_prefix(), detects_anomalous_new_connection() (+26 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.11
-Nodes (31): Default, Adding a New Supported Command, Policy Config Surface, Drop, Mutex, MutexGuard, Behavioral Diffing, allows_new_bun_when_allowlisted() (+23 more)
+Cohesion: 0.14
+Nodes (27): Default, Adding a New Supported Command, Mutex, Behavioral Diffing, allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline(), artifact_allowlist_unblocks_new_findings() (+19 more)
 
 ### Community 6 - "Community 6"
-Cohesion: 0.15
-Nodes (17): Forward-Confirmed Reverse DNS (FCrDNS), Finding 2: PTR-Record Allowlist Bypass, IpAddr, R, Forward-Confirmed Reverse DNS, burst_policy_emits_warning_when_triggered(), burst_policy_warning(), burst_triggered() (+9 more)
+Cohesion: 0.24
+Nodes (10): Forward-Confirmed Reverse DNS (FCrDNS), Finding 2: PTR-Record Allowlist Bypass, IpAddr, R, Forward-Confirmed Reverse DNS, fcrdns_accepts_hostname_that_forward_resolves_back_to_ip(), fcrdns_rejects_spoofed_ptr_that_does_not_forward_confirm(), fcrdns_rejects_when_no_ptr_record() (+2 more)
 
 ### Community 7 - "Community 7"
 Cohesion: 0.18
@@ -119,12 +119,12 @@ Cohesion: 0.05
 Nodes (38): 1) Build an npm scanner image, 1. Prerequisites, 2. Build, 2) Build a Python scanner image, 3) Enable prebuilt mode globally (optional), 3. Run your first scan, 4) Verify images are usable, 5) Use pinned image digests (recommended for reproducibility) (+30 more)
 
 ### Community 9 - "Community 9"
-Cohesion: 0.22
-Nodes (9): Semantic Version Ordering (semver / PEP 440), Ordering, compare_version_strings(), is_npm_family_manager(), npm_versions_sort_semantically_not_lexically(), pnpm_versions_use_npm_semver_ordering(), pypi_versions_sort_by_pep440_not_lexically(), sort_versions_ascending() (+1 more)
+Cohesion: 0.33
+Nodes (7): burst_policy_emits_warning_when_triggered(), burst_policy_warning(), burst_triggered(), minimum_release_age_policy_warning(), minimum_release_age_policy_warns_when_release_is_too_new(), PyPiReleaseFile, Option
 
 ### Community 10 - "Community 10"
-Cohesion: 0.12
-Nodes (16): Build and Test, Developer Guide, just Task Runner, Local Setup, Practical Review Checklist, Required Change Hygiene, Sandbox Mode, Test Locations (+8 more)
+Cohesion: 0.11
+Nodes (17): Build and Test, Developer Guide, just Task Runner, Local Setup, Policy Config Surface, Practical Review Checklist, Required Change Hygiene, Sandbox Mode (+9 more)
 
 ### Community 11 - "Community 11"
 Cohesion: 0.11
@@ -138,9 +138,9 @@ Nodes (17): Command, Output, Path, exits_with_code_1_and_uses_configured_release
 Cohesion: 0.14
 Nodes (17): Cloud Metadata IP Exemption (169.254.169.254), Sandbox-Local IP Filtering, extract_connection_ips(), extract_connection_ips_captures_ipv4(), extract_connection_ips_captures_ipv6_inet_pton(), extract_connection_ips_collapses_ipv4_mapped_ipv6(), extract_connection_ips_drops_loopback_link_local_and_private(), extract_connection_ips_handles_mixed_v4_and_v6() (+9 more)
 
-### Community 15 - "Community 15"
-Cohesion: 0.29
-Nodes (6): Agents Memory and Workflow, graphify, Mandatory Update Policy (After Every Change), Purpose, Quick Post-Change Checklist, Repository Memory
+### Community 14 - "Community 14"
+Cohesion: 0.50
+Nodes (3): Drop, MutexGuard, EnvVarGuard
 
 ### Community 16 - "Community 16"
 Cohesion: 0.05
@@ -155,7 +155,7 @@ Cohesion: 0.20
 Nodes (9): Best Practices, Collaboration, Completed, Direct Git Clone Runtime Support, Generated File Comparison Across Versions, Hardening, Mid Term, Near Term (+1 more)
 
 ## Knowledge Gaps
-- **126 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Self`, `ForwardMode` (+121 more)
+- **121 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Self`, `ForwardMode` (+116 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **7 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -163,16 +163,16 @@ Nodes (9): Best Practices, Collaboration, Completed, Direct Git Clone Runtime Su
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `run()` connect `Community 1` to `Community 16`, `Community 0`, `Community 10`, `Community 2`?**
-  _High betweenness centrality (0.233) - this node is a cross-community bridge._
+  _High betweenness centrality (0.241) - this node is a cross-community bridge._
 - **Why does `SandboxRunner` connect `Community 2` to `Community 1`, `Community 4`?**
-  _High betweenness centrality (0.104) - this node is a cross-community bridge._
+  _High betweenness centrality (0.115) - this node is a cross-community bridge._
 - **Why does `trace_sandbox_install_matrix()` connect `Community 4` to `Community 2`, `Community 3`, `Community 5`, `Community 7`, `Community 11`, `Community 13`?**
-  _High betweenness centrality (0.103) - this node is a cross-community bridge._
+  _High betweenness centrality (0.113) - this node is a cross-community bridge._
 - **Are the 7 inferred relationships involving `run()` (e.g. with `test: minimum_release_age_package not met exits 1` and `test: release_burst_threshold triggers exit 1`) actually correct?**
   _`run()` has 7 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 2 inferred relationships involving `rewrite_args_with_pinned_versions()` (e.g. with `.forward_pinned_command()` and `Resolved-Version Pinning`) actually correct?**
   _`rewrite_args_with_pinned_versions()` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `$schema`, `plugin`, `BaselineOverrideConfig` to the rest of the system?**
-  _128 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _123 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.061708860759493674 - nodes in this community are weakly interconnected._
