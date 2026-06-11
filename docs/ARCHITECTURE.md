@@ -29,7 +29,7 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - Version lists are ordered semantically: semver for npm-family managers, PEP 440 for Python managers (compare_version_strings / sort_versions_ascending). Unparseable strings sort below any parseable version, so junk is never resolved as `latest`.
   - npm `time` map parsing (npm_published_times) excludes the `created`/`modified` bookkeeping keys and any non-version key, so the release-burst counter is not inflated.
 - Behavior capture:
-  - trace_sandbox_install_matrix runs via SandboxRunner backend and captures, per package-version: connection IPs (IPv4 via inet_addr and IPv6 via inet_pton, normalized by extract_connection_ips), install-time git clone command signatures, and watched-process execution signatures (extract_process_exec_signatures: `exe|arg1|...` for watched runtimes such as bun/deno).
+   - trace_sandbox_install_matrix runs via SandboxRunner backend and captures, per package-version: connection IPs (IPv4 via inet_addr and IPv6 via inet_pton, normalized by extract_connection_ips), install-time git clone command signatures, and process-execution signatures (extract_process_exec_signatures: `exe|arg1|...` for every execve). Sandbox-internal commands (the install probe itself, interpreter discovery) are excluded via `is_harness_command` so version-specific command strings do not cause false positives.
   - extract_connection_ips normalizes via normalize_ip_string (canonical IPv6 plus IPv4-mapped IPv6 `::ffff:1.2.3.4` collapsed to bare IPv4 `1.2.3.4`) and drops sandbox-local addresses via is_sandbox_local_ip — loopback, link-local (`fe80::/10`, `169.254/16`), and private/RFC1918 ranges (including the Docker bridge `172.17/16` and Docker Desktop gateway `192.168.65/24`). This happens at extraction, before the baseline diff and on both current and baseline traces, so the container's own plumbing (gateway, DNS resolver) never registers as a "new" endpoint. The cloud instance metadata endpoint `169.254.169.254` is deliberately exempt (kept) because a package reaching for it is a real SSRF/credential-theft signal.
   - strace runs with `-s 4096 -v` (no argv/address truncation) and `-u <scanner-user>` so the traced install payload runs unprivileged while strace and its root-owned /out trace logs remain tamper-resistant.
   - execve argv parsing (extract_process_exec_signatures / git-clone signature extraction) uses a balanced-bracket-aware regex so arguments containing `]` (e.g. PEP 508 extras `requests[security]`, paths like `script[obf].js`) are captured intact rather than truncated at the first `]`.
@@ -43,7 +43,7 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - The `ip_allowlist` matcher compares on the IPv4-mapped-collapsed canonical form, so an entry of `172.17.0.2` matches a `::ffff:172.17.0.2` hit and vice versa.
   - The `domain_allowlist` uses forward-confirmed reverse DNS (FCrDNS): reverse_dns_domain resolves the PTR hostname and only trusts it if its forward A/AAAA resolution includes the original IP (decision extracted into forward_confirmed_hostname for deterministic testing). A spoofed PTR record pointing at an allowlisted domain therefore cannot bypass the allowlist. New IPs remain fail-closed regardless.
   - install-time git clone signatures are diffed across current and baseline versions; newly introduced clone behavior is fail-closed unless allowlisted.
-  - watched-process execution signatures (default bun/deno) are diffed across versions; a newly introduced or changed/extra invocation is fail-closed unless allowlisted (process_exec_allowlist). This targets the Shai-Hulud "download Bun and run a hidden payload" class of attack.
+   - process-execution signatures (all executables captured, least-privilege approach) are diffed across versions; a newly introduced or changed/extra invocation is fail-closed unless allowlisted (process_exec_allowlist). Sandbox-internal commands (install probe, interpreter discovery) are automatically excluded via `is_harness_command` to prevent version-string false positives. This targets the Shai-Hulud "download Bun and run a hidden payload" class of attack.
 - In-run optimization:
   - run keeps an in-memory cache keyed by manager/package/version to avoid repeating identical scans in one execution.
 
@@ -52,7 +52,7 @@ For each scanned package:
 0. If the package is in `internal_package_exemptions`, skip it entirely (no fetch/probe/diff) and allow it through at the requested version.
 1. Determine current target version (explicit, or `latest` resolved via semantic ordering).
 2. Resolve baseline versions (v-1 and v-2 where available, ordered semantically).
-3. Collect behavior signals for current and baseline installs (network endpoints, install-time git clone signatures, and watched-process execution signatures). Network endpoints are normalized and have sandbox-local addresses (loopback/link-local/private, except the cloud metadata IP) filtered at capture time.
+3. Collect behavior signals for current and baseline installs (network endpoints, install-time git clone signatures, and process-execution signatures). Network endpoints are normalized and have sandbox-local addresses (loopback/link-local/private, except the cloud metadata IP) filtered at capture time.
 4. Compute set differences current minus baseline for each signal type.
 5. Apply allowlists (`ip_allowlist`, `domain_allowlist`, `git_clone_allowlist`, `process_exec_allowlist`).
 6. If non-allowlisted differences remain, block command.
@@ -70,8 +70,8 @@ gyrseek fails closed in the following situations:
 - Direct runtime interception for standalone `git clone ...` commands is not enabled yet.
 - Docker mode assumes Docker CLI availability; host mode assumes strace availability and is less safe. The unprivileged-payload (`strace -u`) trace-integrity protection applies to the Docker/microvm backends. Docker mode requires `CAP_SYS_PTRACE` (added via `--cap-add`) for cross-UID tracing; environments that strip it (some K8s/seccomp setups) will fail closed rather than pass silently.
 - Trace extraction still assumes current strace output patterns.
-- Behavioral signals (network, git clone, watched-process execution) are only captured for what executes during the sandbox install. Payloads that fire outside the install window (e.g. the PyPI `*-setup.pth` startup-execution variant) may not detonate during the scan.
-- Watched-process detection covers a curated runtime set (default bun/deno) rather than all process execution, to keep false positives low.
+- Behavioral signals (network, git clone, process execution) are only captured for what executes during the sandbox install. Payloads that fire outside the install window (e.g. the PyPI `*-setup.pth` startup-execution variant) may not detonate during the scan.
+- Process-execution detection captures all executables by default (least-privilege). Sandbox-internal commands (install probes, interpreter discovery) are automatically excluded via `is_harness_command` to keep the diff clean. `process_exec_allowlist` is the user-facing escape hatch for expected new behavior.
 
 ## Main Files
 - src/main.rs: binary entrypoint

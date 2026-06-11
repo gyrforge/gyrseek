@@ -193,7 +193,7 @@ fn trace_install_docker_matrix_with_runtime(
         // Prefer the matrix log; if it is missing/unreadable, retry the probe in
         // isolation. Either way, a blank trace means strace produced no data and
         // MUST NOT be treated as a clean zero-connection scan — fail closed.
-        let trace = match std::fs::read_to_string(&trace_path) {
+        let mut trace = match std::fs::read_to_string(&trace_path) {
             Ok(contents) if !contents.trim().is_empty() => contents,
             _ => trace_install_docker_single_with_runtime(manager, package, version, runtime)?,
         };
@@ -206,6 +206,18 @@ fn trace_install_docker_matrix_with_runtime(
                 version,
                 strace_err.trim()
             ));
+        }
+        // Append post-install artifact scan findings to the trace, separated by
+        // a marker so the scanner can split them during signal extraction.
+        let artifact_path = out_dir
+            .path()
+            .join(format!("gyrseek_artifacts_{}.log", idx));
+        if let Ok(artifact_content) = std::fs::read_to_string(&artifact_path) {
+            let trimmed = artifact_content.trim();
+            if !trimmed.is_empty() {
+                trace.push_str("\n=== gyrseek_artifacts ===\n");
+                trace.push_str(trimmed);
+            }
         }
         results.push(((package.clone(), version.clone()), trace));
     }
@@ -350,8 +362,32 @@ fn image_setup_steps(manager: &str, prebuilt: bool) -> Vec<String> {
     steps
 }
 
+/// Shell commands that scan the installed file tree for class-specific IoCs:
+/// `.pth` files with executable content (Hades/Miasma pattern), unexpected
+/// runtime binaries (bun/deno), and other suspicious artifacts. The scan is
+/// per-probe so faulty findings are attributed to a specific package-version.
+fn build_artifact_scan_steps(idx: usize) -> Vec<String> {
+    let out = format!("/out/gyrseek_artifacts_{}.log", idx);
+    vec![
+        // Initialize/clear the artifact log for this probe.
+        format!("true > {}", out),
+        // Single inventory pipeline: record path, size (bytes), file type, and
+        // first 300 bytes of content for every installed file. Pipe characters
+        // in content are replaced with spaces to preserve the | delimiter.
+        format!(
+            "find /work -type f 2>/dev/null | while IFS= read -r f; do \
+             size=$(stat -c%s \"$f\" 2>/dev/null || wc -c < \"$f\" 2>/dev/null); \
+             type=$(file -b \"$f\" 2>/dev/null | head -c 100); \
+             content=$(head -c 300 \"$f\" 2>/dev/null | tr '|' ' '); \
+             echo \"$f|$size|$type|$content\" >> {}; done || true",
+            out
+        ),
+    ]
+}
+
 /// Builds the full `sh -lc` script for the matrix (multi-probe) run: per-probe
-/// strace logs written to /out, payload dropped to the scanner user.
+/// strace logs written to /out, payload dropped to the scanner user, followed
+/// by a targeted artifact scan of the installed file tree.
 fn build_matrix_script(manager: &str, probes: &[(String, String)], prebuilt: bool) -> String {
     let mut steps = image_setup_steps(manager, prebuilt);
     steps.extend(scanner_user_setup_steps());
@@ -370,6 +406,8 @@ fn build_matrix_script(manager: &str, probes: &[(String, String)], prebuilt: boo
             strace_install_command(manager, &spec, Some(&log)),
             err
         ));
+        // After each install, scan the installed tree for suspicious artifacts.
+        steps.extend(build_artifact_scan_steps(idx));
     }
 
     steps.join("; ")
@@ -527,8 +565,8 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SCANNER_USER, build_docker_run_args, build_matrix_script, build_single_script,
-        strace_install_command,
+        SCANNER_USER, build_artifact_scan_steps, build_docker_run_args, build_matrix_script,
+        build_single_script, strace_install_command,
     };
 
     // --- #4 strace must not truncate argv/addresses ---
@@ -665,6 +703,78 @@ mod tests {
         assert!(
             !strace_step.contains("2>&1"),
             "strace stderr must not be merged into /dev/null: {strace_step}"
+        );
+    }
+
+    // --- post-install artifact scan ---
+
+    #[test]
+    fn artifact_scan_steps_inventory_all_files() {
+        let steps = build_artifact_scan_steps(0);
+        let combined = steps.join(" ");
+        assert!(
+            combined.contains("find /work -type f"),
+            "should inventory every file: {combined}"
+        );
+        assert!(
+            combined.contains("file -b"),
+            "should capture file type via file(1): {combined}"
+        );
+        assert!(
+            combined.contains("stat -c%s"),
+            "should capture file size: {combined}"
+        );
+        assert!(
+            combined.contains("head -c 300"),
+            "should capture content prefix: {combined}"
+        );
+    }
+
+    #[test]
+    fn artifact_scan_steps_pipe_char_in_content_replaced() {
+        let steps = build_artifact_scan_steps(0);
+        let combined = steps.join(" ");
+        assert!(
+            combined.contains("tr '|' ' '"),
+            "should replace pipe in content to preserve delimiter: {combined}"
+        );
+    }
+
+    #[test]
+    fn artifact_scan_steps_output_to_correct_log() {
+        let steps0 = build_artifact_scan_steps(0);
+        let steps1 = build_artifact_scan_steps(1);
+        assert!(steps0[1].contains("/out/gyrseek_artifacts_0.log"));
+        assert!(steps1[1].contains("/out/gyrseek_artifacts_1.log"));
+    }
+
+    #[test]
+    fn matrix_script_includes_artifact_scan_after_each_probe() {
+        let script = build_matrix_script(
+            "pip",
+            &[
+                ("pkg-a".to_string(), "1.0.0".to_string()),
+                ("pkg-b".to_string(), "2.0.0".to_string()),
+            ],
+            true,
+        );
+        // After the first probe's install, expect the artifact scan log for idx 0.
+        let probe0_install = script.find("gyrseek_trace_0.log").expect("trace 0 log");
+        let probe0_artifacts = script
+            .find("gyrseek_artifacts_0.log")
+            .expect("artifacts 0 log");
+        assert!(
+            probe0_artifacts > probe0_install,
+            "artifact scan must follow install for probe 0"
+        );
+        // Same for probe 1.
+        let probe1_artifacts = script
+            .find("gyrseek_artifacts_1.log")
+            .expect("artifacts 1 log");
+        let probe1_install = script.find("gyrseek_trace_1.log").expect("trace 1 log");
+        assert!(
+            probe1_artifacts > probe1_install,
+            "artifact scan must follow install for probe 1"
         );
     }
 }

@@ -12,7 +12,7 @@
 - Made host-command forwarding fail closed when the manager binary cannot be spawned.
 - Folded policy knobs into a single PolicyConfig struct and scan results into ScanReport.
 - Added unit/integration coverage for all of the above (version ordering, IPv4/IPv6 extraction, burst filtering, version pinning, strace hardening, fail-closed forwarding).
-- Added watched-process execution detection (default bun/deno) diffed across versions to catch the Shai-Hulud "download a runtime and run a hidden payload" class, with `watched_executables`/`process_exec_allowlist` config and coverage in tests/bun_exec_scan_tests.rs.
+- Added watched-process execution detection (all executables captured by default, least-privilege approach) diffed across versions to catch the Shai-Hulud "download a runtime and run a hidden payload" class, with `process_exec_allowlist` config and coverage in tests/bun_exec_scan_tests.rs. `watched_executables` was later removed (always capture all execve).
 - Resolved the 8 findings in docs/FINDINGS.md (re-verified accurate, then fixed):
   - Empty/whitespace sandbox traces now fail closed (no more silent clean-pass on strace failure); strace stderr is captured per-probe instead of discarded.
   - Granted `--cap-add SYS_PTRACE` so cross-UID tracing actually works under Docker (surfaced once empty traces stopped passing silently).
@@ -25,6 +25,10 @@
 - Added `--version`/`-V` as a leading top-level flag (prints crate version, exits 0, works without config/Docker; does not intercept a forwarded command's own flag). Covered by tests/version_flag_tests.rs.
 - Filtered sandbox-local IPs (loopback, link-local, private/RFC1918 incl. Docker bridge and Docker Desktop gateway) at trace-extraction time, before the baseline diff, removing a class of harness-nondeterminism false positives; the cloud metadata IP `169.254.169.254` is exempt. Normalized IPv4-mapped IPv6 (`::ffff:1.2.3.4`) to bare IPv4 everywhere so diffs and the ip_allowlist match either form.
 - Added `internal_package_exemptions` config: skip first-party/private-index packages (e.g. Nexus) entirely — no registry fetch, no sandbox install, no diff — forwarding them unscanned at the requested version (with a `latest`-pin guard so the forwarded command is not corrupted).
+- Added post-install artifact scan: single `find /work -type f` pipeline inventories every installed file; Rust-side `classify_inventory_lines` emits structured findings (`binary`, `suspicious_pth`, `unexpected_runtime`, `large_file`); new signals fail closed. Replaced ad-hoc `.pth`/`bun-*`/`deno-*` shell scanners.
+- Added `artifact_allowlist` config: exact `type|path|details` or prefix `type|path` matching to unblock known artifacts (e.g. a team's expected binary).
+- Removed `watched_executables` config: all executables are now captured by default (least-privilege). `process_exec_allowlist` is the single escape hatch.
+- Added `is_harness_command` filter: excludes sandbox-internal execve calls (`uv pip install`, `npm install`, `pnpm add`, interpreter discovery) from process-execution signatures so version-specific command strings do not cause false positives. Covers all three supported manager types.
 
 ## Near Term
 - Add richer requirements parsing (environment markers, line continuations). (PEP 508 extras handling is now done.)
@@ -46,6 +50,7 @@
 - Phase 5: test coverage for direct runtime clone paths (unit + integration + hostile fixture scenarios).
 
 ## Hardening
+- ✅ **Post-install artifact scan** — in-container shell scan after each probe catches `.pth` files with executable content and unexpected runtime binaries (bun/deno), diffed across versions, fail-closed.
 - Improve resilience to strace output variations.
 - Improve error taxonomy and actionable user messages.
 - Add timeout and retry controls for registry lookups.

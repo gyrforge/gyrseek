@@ -23,6 +23,9 @@ target
 tests/npm/node_modules/
 tests/pnpm/node_modules/
 tests/pnpm/pnpm-lock.yaml
+node_modules/
+package-lock.json
+package.json
 
 # Graphify outputs: keep canonical artifacts, ignore run-state and cache files.
 graphify-out/*
