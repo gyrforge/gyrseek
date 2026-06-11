@@ -103,7 +103,7 @@ local-mac: build
 
 # Tag current HEAD with version from Cargo.toml (force-update)
 tag:
-    version=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/'); \
+    version=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/v\1/'); \
     git tag --delete "$version" 2>/dev/null || true; \
     git push --delete origin "$version" 2>/dev/null || true; \
     git tag "$version" && \
