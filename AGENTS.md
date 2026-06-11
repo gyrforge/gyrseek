@@ -28,13 +28,17 @@ Rules:
   - Justfile is the task runner entrypoint; run `just --list` to see recipes
   - just build — release build (cargo build --release)
   - just install — install gyrseek with cargo install --path . --locked
+  - just uninstall — uninstall gyrseek with cargo uninstall gyrseek
+  - just local-mac — build + copy to first writable system bin dir (/opt/homebrew/bin, /usr/local/bin, ~/.local/bin), installs versioned copy (gyrseek-vX.Y.Z) alongside plain gyrseek, warns about stale binaries in other dirs
+  - just tag — tag HEAD with version from Cargo.toml (e.g. v1.2.3), force-delete existing local/remote tag, push to origin
   - just fmt — format Rust code
-  - just lint — cargo test --all-features --locked + clippy all targets/features + format check; run before committing
+  - just test — run cargo test --all-features --locked
+  - just lint — clippy all targets/features + format check; run before committing (does NOT run cargo test — use just test for that)
   - just test-{npm,pnpm,pip,uv,poetry} — end-to-end tests per manager using the release binary; require Docker
 - Test strategy:
   - All unit and integration tests that do not require spawning the compiled binary live inline in their src/ module under `#[cfg(test)]` — this follows Rust convention and lets tests access private items directly
   - Only tests that need to spawn the real binary (CLI exit-code checks, forward behavior) remain in tests/ as integration test files
-  - Run with cargo test or just lint
+  - Run with cargo test (or just test)
   - src/scanning.rs (inline) — version ordering, IPv4/IPv6 trace extraction (sandbox-local IP filtering, IPv4-mapped `::ffff:` collapse, cloud-metadata-IP preservation), burst filtering, FCrDNS (forward_confirmed_hostname), bracketed-argv preservation, process-execution detection and allowlisting (with harness-command filtering via `is_harness_command` to exclude sandbox's own `uv pip install`, `npm install`, `pnpm add`, `python get_interpreter_info`, and `env HOME=/work` wrappers from exec signatures), git-clone signature diffing, network anomaly detection, DNS enrichment, IP/domain allowlist filtering (including IPv4-mapped/bare-IPv4 equivalence), internal-package-exemption skip, git-clone simulation; artifact scan (classify_inventory_lines, extract_artifact_findings, strip_artifact_section, inventory-based artifact scan with Rust-side classification for binary, suspicious_pth, unexpected_runtime, large_file signals; inline tests: classify_inventory_binary_elf, classify_inventory_unexpected_runtime, classify_inventory_suspicious_pth, classify_inventory_benign_pth, classify_inventory_large_file, classify_inventory_skips_malformed_lines, classify_inventory_empty_input, classify_inventory_mixed_findings); artifact allowlist (filter_allowlisted_artifact_findings — exact and prefix matching; inline tests: artifact_allowlist_matches_exact_finding_and_prefix); integration tests for artifact allowlist unblocking (artifact_allowlist_unblocks_new_findings) and fail-closed on new artifacts (flags_new_artifact_findings_across_versions); test RAII via `EnvVarGuard` (holds `env_lock` + sets/removes env var on drop, recovers from poison)
   - src/sandbox.rs (inline) — SYS_PTRACE capability in docker args, strace-stderr capture, no-truncation flags, unprivileged-payload integrity, post-install artifact scan (build_artifact_scan_steps — single file inventory pipeline — embedded in matrix script)
   - src/parsing.rs (inline) — PEP 508 extras stripping (strip_pep508_extras), extras-aware pinning, poetry local directory-source exclusion, rewrite_args_with_pinned_versions (including the `latest`-pin guard so a skipped internal package is not rewritten to an invalid `name==latest`/`name@latest`), lockfile/requirements/npm parsing for all managers
@@ -48,6 +52,7 @@ Rules:
   - docs/ARCHITECTURE.md
   - docs/DEV_GUIDE.md
   - docs/ROADMAP.md
+  - docs/FINDINGS.md
 - Current behavior highlights:
   - Supports uv add, uv pip install, uv pip sync, uv sync, uv lock (bare and update flags), pip/pip3 install, poetry add/update/install/lock, npm install/i/update, pnpm add/install/i/update
   - `--version`/`-V` is handled as a leading top-level flag before config load or sandbox init: prints `gyrseek <CARGO_PKG_VERSION>` and exits 0 (works with no config file / no Docker). Only the first arg is matched, so a forwarded command's own `--version` (e.g. `gyrseek pip install foo --version`) is passed through, not intercepted
@@ -71,7 +76,7 @@ Rules:
   - When a forwarded host command exits non-zero, gyrseek now exits with the same code (forward_args propagates child status; also fails closed if wait() errors) instead of discarding it and exiting 0 (was FINDINGS.md #8)
   - Only recognized managers are accepted: pip, pip3, uv, poetry, npm, pnpm. Any other first argument is rejected with a clear error listing supported managers (fail closed). The sole built-in exception is `sandbox runtimes` (diagnostic subcommand). Previously, unrecognized managers were silently forwarded unscanned.
   - Behavior tests include deterministic DNS-enrichment coverage (match and unresolved lookup paths)
-  - YAML policy config is supported (`gyrseek.yaml` by default, overridable via `--config` or `GYRSEEK_CONFIG`) using `ip_allowlist`, `domain_allowlist`, `git_clone_allowlist` (allowlist for install-time git clone targets), `artifact_allowlist` (exact `type|path|details` or prefix `type|path` to unblock known artifact findings), optional package `baseline_overrides` (`baseline-1`/`baseline-2`), `baseline_count` (default 2), per-package `min_baseline_age_hours` (default effective age gate 2 hours), `new_package_exemptions` (temporary bypass when <2 eligible baselines), `internal_package_exemptions` (skip a package entirely — no registry fetch, no sandbox install, no diff; for first-party/private-index packages e.g. Nexus that public-registry lookups can't resolve; forwarded unscanned at the requested version), optional `minimum_release_age_package` (disabled by default; when set, fails closed if current release age in days is below threshold), optional `release_burst_threshold` (disabled by default), and optional `release_burst_window_hours` (default 24h; when threshold is set, fails closed if version publish count in the configured window meets threshold), `process_exec_allowlist` (allow specific watched-process signatures or bare executables); IPs are canonicalized so equivalent IPv6 representations match
+  - YAML policy config is supported (`gyrseek.yaml` by default, overridable via `--config`/`-c` or `GYRSEEK_CONFIG`) using `ip_allowlist`, `domain_allowlist`, `git_clone_allowlist` (allowlist for install-time git clone targets), `artifact_allowlist` (exact `type|path|details` or prefix `type|path` to unblock known artifact findings), optional package `baseline_overrides` (`baseline-1`/`baseline-2`), `baseline_count` (default 2), per-package `min_baseline_age_hours` (default effective age gate 2 hours), `new_package_exemptions` (temporary bypass when <2 eligible baselines), `internal_package_exemptions` (skip a package entirely — no registry fetch, no sandbox install, no diff; for first-party/private-index packages e.g. Nexus that public-registry lookups can't resolve; forwarded unscanned at the requested version), optional `minimum_release_age_package` (disabled by default; when set, fails closed if current release age in days is below threshold), optional `release_burst_threshold` (disabled by default), and optional `release_burst_window_hours` (default 24h; when threshold is set, fails closed if version publish count in the configured window meets threshold), `process_exec_allowlist` (allow specific watched-process signatures or bare executables); IPs are canonicalized so equivalent IPv6 representations match
   - uv sync scans all packages from uv.lock
   - uv lock parsing excludes local editable/path/workspace project entries to avoid scanning the application under development
   - uv lock --upgrade and bare uv lock both scan all packages from uv.lock; -P/--upgrade-package scans explicit update targets. A bare uv lock (no -U/-P) previously forwarded unscanned and now scans the resolved lockfile (fails closed if uv.lock is missing/empty)
@@ -119,6 +124,7 @@ After every code or behavior change in this repository:
 3. Rerun `/graphify` with `graphify update .` so `graphify-out/` stays in sync with the latest code.
 4. Ensure these updates happen in the same change set whenever possible.
 5. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, and docs/ROADMAP.md.
+6. If a new security or correctness finding is identified and fixed, document it in docs/FINDINGS.md.
 
 ## Quick Post-Change Checklist
 - [ ] Code updated
@@ -129,3 +135,4 @@ After every code or behavior change in this repository:
 - [ ] docs/ARCHITECTURE.md updated if needed
 - [ ] docs/DEV_GUIDE.md updated if needed
 - [ ] docs/ROADMAP.md updated if needed
+- [ ] docs/FINDINGS.md updated if needed

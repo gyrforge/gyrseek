@@ -22,8 +22,8 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 - [Network Behavior Detection](#network-behavior-detection)
 - [Git Clone Behavior Detection](#git-clone-behavior-detection)
 - [Process-Execution Detection](#process-execution-detection)
-  - [Shai-Hulud detection coverage](#shai-hulud-detection-coverage)
 - [Post-Install Artifact Detection](#post-install-artifact-detection)
+- [Shai-Hulud Detection Coverage](#shai-hulud-detection-coverage)
 - [Configuration](#configuration)
 - [Sandbox Modes](#sandbox-modes)
 - [Prebuilt Scanner Images](#prebuilt-scanner-images)
@@ -78,12 +78,14 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just build` | Builds the release binary (`target/release/gyrseek`). |
 | `just install` | Installs `gyrseek` into Cargo's bin directory with `cargo install --path . --locked`. |
 | `just uninstall` | Uninstalls `gyrseek` with `cargo uninstall gyrseek`. |
+| `just local-mac` | Builds the release binary and copies it to the first writable bin directory found (`/opt/homebrew/bin`, `/usr/local/bin`, or `~/.local/bin`). Also installs a versioned copy (e.g. `gyrseek-v1.2.3`) alongside the plain `gyrseek` symlink, and warns about stale binaries in other directories. |
+| `just tag` | Tags the current `HEAD` with the version string from `Cargo.toml` (e.g. `v1.2.3`), force-deletes any existing local/remote tag with the same name, and pushes the new tag to `origin`. |
 | `just fmt` | Formats the Rust code. |
 | `just test` | Runs `cargo test --all-features --locked`. |
 | `just lint` | Runs clippy for all targets/features and a format check. Use this before committing. |
 | `just test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. |
 | `just test-pnpm` | End-to-end test: scans and adds `lodash`, then runs `pnpm update` and `pnpm i` against the test fixture in `tests/pnpm/`. Builds the release binary first. |
-| `just test-pip` | End-to-end test: creates a venv, then scans and installs `black` and the packages from `tests/pip/requirements.txt` via `pip3`. Builds the release binary first. |
+| `just test-pip` | End-to-end test: creates a venv, then scans and installs `black`, the packages from `tests/pip/requirements.txt`, and runs `pip3 install --upgrade pip` via `pip3`. Builds the release binary first. |
 | `just test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
 | `just test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
 
@@ -98,6 +100,12 @@ just install
 
 # Uninstall from Cargo's bin directory
 just uninstall
+
+# Build and install to a system bin dir on macOS (versioned + plain copy)
+just local-mac
+
+# Tag HEAD with the Cargo.toml version and push to origin
+just tag
 
 # Run tests
 just test
@@ -117,15 +125,17 @@ just test-poetry
 
 ## Supported Commands
 
-| Ecosystem  | Commands                                                                                                                 |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------ |
-| **uv**     | `uv add`, `uv pip install`, `uv pip sync <SRC_FILE>...`, `uv sync`, `uv lock --upgrade`, `uv lock -P\|--upgrade-package` |
-| **pip**    | `pip install`, `pip3 install` (including `-r/--requirements` files)                                                      |
-| **poetry** | `poetry add`, `poetry update`, `poetry install`                                                                          |
-| **npm**    | `npm install`, `npm i`, `npm update`                                                                                     |
-| **pnpm**   | `pnpm add`, `pnpm install`, `pnpm i`, `pnpm update`                                                                      |
+| Ecosystem  | Commands                                                                                                                              |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| **uv**     | `uv add`, `uv pip install`, `uv pip sync <SRC_FILE>...`, `uv sync`, `uv lock`, `uv lock --upgrade`, `uv lock -P\|--upgrade-package`  |
+| **pip**    | `pip install`, `pip3 install` (including `-r/--requirements` files)                                                                   |
+| **poetry** | `poetry add`, `poetry update`, `poetry install`, `poetry lock`                                                                        |
+| **npm**    | `npm install`, `npm i`, `npm update`                                                                                                  |
+| **pnpm**   | `pnpm add`, `pnpm install`, `pnpm i`, `pnpm update`                                                                                   |
 
 > Standalone `git clone` runtime interception is not enabled yet — only install-time clone behavior _inside_ package scans is enforced today (see [Git Clone Behavior](#git-clone-behavior)).
+
+> **`--version` / `-V`:** pass either flag as the first argument to print `gyrseek <version>` and exit 0. This works with no config file or Docker present. A forwarded command's own trailing `--version` (e.g. `gyrseek pip install foo --version`) is passed through unchanged.
 
 ## How It Works
 
@@ -142,10 +152,11 @@ just test-poetry
    - **Network**: endpoints contacted during install.
    - **Git clone**: install-time `git clone` command signatures.
    - **Process execution**: all programs executed during install — the payload's own commands plus the sandbox's internal setup (see [Process-Execution Detection](#process-execution-detection)).
+   - **Artifacts**: post-install file inventory of every installed file — binary executables, suspicious `.pth` files, unexpected runtimes, and large files (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
 5. **Decide**:
-   - New endpoint or clone behavior found → **block and exit non-zero**.
+   - New endpoint, clone behavior, process execution, or artifact finding found → **block and exit non-zero**.
    - Nothing new → **forward your original command**.
-6. **Fail closed**: if a package target was expected but couldn't be detected — _or if the sandbox produced no trace at all_ (e.g. `strace` could not attach) — `gyrseek` blocks rather than letting the command through. A blank trace is never treated as a clean, zero-activity install.
+6. **Fail closed**: if a package target was expected but couldn't be detected — _or if the sandbox produced no trace at all_ (e.g. `strace` could not attach) — `gyrseek` blocks rather than letting the command through. A blank trace is never treated as a clean, zero-activity install. New artifact findings across versions also fail closed.
 7. **Propagate the host exit code**: when the original command is forwarded, `gyrseek` exits with the package manager's own status. A failed install (non-zero) surfaces as non-zero, so agents and CI `$?` checks are not misled into thinking a broken install succeeded.
 
 This gives you a _behavioral_ signal, rather than relying only on package metadata.
@@ -237,7 +248,7 @@ Aborting host operation securely.
 ## Git Clone Behavior Detection
 
 - **Install-time clones** (e.g. hidden `git clone` calls inside package scripts) are compared across package versions during scanning, and new behavior is fail-closed unless allowlisted.
-- Clone-detection logic can also be exercised for standalone scenarios via integration tests (`tests/git_clone_behavior_tests.rs`).
+- Clone-detection logic is exercised via inline unit tests in `src/scanning.rs` (moved from the old `tests/git_clone_behavior_tests.rs`).
 - **Runtime interception of direct `git clone ...` shell commands is not enabled yet** in the CLI parser.
 
 Example warning (simulation/test context):
@@ -258,8 +269,34 @@ The sandbox's own install commands (`uv pip install`, `npm install`, `pnpm add`,
 
 Tune this with the `process_exec_allowlist` config key (see [Configuration](#configuration)).
 
-> **Scope:** this observes processes executed _inside the sandbox during install_ (where the Bun loader fires for npm-style hooks and where Python install-time execution can occur). The PyPI `*-setup.pth` variant that triggers on the _next interpreter startup_ rather than at install time may execute outside the install window; see [Limitations](#docker-hardening-limitations).
-### Shai-Hulud detection coverage
+> **Scope:** this observes processes executed _inside the sandbox during install_ (where the Bun loader fires for npm-style hooks and where Python install-time execution can occur). The PyPI `*-setup.pth` variant that triggers on the _next interpreter startup_ rather than at install time may execute outside the install window, though the post-install artifact scan catches the `.pth` file itself during install (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
+
+## Post-Install Artifact Detection
+
+`gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, file type, first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
+
+The classifier emits four signal categories:
+
+1. **`binary`** — ELF, Mach-O, or PE executables deposited in the install tree. Catches cryptominers, compiled malware, and arbitrary native binaries.
+2. **`suspicious_pth`** — Python `.pth` files containing executable code (`import`, `exec`, `eval`, `urllib`, `subprocess`, `ctypes`, `socket` patterns). These are essentially never used by legitimate namespace-path `.pth` files and are the Hades/Miasma delivery mechanism.
+3. **`unexpected_runtime`** — bun/deno runtime binaries (identified by filename and binary type). A subset of `binary` with higher severity. Catches download-and-execute attacks that leave a runtime behind.
+4. **`large_file`** — any file >10 MB in the install tree. Catches data exfiltration staging and large payload drops.
+
+**How it works** — after each per-probe install step in the Docker matrix script, a single `find /work -type f` pipeline inventories every installed file, capturing size via `stat`, type via `file -b`, and a 300-byte content prefix via `head -c`. The raw inventory is written to `/out/gyrseek_artifacts_N.log`, embedded in the probe trace, and classified by `classify_inventory_lines` in scanning.rs before entering the diff pipeline.
+
+**Diff-based verdict** — like all of gyrseek's detection signals, artifact findings are compared across versions. A finding present in a baseline version is expected; a finding newly appearing in the current version (absent from all baselines) is **fail-closed**:
+
+```text
+❌ [gyrseek] CRITICAL WARNING: Suspicious artifact(s) discovered after install!
+Package 'evil-pkg', version '2.0.0' introduced new suspicious file artifact(s) not
+seen in baseline versions (1.9.0, 1.8.0): ["suspicious_pth|/work/site-packages/evil.pth|import socket"]
+This may indicate a .pth file with executable content or an unexpected runtime binary.
+Aborting host operation securely.
+```
+
+This closes the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during `pip install` (as ordinary file I/O, invisible to strace's `network,execve` filter) but detected by the post-install artifact scan before the container session ends. The same pipeline catches ELF-based payloads, large data exfiltration, and any future file-level IOC — all without modifying the container script.
+
+## Shai-Hulud Detection Coverage
 
 The Shai-Hulud campaign has produced several named attack waves across different ecosystems, each using different execution techniques. The table below maps each wave to gyrseek's verdict and — where the attack fires during install — the specific IoCs gyrseek would have captured.
 
@@ -318,39 +355,15 @@ The **post-install file inventory** (implemented, see [dedicated section](#post-
 
 The remaining gap is T1b (deferred bun download-and-execute on next interpreter startup). Even though the `.pth` file is now caught at T1, a container escape or interpreter-startup interception would be needed to catch the execution phase. A post-install interpreter trigger step (start Python with the installed packages on `sys.path` to force `.pth` execution) remains on the roadmap for future hardening.
 
-## Post-Install Artifact Detection
-
-`gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, file type, first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
-
-The classifier emits four signal categories:
-
-1. **`binary`** — ELF, Mach-O, or PE executables deposited in the install tree. Catches cryptominers, compiled malware, and arbitrary native binaries.
-2. **`suspicious_pth`** — Python `.pth` files containing executable code (`import`, `exec`, `eval`, `urllib`, `subprocess`, `ctypes`, `socket` patterns). These are essentially never used by legitimate namespace-path `.pth` files and are the Hades/Miasma delivery mechanism.
-3. **`unexpected_runtime`** — bun/deno runtime binaries (identified by filename and binary type). A subset of `binary` with higher severity. Catches download-and-execute attacks that leave a runtime behind.
-4. **`large_file`** — any file >10 MB in the install tree. Catches data exfiltration staging and large payload drops.
-
-**How it works** — after each per-probe install step in the Docker matrix script, a single `find /work -type f` pipeline inventories every installed file, capturing size via `stat`, type via `file -b`, and a 300-byte content prefix via `head -c`. The raw inventory is written to `/out/gyrseek_artifacts_N.log`, embedded in the probe trace, and classified by `classify_inventory_lines` in scanning.rs before entering the diff pipeline.
-
-**Diff-based verdict** — like all of gyrseek's detection signals, artifact findings are compared across versions. A finding present in a baseline version is expected; a finding newly appearing in the current version (absent from all baselines) is **fail-closed**:
-
-```text
-❌ [gyrseek] CRITICAL WARNING: Suspicious artifact(s) discovered after install!
-Package 'evil-pkg', version '2.0.0' introduced new suspicious file artifact(s) not
-seen in baseline versions (1.9.0, 1.8.0): ["suspicious_pth|/work/site-packages/evil.pth|import socket"]
-This may indicate a .pth file with executable content or an unexpected runtime binary.
-Aborting host operation securely.
-```
-
-This closes the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during `pip install` (as ordinary file I/O, invisible to strace's `network,execve` filter) but detected by the post-install artifact scan before the container session ends. The same pipeline catches ELF-based payloads, large data exfiltration, and any future file-level IOC — all without modifying the container script.
-
 ## Configuration
 
 `gyrseek` reads a YAML policy file to allowlist known-good endpoints and tune its release gates.
 
-**Config path:** defaults to `gyrseek.yaml` in the working directory. Override it with `--config` or the `GYRSEEK_CONFIG` environment variable:
+**Config path:** defaults to `gyrseek.yaml` in the working directory. Override it with `--config` / `-c` or the `GYRSEEK_CONFIG` environment variable:
 
 ```bash
 ./target/release/gyrseek --config ./security-policy.yaml npm install
+./target/release/gyrseek -c ./security-policy.yaml npm install
 GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 ```
 
@@ -360,7 +373,7 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 | ----------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ip_allowlist`                | empty         | IPs to ignore before anomaly blocking. Canonicalized (equivalent IPv6 forms match); invalid entries are skipped with a warning.                                                                                                                                |
 | `domain_allowlist`            | empty         | Domains to ignore. Lowercased, trailing `.` stripped. Subdomains match parents (`cdn.example.com` matches `example.com`). Only **forward-confirmed** PTR hostnames (FCrDNS) are matched, so a spoofed reverse-DNS record cannot bypass the allowlist.          |
-| `artifact_allowlist`          | empty         | Artifact findings to allow (exact `type|path|details` or prefix `type|path`). New artifacts not in baselines and not allowlisted fail closed.<br>Example: `binary|/work/bin/tool` or `suspicious_pth|/work/hack.pth|import urllib`.                             |
+| `artifact_allowlist`          | empty         | Artifact findings to allow (exact `type|path|details` or prefix `type|path`). New artifacts not in baselines and not allowlisted fail closed. Example: `binary|/work/bin/tool`.               |
 | `git_clone_allowlist`         | empty         | Git clone targets to allow when new install-time clone behavior appears (case-insensitive exact URL match).                                                                                                                                                    |
 | `baseline_overrides`          | none          | Pin baseline versions per package via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines.                                                                                                                                       |
 | `baseline_count`              | `2`           | How many historical baselines to compare against.                                                                                                                                                                                                              |
@@ -550,12 +563,13 @@ Details worth knowing once you're past the basics.
 **Per-command scanning scope**
 
 - `uv sync` scans all packages found in `uv.lock` before forwarding.
-- `uv sync` and `uv lock --upgrade` exclude local project entries (editable/path/workspace blocks) from comparison.
+- `uv sync`, `uv lock` (bare), and `uv lock --upgrade` exclude local project entries (editable/path/workspace blocks) from comparison.
 - `uv pip sync` scans all parseable packages from its source files (requirements-style files and `pylock.toml`).
-- `uv lock --upgrade` scans all packages in `uv.lock`; `uv lock -P/--upgrade-package` scans the explicitly targeted packages. When `-P` is followed by a flag (e.g. `-P --dry-run`), the flag is not consumed as a package name and the next real `-P pkg` argument is not silently skipped.
+- `uv lock` (bare) and `uv lock --upgrade` scan all packages in `uv.lock`; both fail closed if `uv.lock` is missing or empty. `uv lock -P/--upgrade-package` scans the explicitly targeted packages. When `-P` is followed by a flag (e.g. `-P --dry-run`), the flag is not consumed as a package name and the next real `-P pkg` argument is not silently skipped.
 - `pip install` / `pip3 install` scan all parseable entries, including `-r/--requirements` files.
-- `poetry install` / `poetry update` scan all packages in `poetry.lock`, excluding local directory/path/editable source blocks.
+- `poetry install`, `poetry update`, and `poetry lock` scan all packages in `poetry.lock`, excluding local directory/path/editable source blocks. `poetry lock` fails closed if `poetry.lock` is missing or empty.
 - `npm install`, `npm i`, `npm update`, `pnpm add`, `pnpm install`, `pnpm i`, and `pnpm update` scan explicit targets; with no targets they scan `package.json` dependencies. Both paths exclude non-registry specs (`file:`, `workspace:`, `git+`, URL, `link:`) — previously `link:` was filtered in the `package.json` fallback but passed through as a package name on the CLI arg path.
+- `uv venv` and other unrecognized `uv` subcommands are forwarded verbatim (unscanned passthrough).
 
 **Fail-closed guarantees**
 
@@ -563,6 +577,7 @@ Details worth knowing once you're past the basics.
 - For supported install/sync paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
 - If the host command itself cannot be launched after a clean scan, `gyrseek` also fails closed.
 - A sandbox probe that produces an **empty/whitespace trace** (e.g. `strace` could not attach) is a hard error: every package in that batch is blocked. Blank traces are never interpreted as clean.
+- **Post-install artifact findings** — binary executables, suspicious `.pth` files, unexpected runtimes, and large files — are diffed across versions. A finding newly present in the current version (absent from all baselines) fails closed (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
 - When a forwarded command exits non-zero, `gyrseek` **exits with the same code** rather than masking the failure as success.
 
 ## Docker Hardening Limitations
@@ -577,7 +592,7 @@ The Docker sandbox is currently tuned for practical compatibility and throughput
 - Full `--read-only` rootfs is not enabled.
 - Capabilities are not fully dropped, and `SYS_PTRACE` is explicitly added (see above).
 - Outbound network remains generally available so package-manager traffic can proceed.
-- Behavioral detection (network, git clone, process execution) observes what runs **during the sandbox install**. Payloads designed to fire _outside_ the install window — e.g. the PyPI `*-setup.pth` variant that executes on the next `python`/`pip`/CI interpreter startup rather than at install — may not detonate during the scan, so their behavior may not be captured.
+- Behavioral detection (network, git clone, process execution, post-install artifact scan) observes what runs **during the sandbox install**. Payloads designed to fire _outside_ the install window — e.g. the PyPI `*-setup.pth` variant that executes on the next `python`/`pip`/CI interpreter startup rather than at install — may not detonate during the scan, so their runtime behavior may not be captured, though the artifact scan detects the `.pth` file itself during install.
 
 **Why:** earlier stricter configs (read-only rootfs + full capability drop + non-root setup) caused apt/setup failures that prevented scans from running. The current config is the stable path that lets matrix probes complete in one sandbox run.
 
@@ -587,7 +602,7 @@ The Docker sandbox is currently tuned for practical compatibility and throughput
 - With prebuilt images in place, re-enable non-root runtime, read-only rootfs, and drop all capabilities except `SYS_PTRACE` (which tracing requires).
 - Add seccomp/apparmor policies and image digest pinning.
 - Consider tighter egress controls (allowlist or proxy model).
-- Add no-execution-first checks (artifact diff / static heuristics / provenance gates) before runtime execution, in phases: artifact fetch/unpack → static diff scoring → pre-runtime policy gating.
+- Add no-execution-first checks (static heuristics / provenance gates) before runtime execution, in phases: artifact fetch/unpack → static diff scoring → pre-runtime policy gating. ✅ **Artifact diff** (post-install file inventory + Rust classifier + cross-version diffing) is already implemented.
 
 > **Performance note:** prebuilt images + prebuilt mode (`GYRSEEK_PREBUILT_SCANNER_IMAGES=true` or per-manager vars) avoid runtime setup overhead.
 
@@ -613,6 +628,9 @@ cargo test --lib
 # Run the CLI exit-code integration tests (spawn the binary)
 cargo test --test cli_burst_exit_tests
 cargo test --test forward_fail_closed_tests
+cargo test --test lock_routing_tests
+cargo test --test pnpm_routing_tests
+cargo test --test version_flag_tests
 
 # Run one specific test case by name
 cargo test parses_npm_install_with_pinned_version
@@ -648,21 +666,27 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 - `src/sandbox.rs` — sandbox backends and mode selection; inline tests for docker args, strace flags, and unprivileged-payload integrity
 - `tests/cli_burst_exit_tests.rs` — release burst and minimum release age CLI exit-code tests (spawn binary)
 - `tests/forward_fail_closed_tests.rs` — fail-closed forwarding and exit-status propagation tests (spawn binary)
+- `tests/lock_routing_tests.rs` — `poetry lock`, `uv lock`, `pnpm install` routing and `uv venv` passthrough tests (spawn binary)
+- `tests/pnpm_routing_tests.rs` — `pnpm add` / `pnpm install` package.json fallback routing tests (spawn binary)
+- `tests/version_flag_tests.rs` — `--version`/`-V` print-and-exit and forwarded trailing `--version` passthrough tests (spawn binary)
 
 **Just recipes**
 
 - `just build` — release build
-- `just install` / `just uninstall` — install or remove the local Cargo binary
+- `just install` / `just uninstall` — install or remove the Cargo bin
+- `just local-mac` — build and copy to the first writable system bin dir on macOS, with a versioned copy and stale-binary warnings
+- `just tag` — tag `HEAD` with the `Cargo.toml` version and push to `origin`
 - `just fmt` — format Rust code
 - `just test` — run Rust tests
 - `just lint` — run clippy and format checks
-- `just test-{npm,pip,uv,poetry}` — end-to-end tests per manager
+- `just test-{npm,pnpm,pip,uv,poetry}` — end-to-end tests per manager
 
 **Collaboration docs** (for multi-developer / multi-LLM work)
 
 - `docs/ARCHITECTURE.md` — control-flow and component map
 - `docs/DEV_GUIDE.md` — contributor workflow and change hygiene
 - `docs/ROADMAP.md` — planned improvements and next steps
+- `docs/FINDINGS.md` — security and correctness findings log (static review findings and their fixes)
 - `AGENTS.md` — repository memory and mandatory update policy
 
 > **Repository policy:** after each change, update both `AGENTS.md` and `README.md`.
