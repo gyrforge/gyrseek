@@ -9,7 +9,6 @@ use std::process::Command;
 ///
 /// `GYRSEEK_TEST_BYPASS_RUNNER_INIT=1` swaps in the no-op sandbox runner so no
 /// Docker daemon is required to reach the branch.
-
 /// `poetry lock` is routed to lockfile scanning (mirrors `install`/`update`).
 #[test]
 fn poetry_lock_is_routed_to_lockfile_scan() {
