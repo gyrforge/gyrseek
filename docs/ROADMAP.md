@@ -1,46 +1,35 @@
 # Roadmap
 
 ## Completed
-- Added install/build-time git clone behavior diffing across package versions.
-- Added `git_clone_allowlist` policy support for install-time clone targets.
-- Added integration coverage for install-time git clone scan behavior under `tests/git_clone_scan_tests.rs`.
-- Replaced lexicographic version ordering with semantic ordering (semver for npm, PEP 440 for Python), with safe fallback for unparseable versions.
-- Pinned the forwarded command to the exact scanned version for explicit unpinned install targets (closes the scan-vs-install version gap).
-- Captured IPv6 connection endpoints (not just IPv4) and normalized them to canonical form.
-- Hardened trace capture: `strace -s 4096 -v` (no truncation) and `-u` to run the install payload unprivileged so it cannot tamper with its own trace.
-- Excluded npm `created`/`modified` bookkeeping keys from the release-burst counter.
-- Made host-command forwarding fail closed when the manager binary cannot be spawned.
-- Folded policy knobs into a single PolicyConfig struct and scan results into ScanReport.
-- Added unit/integration coverage for all of the above (version ordering, IPv4/IPv6 extraction, burst filtering, version pinning, strace hardening, fail-closed forwarding).
-- Added watched-process execution detection (all executables captured by default, least-privilege approach) diffed across versions to catch the Shai-Hulud "download a runtime and run a hidden payload" class, with `process_exec_allowlist` config and coverage in tests/bun_exec_scan_tests.rs. `watched_executables` was later removed (always capture all execve).
-- Resolved the 8 findings in docs/FINDINGS.md (re-verified accurate, then fixed):
-  - Empty/whitespace sandbox traces now fail closed (no more silent clean-pass on strace failure); strace stderr is captured per-probe instead of discarded.
-  - Granted `--cap-add SYS_PTRACE` so cross-UID tracing actually works under Docker (surfaced once empty traces stopped passing silently).
-  - `domain_allowlist` now uses forward-confirmed reverse DNS (FCrDNS), closing the spoofed-PTR bypass.
-  - Balanced-bracket-aware execve argv regex so `]`-containing arguments (PEP 508 extras, bracketed paths) are no longer truncated.
-  - Poetry parser excludes all local directory-source packages regardless of `develop`.
-  - PEP 508 extras stripped from the canonical name for registry lookups and the pin key, while the forwarded command keeps the full spec (fixes both the PyPI 404/zero-baseline path and the broken version pinning).
-  - Forwarded host command exit status is propagated instead of discarded.
-- Extended lockfile scanning to bare `uv lock` and bare `poetry lock` (previously forwarded unscanned); both now scan the resolved lockfile and fail closed if it is missing/empty. Routing covered by tests/lock_routing_tests.rs.
-- Added `--version`/`-V` as a leading top-level flag (prints crate version, exits 0, works without config/Docker; does not intercept a forwarded command's own flag). Covered by tests/version_flag_tests.rs.
-- Filtered sandbox-local IPs (loopback, link-local, private/RFC1918 incl. Docker bridge and Docker Desktop gateway) at trace-extraction time, before the baseline diff, removing a class of harness-nondeterminism false positives; the cloud metadata IP `169.254.169.254` is exempt. Normalized IPv4-mapped IPv6 (`::ffff:1.2.3.4`) to bare IPv4 everywhere so diffs and the ip_allowlist match either form.
-- Added `internal_package_exemptions` config: skip first-party/private-index packages (e.g. Nexus) entirely — no registry fetch, no sandbox install, no diff — forwarding them unscanned at the requested version (with a `latest`-pin guard so the forwarded command is not corrupted).
-- Added post-install artifact scan: single `find /work -type f` pipeline inventories every installed file; Rust-side `classify_inventory_lines` emits structured findings (`binary`, `suspicious_pth`, `unexpected_runtime`, `large_file`); new signals fail closed. Replaced ad-hoc `.pth`/`bun-*`/`deno-*` shell scanners.
-- Added `artifact_allowlist` config: exact `type|path|details` or prefix `type|path` matching to unblock known artifacts (e.g. a team's expected binary).
-- Removed `watched_executables` config: all executables are now captured by default (least-privilege). `process_exec_allowlist` is the single escape hatch.
-- Added `is_harness_command` filter: excludes sandbox-internal execve calls (`uv pip install`, `npm install`, `pnpm add`, interpreter discovery) from process-execution signatures so version-specific command strings do not cause false positives. Covers all three supported manager types.
+- Install-time git clone behavior diffing across package versions, plus `git_clone_allowlist` support.
+- Process-execution diffing for all observed `execve` calls by default, with `process_exec_allowlist` as the only escape hatch.
+- Post-install artifact inventory and diffing (`binary`, `suspicious_pth`, `unexpected_runtime`, `large_file`) with `artifact_allowlist` support.
+- Semantic version ordering for npm/pnpm (semver) and Python managers (PEP 440), with safe fallback for unparseable versions.
+- Exact-version pinning for forwarded explicit unpinned install targets, closing the scan-vs-install version gap.
+- Expanded lockfile routing and fail-closed coverage for `uv sync`, bare `uv lock`, `uv lock --upgrade`, `uv lock -P/--upgrade-package`, `poetry install`, `poetry update`, and bare `poetry lock`.
+- Top-level `--version`/`-V` support that works before config load or sandbox initialization and does not intercept a forwarded command's own trailing flag.
+- Fail-closed manager handling: unsupported managers are rejected instead of being silently forwarded unscanned; the built-in exception is `sandbox runtimes`.
+- Empty/whitespace traces now fail closed; strace stderr is captured; Docker tracing is hardened with `-s 4096 -v`, unprivileged payload execution, and `--cap-add SYS_PTRACE`.
+- IPv6 capture and canonicalization, IPv4-mapped IPv6 collapse, sandbox-local IP filtering, and cloud-metadata IP preservation.
+- FCrDNS-backed `domain_allowlist`, balanced-bracket exec parsing, and correct PEP 508 extras normalization for registry lookup plus forwarded pinning.
+- `internal_package_exemptions` support for first-party/private-index packages that should bypass registry lookup and sandbox scanning entirely.
+- Docker, host, and MicroVM sandbox modes, including runtime selection via `GYRSEEK_MICROVM_RUNTIME` and the `sandbox runtimes` diagnostic command.
+- Prebuilt scanner image support and documented digest-pinning workflow for faster, more reproducible scans.
+- In-run scan-result caching and Docker matrix batching for multiple package/version probes in one container session.
+- Integration coverage for CLI exit-code behavior, lockfile routing, pnpm routing, version flags, artifact allowlisting, and fail-closed forwarding; inline tests cover parsing, scanning, and sandbox internals.
 
 ## Near Term
-- Add richer requirements parsing (environment markers, line continuations). (PEP 508 extras handling is now done.)
-- Add end-to-end command-path tests covering pinned forwarding and lockfile-flow verbatim forwarding (e.g. uv sync) with a stub manager.
+- Add richer requirements and constraints parsing coverage, especially environment markers and line continuations.
+- Add end-to-end command-path tests for pinned forwarding and lockfile-flow verbatim forwarding with a stub manager.
+- Add focused tests for Docker matrix batching behavior so multi-package and multi-version paths are pinned by executable validation, not just inline helpers.
+- Tighten user-facing error taxonomy and remediation guidance so fail-closed outcomes are easier to triage in CI and local workflows.
 
 ## Mid Term
 - Detect post-install / startup-triggered payloads that fire outside the install window (e.g. PyPI `*-setup.pth` startup execution): exercise the package's import/startup path inside the sandbox and diff that behavior too.
-- Make the watched-executable set extensible per-ecosystem and consider an opt-in "watch all unexpected process execution" strict mode.
 - Add direct runtime git clone interception path with safe heuristics.
 - Improve baseline selection strategy when fewer historical versions exist.
 - Add structured logging mode for CI and machine parsing.
-- Add dedicated tests for matrix batch execution paths (multi-package, multi-version in one sandbox run).
+- Add configurable timeout and retry controls for registry lookups and slow probe execution.
 
 ## Direct Git Clone Runtime Support
 - Phase 1: command parser support for direct `git clone` targets (HTTPS/SSH URL forms, optional branch/ref flags).
@@ -50,17 +39,14 @@
 - Phase 5: test coverage for direct runtime clone paths (unit + integration + hostile fixture scenarios).
 
 ## Hardening
-- ✅ **Post-install artifact scan** — in-container shell scan after each probe catches `.pth` files with executable content and unexpected runtime binaries (bun/deno), diffed across versions, fail-closed.
 - Improve resilience to strace output variations.
-- Improve error taxonomy and actionable user messages.
-- Add timeout and retry controls for registry lookups.
-- Add microVM sandbox backend (strict mode) beyond Docker and host modes.
 - Add a no-execution-first comparison stage (tarball diff, install-hook/static rule checks) before runtime detonation.
 - Add provenance and integrity gates (trusted registry policy, digest/signature verification where available).
 - Add optional strict egress mediation/proxy mode for runtime scans.
 - Implement no-execution-first Phase 1: fetch and unpack target/baseline artifacts without install execution.
 - Implement no-execution-first Phase 2: static diff scoring (file tree deltas, install hooks, suspicious payload indicators).
 - Implement no-execution-first Phase 3: policy gate to block high-risk packages before runtime sandbox stage.
+- Revisit stricter container controls once prebuilt scanner images are the normal path: read-only rootfs, tighter capability drop, and stronger seccomp/apparmor defaults.
 
 ## Generated File Comparison Across Versions
 - Add artifact extraction stage to compare generated output files between current and baseline package versions.
@@ -81,3 +67,4 @@
 ## Collaboration
 - Keep AGENTS.md and README.md updated on every change.
 - Keep docs/ARCHITECTURE.md aligned with control-flow changes.
+- Keep docs/FINDINGS.md updated when a new security or correctness issue is identified and fixed.
