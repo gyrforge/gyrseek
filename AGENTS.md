@@ -11,7 +11,7 @@ Rules:
 - For codebase questions, first run `graphify query "<question>"` when `graphify-out/graph.json` exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output.
 - If `graphify-out/wiki/index.md` exists, use it for broad navigation instead of raw source browsing.
 - Read `graphify-out/GRAPH_REPORT.md` only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- Always rerun `/graphify` via `graphify update .` after every code change to keep graph artifacts current before handing off or committing (AST-only, no API cost).
 
 ## Repository Memory
 - Project name: gyrseek
@@ -111,12 +111,14 @@ Rules:
 After every code or behavior change in this repository:
 1. Update this file (AGENTS.md) with the new behavior, scope, or constraints.
 2. Update README.md so user-facing documentation matches the current implementation.
-3. Ensure both updates happen in the same change set whenever possible.
-4. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, and docs/ROADMAP.md.
+3. Rerun `/graphify` with `graphify update .` so `graphify-out/` stays in sync with the latest code.
+4. Ensure these updates happen in the same change set whenever possible.
+5. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, and docs/ROADMAP.md.
 
 ## Quick Post-Change Checklist
 - [ ] Code updated
 - [ ] Tests updated and run
+- [ ] graphify update . run
 - [ ] AGENTS.md updated
 - [ ] README.md updated
 - [ ] docs/ARCHITECTURE.md updated if needed
