@@ -69,18 +69,23 @@ impl SandboxRunner for HostRunner {
             tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
         let target_path = temp_dir.path().to_string_lossy().to_string();
 
-        let cmd_args = if manager == "npm" {
-            vec![
+        let cmd_args = if is_npm_family_manager(manager) {
+            let mut args = vec![
                 "-f".to_string(),
                 "-e".to_string(),
                 "trace=network,execve".to_string(),
-                "npm".to_string(),
-                "install".to_string(),
+                manager.to_string(),
+                npm_family_install_subcommand(manager).to_string(),
                 format!("{}@{}", package, version),
-                "--prefix".to_string(),
+                npm_family_install_dir_flag(manager).to_string(),
                 target_path,
-                "--no-save".to_string(),
-            ]
+            ];
+            if manager == "pnpm" {
+                args.push("--lockfile=false".to_string());
+            } else {
+                args.push("--no-save".to_string());
+            }
+            args
         } else {
             vec![
                 "-f".to_string(),
@@ -246,9 +251,25 @@ fn trace_install_docker_single_with_runtime(
 /// overwrite or delete its own trace.
 const SCANNER_USER: &str = "gyrseek";
 
+fn is_npm_family_manager(manager: &str) -> bool {
+    manager == "npm" || manager == "pnpm"
+}
+
+fn npm_family_install_subcommand(manager: &str) -> &str {
+    if manager == "pnpm" { "add" } else { "install" }
+}
+
+fn npm_family_install_dir_flag(manager: &str) -> &str {
+    if manager == "pnpm" {
+        "--dir"
+    } else {
+        "--prefix"
+    }
+}
+
 /// The `pkg@version` (npm) / `pkg==version` (pip/uv) spec passed to the installer.
 fn package_spec(manager: &str, package: &str, version: &str) -> String {
-    if manager == "npm" {
+    if is_npm_family_manager(manager) {
         format!("{}@{}", package, version)
     } else {
         format!("{}=={}", package, version)
@@ -274,7 +295,12 @@ fn scanner_user_setup_steps() -> Vec<String> {
 /// The actual `npm install` / `uv pip install` invocation, with HOME pinned to
 /// the scanner-writable /work so the dropped-privilege user has a usable cache.
 fn install_invocation(manager: &str, pkg_spec: &str) -> String {
-    if manager == "npm" {
+    if manager == "pnpm" {
+        format!(
+            "env HOME=/work pnpm add {} --dir /work --lockfile=false",
+            shell_single_quoted(pkg_spec)
+        )
+    } else if manager == "npm" {
         format!(
             "env HOME=/work npm install {} --prefix /work --no-save",
             shell_single_quoted(pkg_spec)
@@ -312,7 +338,12 @@ fn image_setup_steps(manager: &str, prebuilt: bool) -> Vec<String> {
             "apt-get -o APT::Sandbox::User=root install -y --no-install-recommends strace ca-certificates >/dev/null"
                 .to_string(),
         );
-        if manager != "npm" {
+        if manager == "pnpm" {
+            steps.push(
+                "corepack enable pnpm >/dev/null 2>&1 || npm install -g pnpm >/dev/null"
+                    .to_string(),
+            );
+        } else if manager != "npm" {
             steps.push("python -m pip install --quiet uv >/dev/null".to_string());
         }
     }
@@ -425,7 +456,7 @@ fn docker_runtime_available(runtime: &str) -> bool {
 }
 
 fn scanner_image_config(manager: &str) -> ScannerImageConfig {
-    let (image_var, prebuilt_var, default_image) = if manager == "npm" {
+    let (image_var, prebuilt_var, default_image) = if is_npm_family_manager(manager) {
         (
             "GYRSEEK_NPM_SCANNER_IMAGE",
             "GYRSEEK_NPM_SCANNER_PREBUILT",
@@ -558,6 +589,24 @@ mod tests {
             "scanner user must be created before install"
         );
         assert!(script.contains("chown -R gyrseek /work"));
+    }
+
+    #[test]
+    fn pnpm_install_invocation_uses_pnpm_add() {
+        let cmd =
+            strace_install_command("pnpm", "left-pad@1.3.0", Some("/out/gyrseek_trace_0.log"));
+        assert!(cmd.contains("pnpm add 'left-pad@1.3.0' --dir /work --lockfile=false"));
+    }
+
+    #[test]
+    fn pnpm_non_prebuilt_image_enables_pnpm() {
+        let script = build_matrix_script(
+            "pnpm",
+            &[("left-pad".to_string(), "1.3.0".to_string())],
+            false,
+        );
+        assert!(script.contains("corepack enable pnpm"));
+        assert!(script.contains("pnpm add"));
     }
 
     #[test]

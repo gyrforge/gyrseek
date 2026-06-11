@@ -448,6 +448,15 @@ fn is_non_registry_npm_spec(spec: &str) -> bool {
         || trimmed.starts_with("link:")
 }
 
+fn is_npm_family_manager(manager: &str) -> bool {
+    manager == "npm" || manager == "pnpm"
+}
+
+fn is_npm_family_package_command(manager: &str, command: Option<&str>) -> bool {
+    matches!(command, Some("install") | Some("i") | Some("update"))
+        || (manager == "pnpm" && command == Some("add"))
+}
+
 pub(crate) fn parse_npm_packages_from_package_json_content(
     content: &str,
 ) -> Vec<(String, Option<String>)> {
@@ -481,13 +490,15 @@ pub(crate) fn parse_npm_packages_from_package_json_content(
 pub(crate) fn parse_npm_install_packages_from_args(
     args: &[String],
 ) -> Vec<(String, Option<String>)> {
-    if args.first().map(String::as_str) != Some("npm") {
+    if !args
+        .first()
+        .map(String::as_str)
+        .is_some_and(is_npm_family_manager)
+    {
         return Vec::new();
     }
-    if args.get(1).map(String::as_str) != Some("install")
-        && args.get(1).map(String::as_str) != Some("i")
-        && args.get(1).map(String::as_str) != Some("update")
-    {
+    let manager = args.first().map(String::as_str).unwrap_or_default();
+    if !is_npm_family_package_command(manager, args.get(1).map(String::as_str)) {
         return Vec::new();
     }
 
@@ -565,7 +576,8 @@ pub(crate) fn rewrite_args_with_pinned_versions(
     }
 
     let is_python = manager == "pip" || manager == "pip3" || manager == "uv" || manager == "poetry";
-    if manager != "npm" && !is_python {
+    let is_npm_family = is_npm_family_manager(manager);
+    if !is_npm_family && !is_python {
         return args.to_vec();
     }
 
@@ -587,7 +599,7 @@ pub(crate) fn rewrite_args_with_pinned_versions(
             continue;
         }
 
-        if manager == "npm" {
+        if is_npm_family {
             let (name, existing_version) = parse_npm_spec(arg);
             if existing_version.is_none()
                 && let Some(version) = pins.get(&name)
@@ -638,7 +650,7 @@ pub(crate) fn parse_package_details(
         || manager == "pip"
         || manager == "pip3"
         || manager == "poetry"
-        || manager == "npm"
+        || is_npm_family_manager(manager)
     {
         let pkg_arg_start = if manager == "uv" {
             if args.get(1).map(String::as_str) == Some("add") {
@@ -659,11 +671,8 @@ pub(crate) fn parse_package_details(
             } else {
                 None
             }
-        } else if manager == "npm" {
-            if args.get(1).map(String::as_str) == Some("install")
-                || args.get(1).map(String::as_str) == Some("i")
-                || args.get(1).map(String::as_str) == Some("update")
-            {
+        } else if is_npm_family_manager(manager) {
+            if is_npm_family_package_command(manager, args.get(1).map(String::as_str)) {
                 Some(2)
             } else {
                 None
@@ -680,7 +689,7 @@ pub(crate) fn parse_package_details(
                     continue;
                 }
 
-                if manager == "npm" {
+                if is_npm_family_manager(manager) {
                     let (name, version) = parse_npm_spec(arg);
                     return (Some(name), version);
                 }
@@ -724,10 +733,8 @@ pub(crate) fn should_enforce_package_detection(manager: &str, args: &[String]) -
             || args.get(1).map(String::as_str) == Some("install");
     }
 
-    if manager == "npm" {
-        return args.get(1).map(String::as_str) == Some("install")
-            || args.get(1).map(String::as_str) == Some("i")
-            || args.get(1).map(String::as_str) == Some("update");
+    if is_npm_family_manager(manager) {
+        return is_npm_family_package_command(manager, args.get(1).map(String::as_str));
     }
 
     false
@@ -838,6 +845,14 @@ version = "2.31.0"
         let out =
             rewrite_args_with_pinned_versions("npm", &args(&["npm", "install", "left-pad"]), &pins);
         assert_eq!(out, args(&["npm", "install", "left-pad@1.3.0"]));
+    }
+
+    #[test]
+    fn pins_unpinned_pnpm_add_to_resolved_version() {
+        let pins = std::collections::HashMap::from([("left-pad".to_string(), "1.3.0".to_string())]);
+        let out =
+            rewrite_args_with_pinned_versions("pnpm", &args(&["pnpm", "add", "left-pad"]), &pins);
+        assert_eq!(out, args(&["pnpm", "add", "left-pad@1.3.0"]));
     }
 
     #[test]
@@ -1054,6 +1069,43 @@ version = "2.31.0"
                 ("express".to_string(), None)
             ]
         );
+    }
+
+    #[test]
+    fn parses_pnpm_add_multi_packages_from_args() {
+        let a = vec![
+            "pnpm".to_string(),
+            "add".to_string(),
+            "lodash@4.17.21".to_string(),
+            "express".to_string(),
+        ];
+        let parsed = parse_npm_install_packages_from_args(&a);
+        assert_eq!(
+            parsed,
+            vec![
+                ("lodash".to_string(), Some("4.17.21".to_string())),
+                ("express".to_string(), None)
+            ]
+        );
+    }
+
+    #[test]
+    fn npm_add_is_not_treated_as_supported_command() {
+        let a = vec!["npm".to_string(), "add".to_string(), "lodash".to_string()];
+        assert!(parse_npm_install_packages_from_args(&a).is_empty());
+        assert!(!should_enforce_package_detection("npm", &a));
+    }
+
+    #[test]
+    fn pnpm_install_args_skip_non_registry_specs() {
+        let a = vec![
+            "pnpm".to_string(),
+            "install".to_string(),
+            "workspace:*".to_string(),
+            "lodash".to_string(),
+        ];
+        let parsed = parse_npm_install_packages_from_args(&a);
+        assert_eq!(parsed, vec![("lodash".to_string(), None)]);
     }
 
     #[test]

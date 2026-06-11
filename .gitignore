@@ -21,6 +21,8 @@ target
 #.idea/
 
 tests/npm/node_modules/
+tests/pnpm/node_modules/
+tests/pnpm/pnpm-lock.yaml
 
 # Graphify outputs: keep canonical artifacts, ignore run-state and cache files.
 graphify-out/*

@@ -8,7 +8,7 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
 2. The run function in src/lib.rs routes by manager and subcommand. A leading `--version`/`-V` is handled first and prints `gyrseek <CARGO_PKG_VERSION>` then exits 0, before any config load or sandbox init (so it works without a config file or Docker); only the first argument is matched, so a forwarded command's own `--version` flag is left untouched.
 3. Supported command paths are either:
    - single-target scans (for example uv add pkg)
-  - bulk scans (for example uv sync, uv pip sync, uv lock (bare and update flags), poetry install or poetry update or poetry lock, pip or pip3 install with multiple targets, npm install or npm i or npm update). A bare `uv lock` (no `-U`/`-P`) and a bare `poetry lock` both scan every package in the resolved lockfile, mirroring `uv lock --upgrade` and `poetry install`/`update`; they fail closed if the lockfile is missing or empty.
+  - bulk scans (for example uv sync, uv pip sync, uv lock (bare and update flags), poetry install or poetry update or poetry lock, pip or pip3 install with multiple targets, npm install or npm i or npm update, pnpm add or pnpm install or pnpm i or pnpm update). A bare `uv lock` (no `-U`/`-P`) and a bare `poetry lock` both scan every package in the resolved lockfile, mirroring `uv lock --upgrade` and `poetry install`/`update`; they fail closed if the lockfile is missing or empty.
 4. If detection and scanning pass, the command is forwarded. For explicit unpinned install targets (for example npm install pkg, pip install pkg) the forwarded command is rewritten to pin the exact version that was scanned; lockfile/manifest-driven flows (uv sync, uv pip sync, uv lock, poetry install/update/lock) are forwarded verbatim because the lockfile already pins versions.
 5. If anomaly or required detection failure occurs, execution exits non-zero (fail-closed). If the host command itself cannot be spawned after a clear scan, gyrseek also fails closed. If a sandbox probe yields an empty/whitespace trace (e.g. strace could not attach), that is a hard error and the whole batch is blocked — a blank trace is never treated as a clean install.
 6. When the host command is forwarded, gyrseek waits on the child and exits with the child's own status, so a non-zero host install is reported as non-zero rather than masked as success.
@@ -22,11 +22,11 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - parse_requirements_packages_from_content parses requirements-style entries. PEP 508 extras are stripped from the canonical package name (strip_pep508_extras) so registry lookups and the version-pin map key use `requests`, not `requests[security]`; the forwarded install command still carries the full extras-qualified spec.
   - parse_pylock_packages_from_content parses pylock package entries.
   - parse_pip_install_packages_from_args resolves package targets from pip or pip3 install args, including -r or --requirements files.
-  - parse_npm_install_packages_from_args resolves npm targets from explicit args or package.json when no explicit target is given. Non-registry specs (`link:`, `file:`, `git+`, URL) are excluded in both the CLI-arg and the package.json fallback paths.
+  - parse_npm_install_packages_from_args resolves npm/pnpm targets from explicit args or package.json when no explicit target is given. Non-registry specs (`link:`, `file:`, `git+`, URL) are excluded in both the CLI-arg and the package.json fallback paths.
   - parse_uv_lock_upgrade_packages_from_args resolves update targets from uv lock -P or --upgrade-package arguments. When the value after -P starts with `-` (i.e. it is a flag, not a package), only one token is consumed so the next real argument is not silently dropped.
 - Version history lookup:
-  - fetch_history_with_baselines queries PyPI for Python packages and the npm registry for npm packages.
-  - Version lists are ordered semantically: semver for npm, PEP 440 for Python managers (compare_version_strings / sort_versions_ascending). Unparseable strings sort below any parseable version, so junk is never resolved as `latest`.
+  - fetch_history_with_baselines queries PyPI for Python packages and the npm registry for npm/pnpm packages.
+  - Version lists are ordered semantically: semver for npm-family managers, PEP 440 for Python managers (compare_version_strings / sort_versions_ascending). Unparseable strings sort below any parseable version, so junk is never resolved as `latest`.
   - npm `time` map parsing (npm_published_times) excludes the `created`/`modified` bookkeeping keys and any non-version key, so the release-burst counter is not inflated.
 - Behavior capture:
   - trace_sandbox_install_matrix runs via SandboxRunner backend and captures, per package-version: connection IPs (IPv4 via inet_addr and IPv6 via inet_pton, normalized by extract_connection_ips), install-time git clone command signatures, and watched-process execution signatures (extract_process_exec_signatures: `exe|arg1|...` for watched runtimes such as bun/deno).
@@ -59,7 +59,7 @@ For each scanned package:
 
 ## Fail-Closed Policy
 gyrseek fails closed in the following situations:
-- Unrecognized manager: the first argument is not one of `pip`, `pip3`, `uv`, `poetry`, `npm`. Any other value (e.g. `ls`, `curl`, `sh`) exits 1 with a diagnostic. The only built-in exception is `sandbox runtimes`. Previously, unrecognized managers were silently forwarded unscanned, which violated the tool's "I scanned this before forwarding it" contract.
+- Unrecognized manager: the first argument is not one of `pip`, `pip3`, `uv`, `poetry`, `npm`, `pnpm`. Any other value (e.g. `ls`, `curl`, `sh`) exits 1 with a diagnostic. The only built-in exception is `sandbox runtimes`. Previously, unrecognized managers were silently forwarded unscanned, which violated the tool's "I scanned this before forwarding it" contract.
 - Package detection is expected for a supported install or sync flow but no package entries are detected.
 - Trace is empty or missing (strace produced no output — e.g. ptrace blocked).
 - Sandbox initialization fails.

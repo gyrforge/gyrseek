@@ -3,7 +3,7 @@
 ## Local Setup
 1. Install Rust toolchain.
 2. Install just.
-3. Ensure required package managers are available for your target flows: uv, pip or pip3, poetry, npm.
+3. Ensure required package managers are available for your target flows: uv, pip or pip3, poetry, npm, pnpm.
 4. Ensure Docker CLI is available in PATH for default sandbox mode.
 5. If using host mode (`GYRSEEK_SANDBOX=host`), ensure strace is available in PATH.
 
@@ -50,13 +50,13 @@
 7. Add parser tests and behavior tests.
 
 ## Version Ordering Notes
-- npm versions are ordered with the semver crate; Python managers (pip/pip3/uv/poetry) use PEP 440 (pep440_rs).
+- npm/pnpm versions are ordered with the semver crate; Python managers (pip/pip3/uv/poetry) use PEP 440 (pep440_rs).
 - Unparseable version strings deliberately sort below any parseable version so malformed entries are never chosen as `latest`.
 
 ## Test Locations
 - Follow Rust convention: unit tests for private/internal functions live inline in the module's `#[cfg(test)] mod tests` (they can see private items); integration tests that exercise the public API or need a real subprocess live under tests/.
-- Pure-function unit tests live inline in their src/ module (version ordering, trace extraction including sandbox-local IP filtering / `::ffff:` collapse / metadata-IP preservation, FCrDNS, bracketed-argv parsing, docker arg construction, SYS_PTRACE, PEP 508 extras stripping, poetry/uv local-source exclusion, npm non-registry filtering, git-clone allowlist matching, IP allowlist IPv4-mapped/bare equivalence, internal-package-exemption skip, missing-baseline fail-closed, uv lock upgrade arg edge cases); keep these alongside the code they cover.
-- Anything that can only be observed from outside the process belongs in tests/ — e.g. host exit-status propagation (`std::process::exit`) in tests/forward_fail_closed_tests.rs, command routing (bare `poetry lock`/`uv lock` reaching the scan branch) in tests/lock_routing_tests.rs, and the `--version` short-circuit in tests/version_flag_tests.rs, because these are only visible to a spawning parent.
+- Pure-function unit tests live inline in their src/ module (version ordering, trace extraction including sandbox-local IP filtering / `::ffff:` collapse / metadata-IP preservation, FCrDNS, bracketed-argv parsing, docker arg construction, SYS_PTRACE, PEP 508 extras stripping, poetry/uv local-source exclusion, npm/pnpm non-registry filtering, git-clone allowlist matching, IP allowlist IPv4-mapped/bare equivalence, internal-package-exemption skip, missing-baseline fail-closed, uv lock upgrade arg edge cases); keep these alongside the code they cover.
+- Anything that can only be observed from outside the process belongs in tests/ — e.g. host exit-status propagation (`std::process::exit`) in tests/forward_fail_closed_tests.rs, command routing (bare `poetry lock`/`uv lock` and pnpm scan routing) in tests/lock_routing_tests.rs and tests/pnpm_routing_tests.rs, and the `--version` short-circuit in tests/version_flag_tests.rs, because these are only visible to a spawning parent.
 
 ## Required Change Hygiene
 After every repository change:
