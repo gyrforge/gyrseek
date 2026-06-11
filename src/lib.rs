@@ -698,6 +698,24 @@ impl GyrSeek {
     }
 }
 
+struct ScanTimer(std::time::Instant);
+impl ScanTimer {
+    fn start() -> Self {
+        Self(std::time::Instant::now())
+    }
+}
+impl Drop for ScanTimer {
+    fn drop(&mut self) {
+        let elapsed = self.0.elapsed();
+        let ms = elapsed.as_secs_f64() * 1000.0;
+        if ms >= 1000.0 {
+            println!("⏱️ [gyrseek] Checks completed in {:.2}s", ms / 1000.0);
+        } else {
+            println!("⏱️ [gyrseek] Checks completed in {:.0}ms", ms);
+        }
+    }
+}
+
 async fn scan_with_cache(
     cache: &mut HashMap<String, ScanReport>,
     runner: &dyn SandboxRunner,
@@ -706,6 +724,7 @@ async fn scan_with_cache(
     tgt_version: &str,
     policy: &PolicyConfig,
 ) -> ScanReport {
+    let _scan_timer = ScanTimer::start();
     let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
     if let Some(cached) = cache.get(&key) {
         println!(
@@ -730,6 +749,7 @@ async fn scan_many_with_cache(
     targets: Vec<(String, String)>,
     policy: &PolicyConfig,
 ) -> Option<HashMap<String, String>> {
+    let _scan_timer = ScanTimer::start();
     let mut pins: HashMap<String, String> = HashMap::new();
     let mut uncached: Vec<(String, String)> = Vec::new();
 
