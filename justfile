@@ -29,6 +29,13 @@ test-npm: build
     "{{bin}}" npm update
     "{{bin}}" npm i
 
+# End-to-end tests for pnpm
+[working-directory: 'tests/pnpm']
+test-pnpm: build
+    "{{bin}}" pnpm add lodash
+    "{{bin}}" pnpm update
+    "{{bin}}" pnpm i
+
 # End-to-end tests for pip
 [working-directory: 'tests/pip']
 test-pip: build
@@ -60,4 +67,3 @@ install:
 # Uninstall from local machine
 uninstall:
       cargo uninstall gyrseek
-

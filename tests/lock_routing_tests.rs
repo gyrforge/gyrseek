@@ -84,3 +84,28 @@ fn uv_venv_stays_unscanned_passthrough() {
         "uv venv should forward to the host binary, got: {stdout}"
     );
 }
+
+/// `pnpm install` is a supported npm-family command and reaches the package
+/// detection branch instead of being rejected as an unrecognized manager.
+#[test]
+fn pnpm_install_is_routed_to_package_scan() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+        .args(["pnpm", "install"])
+        .current_dir(dir.path())
+        .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
+        .output()
+        .expect("gyrseek process should run");
+
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("'pnpm install' detected but no parseable package entries were found"),
+        "expected pnpm scan-branch fail-closed message, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Unrecognized manager"),
+        "pnpm must be a recognized supported manager, got: {stdout}"
+    );
+}

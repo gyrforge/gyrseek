@@ -48,7 +48,7 @@ We welcome feedback and suggestions to this repository.
 
 - Rust toolchain (`cargo`, `rustc`)
 - Network access to package registries (PyPI, npm)
-- The package managers you want to wrap (`uv`, `pip`, `poetry`, `npm`)
+- The package managers you want to wrap (`uv`, `pip`, `poetry`, `npm`, `pnpm`)
 - **Docker CLI** on your `PATH` (the default, safer sandbox mode)
 - `strace` on your `PATH` only if you use the reduced-safety `host` mode
 
@@ -81,6 +81,7 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just test` | Runs `cargo test --all-features --locked`. |
 | `just lint` | Runs clippy for all targets/features and a format check. Use this before committing. |
 | `just test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. |
+| `just test-pnpm` | End-to-end test: scans and adds `lodash`, then runs `pnpm update` and `pnpm i` against the test fixture in `tests/pnpm/`. Builds the release binary first. |
 | `just test-pip` | End-to-end test: creates a venv, then scans and installs `black` and the packages from `tests/pip/requirements.txt` via `pip3`. Builds the release binary first. |
 | `just test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
 | `just test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
@@ -105,6 +106,7 @@ just lint
 
 # Run a live end-to-end test for the manager you changed
 just test-npm
+just test-pnpm
 just test-pip
 just test-uv
 just test-poetry
@@ -120,13 +122,14 @@ just test-poetry
 | **pip**    | `pip install`, `pip3 install` (including `-r/--requirements` files)                                                      |
 | **poetry** | `poetry add`, `poetry update`, `poetry install`                                                                          |
 | **npm**    | `npm install`, `npm i`, `npm update`                                                                                     |
+| **pnpm**   | `pnpm add`, `pnpm install`, `pnpm i`, `pnpm update`                                                                      |
 
 > Standalone `git clone` runtime interception is not enabled yet — only install-time clone behavior _inside_ package scans is enforced today (see [Git Clone Behavior](#git-clone-behavior)).
 
 ## How It Works
 
 1. **Parse** the package name and optional version from your command. If no version is given, it's treated as `latest`.
-2. **Fetch version history** from PyPI (Python) or the npm registry (npm) and order it semantically (semver for npm, PEP 440 for Python).
+2. **Fetch version history** from PyPI (Python) or the npm registry (npm/pnpm) and order it semantically (semver for npm-family packages, PEP 440 for Python).
 3. **Run sandbox installs** for:
    - the current/target version
    - the previous version (`baseline-1`)
@@ -186,6 +189,17 @@ cargo run npm install lodash
 ./target/release/gyrseek npm update lodash typescript
 ```
 
+### pnpm examples
+
+```bash
+./target/release/gyrseek pnpm add lodash
+./target/release/gyrseek pnpm add lodash express
+./target/release/gyrseek pnpm add lodash@4.17.21
+./target/release/gyrseek pnpm install
+./target/release/gyrseek pnpm update
+./target/release/gyrseek pnpm update lodash typescript
+```
+
 > For project-aware tools like `poetry` or `npm`, run inside a directory containing the expected project files (`pyproject.toml`, `package.json`, etc.).
 
 ## Network Behavior Detection
@@ -238,7 +252,7 @@ Some supply-chain attacks don't assume a runtime is present — they **download 
 
 `gyrseek` watches for execution of risky runtimes during the sandbox install and diffs those invocations against the baseline versions. By default it watches **`bun`** and **`deno`** — runtimes that essentially never appear in a normal `npm`/`pip` install, so flagging a newly introduced invocation has a very low false-positive rate. (Common interpreters like `node`, `sh`, and `python` are intentionally _not_ watched, since they appear constantly in legitimate installs.)
 
-> **`bun` and `deno` are detection targets, not supported package managers.** gyrseek watches for them being _executed inside a scanned install_ (e.g. `gyrseek npm install some-pkg`, where the package secretly runs `bun`). You **cannot** wrap them directly — `gyrseek deno ...` or `gyrseek bun ...` will be **rejected with a non-zero exit** because gyrseek only accepts the managers it can actually scan. The package managers gyrseek wraps are listed under [Supported Commands](#supported-commands): `uv`, `pip`/`pip3`, `poetry`, and `npm`.
+> **`bun` and `deno` are detection targets, not supported package managers.** gyrseek watches for them being _executed inside a scanned install_ (e.g. `gyrseek npm install some-pkg`, where the package secretly runs `bun`). You **cannot** wrap them directly — `gyrseek deno ...` or `gyrseek bun ...` will be **rejected with a non-zero exit** because gyrseek only accepts the managers it can actually scan. The package managers gyrseek wraps are listed under [Supported Commands](#supported-commands): `uv`, `pip`/`pip3`, `poetry`, `npm`, and `pnpm`.
 
 Two cases are detected:
 
@@ -525,11 +539,11 @@ Details worth knowing once you're past the basics.
 - `uv lock --upgrade` scans all packages in `uv.lock`; `uv lock -P/--upgrade-package` scans the explicitly targeted packages. When `-P` is followed by a flag (e.g. `-P --dry-run`), the flag is not consumed as a package name and the next real `-P pkg` argument is not silently skipped.
 - `pip install` / `pip3 install` scan all parseable entries, including `-r/--requirements` files.
 - `poetry install` / `poetry update` scan all packages in `poetry.lock`, excluding local directory/path/editable source blocks.
-- `npm install`, `npm i`, `npm update` scan explicit targets; with no targets they scan `package.json` dependencies. Both paths exclude non-registry specs (`file:`, `workspace:`, `git+`, URL, `link:`) — previously `link:` was filtered in the `package.json` fallback but passed through as a package name on the CLI arg path.
+- `npm install`, `npm i`, `npm update`, `pnpm add`, `pnpm install`, `pnpm i`, and `pnpm update` scan explicit targets; with no targets they scan `package.json` dependencies. Both paths exclude non-registry specs (`file:`, `workspace:`, `git+`, URL, `link:`) — previously `link:` was filtered in the `package.json` fallback but passed through as a package name on the CLI arg path.
 
 **Fail-closed guarantees**
 
-- **Unrecognized manager:** any first argument other than `pip`, `pip3`, `uv`, `poetry`, or `npm` is rejected with a non-zero exit and a clear error message listing the supported managers. The only exception is `sandbox runtimes` (a built-in diagnostic). Previously, unrecognized managers were silently forwarded unscanned.
+- **Unrecognized manager:** any first argument other than `pip`, `pip3`, `uv`, `poetry`, `npm`, or `pnpm` is rejected with a non-zero exit and a clear error message listing the supported managers. The only exception is `sandbox runtimes` (a built-in diagnostic). Previously, unrecognized managers were silently forwarded unscanned.
 - For supported install/sync paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
 - If the host command itself cannot be launched after a clean scan, `gyrseek` also fails closed.
 - A sandbox probe that produces an **empty/whitespace trace** (e.g. `strace` could not attach) is a hard error: every package in that batch is blocked. Blank traces are never interpreted as clean.
@@ -597,6 +611,7 @@ cargo test -- --nocapture
 
 ```bash
 just test-npm
+just test-pnpm
 just test-pip
 just test-uv
 just test-poetry

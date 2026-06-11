@@ -82,7 +82,7 @@ pub(crate) struct ScanReport {
 /// are treated as lower than any parseable version (so junk is never selected as
 /// "latest"), with two unparseable strings falling back to lexical order.
 fn compare_version_strings(manager: &str, a: &str, b: &str) -> Ordering {
-    if manager == "npm" {
+    if is_npm_family_manager(manager) {
         match (semver::Version::parse(a), semver::Version::parse(b)) {
             (Ok(x), Ok(y)) => x.cmp(&y),
             (Ok(_), Err(_)) => Ordering::Greater,
@@ -100,6 +100,10 @@ fn compare_version_strings(manager: &str, a: &str, b: &str) -> Ordering {
             (Err(_), Err(_)) => a.cmp(b),
         }
     }
+}
+
+fn is_npm_family_manager(manager: &str) -> bool {
+    manager == "npm" || manager == "pnpm"
 }
 
 /// Sorts versions ascending (oldest/lowest first) by semantic order.
@@ -361,7 +365,7 @@ pub(crate) async fn fetch_history_with_baselines(
     );
     let client = reqwest::Client::new();
 
-    if manager == "npm" {
+    if is_npm_family_manager(manager) {
         let encoded = package.replace('/', "%2f");
         let url = format!("https://registry.npmjs.org/{}", encoded);
         if let Ok(res) = client.get(&url).send().await
@@ -1314,6 +1318,17 @@ mod tests {
             ]
         );
         // The "latest" pick (last element) must be the true newest release.
+        assert_eq!(versions.last().map(String::as_str), Some("10.0.0"));
+    }
+
+    #[test]
+    fn pnpm_versions_use_npm_semver_ordering() {
+        let mut versions = vec![
+            "9.0.0".to_string(),
+            "10.0.0".to_string(),
+            "2.0.0".to_string(),
+        ];
+        sort_versions_ascending("pnpm", &mut versions);
         assert_eq!(versions.last().map(String::as_str), Some("10.0.0"));
     }
 

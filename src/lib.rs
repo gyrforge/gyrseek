@@ -875,7 +875,7 @@ pub async fn run(args: Vec<String>) {
     // this before forwarding it" — silently forwarding an unscanned command
     // violates that contract and provides false assurance in a security pipeline.
     // The only built-in exception is the `sandbox runtimes` diagnostic subcommand.
-    const SUPPORTED_MANAGERS: &[&str] = &["pip", "pip3", "uv", "poetry", "npm"];
+    const SUPPORTED_MANAGERS: &[&str] = &["pip", "pip3", "uv", "poetry", "npm", "pnpm"];
     let is_sandbox_runtimes = eye.manager == "sandbox"
         && eye.passthrough_args.get(1).map(String::as_str) == Some("runtimes");
     if !SUPPORTED_MANAGERS.contains(&eye.manager.as_str()) && !is_sandbox_runtimes {
@@ -1167,15 +1167,18 @@ pub async fn run(args: Vec<String>) {
         return;
     }
 
-    if eye.manager == "npm"
+    if (eye.manager == "npm" || eye.manager == "pnpm")
         && (eye.passthrough_args.get(1).map(String::as_str) == Some("install")
             || eye.passthrough_args.get(1).map(String::as_str) == Some("i")
-            || eye.passthrough_args.get(1).map(String::as_str) == Some("update"))
+            || eye.passthrough_args.get(1).map(String::as_str) == Some("update")
+            || (eye.manager == "pnpm"
+                && eye.passthrough_args.get(1).map(String::as_str) == Some("add")))
     {
         let npm_packages = eye.parse_npm_install_packages();
         if npm_packages.is_empty() {
             println!(
-                "❌ [gyrseek] 'npm {}' detected but no parseable package entries were found. Failing closed.",
+                "❌ [gyrseek] '{} {}' detected but no parseable package entries were found. Failing closed.",
+                eye.manager,
                 eye.passthrough_args
                     .get(1)
                     .map(String::as_str)
@@ -1216,7 +1219,7 @@ pub async fn run(args: Vec<String>) {
         };
 
         println!(
-            "\n✅ [gyrseek] Clear behavioral report for npm package set. Forwarding command safely..."
+            "\n✅ [gyrseek] Clear behavioral report for package set. Forwarding command safely..."
         );
         eye.forward_pinned_command(&pins);
         return;
@@ -1331,6 +1334,30 @@ mod gyrseek_tests {
         let eye = GyrSeek::new(vec![
             "npm".to_string(),
             "install".to_string(),
+            "lodash@4.17.21".to_string(),
+        ]);
+        let (pkg, version) = eye.parse_package_details();
+        assert_eq!(pkg.as_deref(), Some("lodash"));
+        assert_eq!(version.as_deref(), Some("4.17.21"));
+    }
+
+    #[test]
+    fn parses_pnpm_add_as_latest_when_unpinned() {
+        let eye = GyrSeek::new(vec![
+            "pnpm".to_string(),
+            "add".to_string(),
+            "lodash".to_string(),
+        ]);
+        let (pkg, version) = eye.parse_package_details();
+        assert_eq!(pkg.as_deref(), Some("lodash"));
+        assert_eq!(version, None);
+    }
+
+    #[test]
+    fn parses_pnpm_add_with_pinned_version() {
+        let eye = GyrSeek::new(vec![
+            "pnpm".to_string(),
+            "add".to_string(),
             "lodash@4.17.21".to_string(),
         ]);
         let (pkg, version) = eye.parse_package_details();
