@@ -3,6 +3,16 @@
 ## Purpose
 This file stores persistent working memory and agent instructions for this repository.
 
+## graphify
+
+This project has a knowledge graph at `graphify-out/` with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when `graphify-out/graph.json` exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output.
+- If `graphify-out/wiki/index.md` exists, use it for broad navigation instead of raw source browsing.
+- Read `graphify-out/GRAPH_REPORT.md` only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
 ## Repository Memory
 - Project name: gyrseek
 - Language: Rust
@@ -99,7 +109,7 @@ This file stores persistent working memory and agent instructions for this repos
 
 ## Mandatory Update Policy (After Every Change)
 After every code or behavior change in this repository:
-1. Update this file (.copilot/AGENTS.md) with the new behavior, scope, or constraints.
+1. Update this file (AGENTS.md) with the new behavior, scope, or constraints.
 2. Update README.md so user-facing documentation matches the current implementation.
 3. Ensure both updates happen in the same change set whenever possible.
 4. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, and docs/ROADMAP.md.
@@ -107,7 +117,7 @@ After every code or behavior change in this repository:
 ## Quick Post-Change Checklist
 - [ ] Code updated
 - [ ] Tests updated and run
-- [ ] .copilot/AGENTS.md updated
+- [ ] AGENTS.md updated
 - [ ] README.md updated
 - [ ] docs/ARCHITECTURE.md updated if needed
 - [ ] docs/DEV_GUIDE.md updated if needed

@@ -74,5 +74,5 @@
 - Maintain explicit allowlist and suppression policies with expiry/review windows to avoid permanent blind spots.
 
 ## Collaboration
-- Keep .copilot/AGENTS.md and README.md updated on every change.
+- Keep AGENTS.md and README.md updated on every change.
 - Keep docs/ARCHITECTURE.md aligned with control-flow changes.

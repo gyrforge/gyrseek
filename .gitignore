@@ -22,3 +22,9 @@ target
 
 tests/npm/node_modules/
 .claude/settings.json
+
+# Graphify outputs: keep canonical artifacts, ignore run-state and cache files.
+graphify-out/*
+!graphify-out/graph.json
+!graphify-out/GRAPH_REPORT.md
+!graphify-out/graph.html

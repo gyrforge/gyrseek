@@ -632,9 +632,9 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 - `docs/ARCHITECTURE.md` — control-flow and component map
 - `docs/DEV_GUIDE.md` — contributor workflow and change hygiene
 - `docs/ROADMAP.md` — planned improvements and next steps
-- `.copilot/AGENTS.md` — repository memory and mandatory update policy
+- `AGENTS.md` — repository memory and mandatory update policy
 
-> **Repository policy:** after each change, update both `.copilot/AGENTS.md` and `README.md`.
+> **Repository policy:** after each change, update both `AGENTS.md` and `README.md`.
 
 ## License
 

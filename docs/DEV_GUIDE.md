@@ -60,7 +60,7 @@
 
 ## Required Change Hygiene
 After every repository change:
-1. Update .copilot/AGENTS.md.
+1. Update AGENTS.md.
 2. Update README.md.
 3. Keep docs in docs/ in sync if architecture or workflow changed.
 4. Run just test before finishing.
