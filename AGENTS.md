@@ -116,6 +116,7 @@ Rules:
   - README documents current Docker hardening limitations and the prebuilt-image path to restore stricter isolation controls
   - In-run cache reuses scan results for repeated manager/package/version probes within the same execution
   - Fail-closed when package detection is expected but missing
+  - README detection coverage table now includes four new TeamPCP attack waves: Telnyx Python SDK T26 (import-time, ❌ gap), Namastex/CanisterSprawl T27 (npm postinstall, ✅), SAP CAP T28 (npm preinstall+Bun, ✅), Bitwarden CLI T29 (npm CI/CD pipeline compromise, ✅)
 
 ## Mandatory Update Policy (After Every Change)
 After every code or behavior change in this repository:

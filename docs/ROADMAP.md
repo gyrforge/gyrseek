@@ -25,7 +25,9 @@
 - Tighten user-facing error taxonomy and remediation guidance so fail-closed outcomes are easier to triage in CI and local workflows.
 
 ## Mid Term
-- Detect post-install / startup-triggered payloads that fire outside the install window (e.g. PyPI `*-setup.pth` startup execution): exercise the package's import/startup path inside the sandbox and diff that behavior too.
+- Detect post-install / startup-triggered payloads that fire outside the install window: exercise the package's import/startup path inside the sandbox and diff that behavior too. Covers two patterns:
+  - `.pth`-based (Hades/Miasma T1, LiteLLM T25): `*-setup.pth` auto-executes on next Python interpreter startup
+  - Module-scope code (Telnyx T26): `FetchAudio()` / `setup()` calls at `_client.py` module scope fire on `import telnyx` — no postinstall hook, no `.pth` file, just base64 blobs embedded in a legitimate SDK source file
 - Add direct runtime git clone interception path with safe heuristics.
 - Improve baseline selection strategy when fewer historical versions exist.
 - Add structured logging mode for CI and machine parsing.

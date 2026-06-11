@@ -1,16 +1,16 @@
 # Graph Report - gyrseek  (2026-06-12)
 
 ## Corpus Check
-- 22 files · ~41,156 words
+- 22 files · ~42,124 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 566 nodes · 1217 edges · 27 communities (20 shown, 7 thin omitted)
+- 570 nodes · 1223 edges · 27 communities (20 shown, 7 thin omitted)
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 34 edges (avg confidence: 0.82)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e6081cd2`
+- Built from commit: `7b0769ee`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -88,7 +88,7 @@ Nodes (75): PEP 508 Extras Stripping, Forwarded-Command Version Pinning, Finding
 
 ### Community 1 - "Community 1"
 Cohesion: 0.07
-Nodes (62): BaselineOverrideConfig, test: minimum_release_age_package not met exits 1, test: release_burst_threshold triggers exit 1, In-Run Scan Cache, test: bare uv lock routed to lockfile scan, test: bare poetry lock routed to lockfile scan, NamedTempFile, PolicyConfig (+54 more)
+Nodes (64): BaselineOverrideConfig, test: minimum_release_age_package not met exits 1, test: release_burst_threshold triggers exit 1, In-Run Scan Cache, test: bare uv lock routed to lockfile scan, test: bare poetry lock routed to lockfile scan, NamedTempFile, PolicyConfig (+56 more)
 
 ### Community 2 - "Community 2"
 Cohesion: 0.10
@@ -104,7 +104,7 @@ Nodes (34): Behavioral Diffing Across Versions, Finding 3: Argv Regex Truncation
 
 ### Community 5 - "Community 5"
 Cohesion: 0.11
-Nodes (31): Default, Adding a New Supported Command, Policy Config Surface, Drop, Mutex, MutexGuard, Behavioral Diffing, allows_new_bun_when_allowlisted() (+23 more)
+Nodes (31): Default, Adding a New Supported Command, Policy Config Surface, Mutex, MutexGuard, Behavioral Diffing, allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline() (+23 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.15
@@ -155,7 +155,7 @@ Cohesion: 0.20
 Nodes (9): Best Practices, Collaboration, Completed, Direct Git Clone Runtime Support, Generated File Comparison Across Versions, Hardening, Mid Term, Near Term (+1 more)
 
 ## Knowledge Gaps
-- **126 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Self`, `ForwardMode` (+121 more)
+- **128 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Drop`, `ForwardMode` (+123 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **7 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -165,14 +165,14 @@ _Questions this graph is uniquely positioned to answer:_
 - **Why does `run()` connect `Community 1` to `Community 16`, `Community 0`, `Community 10`, `Community 2`?**
   _High betweenness centrality (0.233) - this node is a cross-community bridge._
 - **Why does `SandboxRunner` connect `Community 2` to `Community 1`, `Community 4`?**
-  _High betweenness centrality (0.104) - this node is a cross-community bridge._
-- **Why does `trace_sandbox_install_matrix()` connect `Community 4` to `Community 2`, `Community 3`, `Community 5`, `Community 7`, `Community 11`, `Community 13`?**
   _High betweenness centrality (0.103) - this node is a cross-community bridge._
+- **Why does `trace_sandbox_install_matrix()` connect `Community 4` to `Community 2`, `Community 3`, `Community 5`, `Community 7`, `Community 11`, `Community 13`?**
+  _High betweenness centrality (0.102) - this node is a cross-community bridge._
 - **Are the 7 inferred relationships involving `run()` (e.g. with `test: minimum_release_age_package not met exits 1` and `test: release_burst_threshold triggers exit 1`) actually correct?**
   _`run()` has 7 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 2 inferred relationships involving `rewrite_args_with_pinned_versions()` (e.g. with `.forward_pinned_command()` and `Resolved-Version Pinning`) actually correct?**
   _`rewrite_args_with_pinned_versions()` has 2 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `$schema`, `plugin`, `BaselineOverrideConfig` to the rest of the system?**
-  _128 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _130 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.061708860759493674 - nodes in this community are weakly interconnected._
