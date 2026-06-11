@@ -37,7 +37,7 @@
 	- minimum_release_age_package
 	- release_burst_threshold
 	- release_burst_window_hours
-	- watched_executables (unioned onto built-in defaults bun/deno)
+	- artifact_allowlist (exact `type|path` or `type|path|details` to unblock known artifacts)
 	- process_exec_allowlist
 
 ## Adding a New Supported Command
@@ -55,7 +55,7 @@
 
 ## Test Locations
 - Follow Rust convention: unit tests for private/internal functions live inline in the module's `#[cfg(test)] mod tests` (they can see private items); integration tests that exercise the public API or need a real subprocess live under tests/.
-- Pure-function unit tests live inline in their src/ module (version ordering, trace extraction including sandbox-local IP filtering / `::ffff:` collapse / metadata-IP preservation, FCrDNS, bracketed-argv parsing, docker arg construction, SYS_PTRACE, PEP 508 extras stripping, poetry/uv local-source exclusion, npm/pnpm non-registry filtering, git-clone allowlist matching, IP allowlist IPv4-mapped/bare equivalence, internal-package-exemption skip, missing-baseline fail-closed, uv lock upgrade arg edge cases); keep these alongside the code they cover.
+- Pure-function unit tests live inline in their src/ module (version ordering, trace extraction including sandbox-local IP filtering / `::ffff:` collapse / metadata-IP preservation, FCrDNS, bracketed-argv parsing, docker arg construction, SYS_PTRACE, PEP 508 extras stripping, poetry/uv local-source exclusion, npm/pnpm non-registry filtering, git-clone allowlist matching, IP allowlist IPv4-mapped/bare equivalence, internal-package-exemption skip, missing-baseline fail-closed, uv lock upgrade arg edge cases, harness-command filtering via `is_harness_command`); keep these alongside the code they cover.
 - Anything that can only be observed from outside the process belongs in tests/ — e.g. host exit-status propagation (`std::process::exit`) in tests/forward_fail_closed_tests.rs, command routing (bare `poetry lock`/`uv lock` and pnpm scan routing) in tests/lock_routing_tests.rs and tests/pnpm_routing_tests.rs, and the `--version` short-circuit in tests/version_flag_tests.rs, because these are only visible to a spawning parent.
 
 ## Required Change Hygiene

@@ -48,9 +48,9 @@ struct GyrseekConfig {
     #[serde(default)]
     minimum_release_age_package: Option<usize>,
     #[serde(default)]
-    watched_executables: Vec<String>,
-    #[serde(default)]
     process_exec_allowlist: Vec<String>,
+    #[serde(default)]
+    artifact_allowlist: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -240,22 +240,19 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         None => None,
     };
 
-    // watched_executables from config are unioned onto the built-in defaults
-    // (bun, deno) so the high-value Shai-Hulud runtimes are always watched even
-    // if a user only adds their own entries. Normalized to lowercase basenames.
-    let mut watched_executables = scanning::default_watched_executables();
-    for entry in cfg.watched_executables {
-        let normalized = entry.trim().to_ascii_lowercase();
-        if !normalized.is_empty() {
-            watched_executables.insert(normalized);
-        }
-    }
-
     let mut process_exec_allowlist = HashSet::new();
     for entry in cfg.process_exec_allowlist {
         let normalized = entry.trim().to_ascii_lowercase();
         if !normalized.is_empty() {
             process_exec_allowlist.insert(normalized);
+        }
+    }
+
+    let mut artifact_allowlist = HashSet::new();
+    for entry in cfg.artifact_allowlist {
+        let normalized = entry.trim().to_string();
+        if !normalized.is_empty() {
+            artifact_allowlist.insert(normalized);
         }
     }
 
@@ -271,8 +268,8 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         release_burst_threshold,
         release_burst_window_hours,
         minimum_release_age_package,
-        watched_executables,
         process_exec_allowlist,
+        artifact_allowlist,
     })
 }
 

@@ -21,8 +21,9 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 - [Usage](#usage)
 - [Network Behavior Detection](#network-behavior-detection)
 - [Git Clone Behavior Detection](#git-clone-behavior-detection)
-- [Watched-Process Detection (Shai-Hulud / Bun)](#watched-process-detection-shai-hulud--bun)
+- [Process-Execution Detection](#process-execution-detection)
   - [Shai-Hulud detection coverage](#shai-hulud-detection-coverage)
+- [Post-Install Artifact Detection](#post-install-artifact-detection)
 - [Configuration](#configuration)
 - [Sandbox Modes](#sandbox-modes)
 - [Prebuilt Scanner Images](#prebuilt-scanner-images)
@@ -140,7 +141,7 @@ just test-poetry
 4. **Compare behavior signals** between the target and its baselines:
    - **Network**: endpoints contacted during install.
    - **Git clone**: install-time `git clone` command signatures.
-   - **Watched-process execution**: invocations of risky runtimes like `bun`/`deno` during install (see [Watched-Process Detection](#watched-process-detection-shai-hulud--bun)).
+   - **Process execution**: all programs executed during install — the payload's own commands plus the sandbox's internal setup (see [Process-Execution Detection](#process-execution-detection)).
 5. **Decide**:
    - New endpoint or clone behavior found → **block and exit non-zero**.
    - Nothing new → **forward your original command**.
@@ -210,7 +211,8 @@ cargo run npm install lodash
 - It computes the difference between **current version endpoints** and **baseline endpoints** from previous versions.
 - Any endpoint that appears _only_ in the current version is treated as a behavioral anomaly.
 - Install-time `git clone` command signatures (e.g. clone target and recursive-clone usage) are also diffed across versions.
-- Install-time execution of watched runtimes (`bun`, `deno` by default) is diffed across versions to catch download-and-run payloads — see [Watched-Process Detection](#watched-process-detection-shai-hulud--bun).
+- Install-time execution of all programs is captured and diffed across versions to catch download-and-run payloads — see [Process-Execution Detection](#process-execution-detection).
+- Post-install file inventory (binary executables, suspicious `.pth` files, unexpected runtimes, files >10 MB) is recorded and diffed across versions — see [Post-Install Artifact Detection](#post-install-artifact-detection).
 - New IPs are **always** treated as anomalies (fail-closed), even if reverse DNS suggests domain overlap.
 - Reverse DNS context is included in warnings as informational enrichment to help triage IP-rotation cases.
 - The `domain_allowlist` uses **forward-confirmed reverse DNS (FCrDNS)**: a PTR hostname is only trusted if it resolves _forward_ back to the original IP. An attacker who sets their C2 server's PTR record to an allowlisted domain cannot bypass the allowlist, because the allowlisted domain's real A/AAAA record does not point back at the C2 IP.
@@ -246,29 +248,15 @@ git clone simulation contacted new endpoints not seen in baseline clone behavior
 Aborting host operation securely.
 ```
 
-## Watched-Process Detection (Shai-Hulud / Bun)
+## Process-Execution Detection
 
 Some supply-chain attacks don't assume a runtime is present — they **download one and use it to run the payload**. The Shai-Hulud "Hades/miasma" PyPI wave downloads the **Bun** JavaScript runtime during install/startup and runs an obfuscated stealer with `bun run _index.js`.
 
-`gyrseek` watches for execution of risky runtimes during the sandbox install and diffs those invocations against the baseline versions. By default it watches **`bun`** and **`deno`** — runtimes that essentially never appear in a normal `npm`/`pip` install, so flagging a newly introduced invocation has a very low false-positive rate. (Common interpreters like `node`, `sh`, and `python` are intentionally _not_ watched, since they appear constantly in legitimate installs.)
+`gyrseek` captures **every** `execve` system call during the sandbox install (all executables, not just a curated list), diffs the resulting signatures against baseline versions, and fails closed if new or changed process execution appears. This is a least-privilege approach — any process the package runs that it didn't run before is suspect.
 
-> **`bun` and `deno` are detection targets, not supported package managers.** gyrseek watches for them being _executed inside a scanned install_ (e.g. `gyrseek npm install some-pkg`, where the package secretly runs `bun`). You **cannot** wrap them directly — `gyrseek deno ...` or `gyrseek bun ...` will be **rejected with a non-zero exit** because gyrseek only accepts the managers it can actually scan. The package managers gyrseek wraps are listed under [Supported Commands](#supported-commands): `uv`, `pip`/`pip3`, `poetry`, `npm`, and `pnpm`.
+The sandbox's own install commands (`uv pip install`, `npm install`, `pnpm add`, and the associated interpreter-discovery subprocesses) are automatically filtered out so version-specific command strings do not cause false positives. Only the package's own behavior — including downloaded runtimes, build scripts, or postinstall hooks — contributes to the diff.
 
-Two cases are detected:
-
-1. **Newly introduced execution** — a baseline version never ran `bun`, but the target version does. The `bun` invocation is "new" and is **fail-closed**.
-2. **Existing execution with additions/changes** — a baseline already runs `bun run build`, but the target version _also_ runs `bun run _index.js` (or changes the arguments). Each invocation is recorded as a distinct signature (`bun|run|<args>`), so the extra/changed call is "new" and is **fail-closed**.
-
-Example warning:
-
-```text
-❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
-Package 'left-pad', version '1.3.0' introduced new watched-process execution (for example bun/deno) not seen in baseline versions (1.2.0, 1.1.3): ["bun|run|_index.js"]
-This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload).
-Aborting host operation securely.
-```
-
-Tune this with the `watched_executables` and `process_exec_allowlist` config keys (see [Configuration](#configuration)).
+Tune this with the `process_exec_allowlist` config key (see [Configuration](#configuration)).
 
 > **Scope:** this observes processes executed _inside the sandbox during install_ (where the Bun loader fires for npm-style hooks and where Python install-time execution can occur). The PyPI `*-setup.pth` variant that triggers on the _next interpreter startup_ rather than at install time may execute outside the install window; see [Limitations](#docker-hardening-limitations).
 ### Shai-Hulud detection coverage
@@ -279,8 +267,8 @@ The Shai-Hulud campaign has produced several named attack waves across different
 
 | Attack wave | Ecosystem | Technique | gyrseek | IoCs gyrseek captures (✅) / Why missed (❌) |
 |---|---|---|---|---|
-| **Hades / Miasma PyPI wave** | PyPI | T1: `*-setup.pth` auto-executes on next Python startup | ❌ | Fires outside the install window — `.pth` is written to disk during `pip install` but not executed until the next interpreter invocation. No anomalous network or execve during install. |
-| | PyPI | T1b: deferred bun download-and-execute via `.pth` | ❌ | The bun runtime download and `bun run _index.js` happens on next interpreter startup, not during `pip install`. gyrseek's bun execve signature diff (T5b) would flag `bun\|run\|_index.js` as a newly introduced watched-process execution — if it fired within the sandbox window. The `.pth` mechanism keeps it out of window. This gap is tracked under post-install interpreter execution on the roadmap. |
+| **Hades / Miasma PyPI wave** | PyPI | T1: `*-setup.pth` auto-executes on next Python startup | ✅ **New** | **Post-install file inventory + Rust classifier** catches the `.pth` file itself — it's written to disk during `pip install` and detected by the in-container `find /work -type f` pipeline (path, size, type, content) before the container exits. The Rust-side `classify_inventory_lines` flags `.pth` files with executable content (import, exec, urllib, subprocess patterns) and diffs them against baselines via fail-closed diff. This closes the original Hades/Miasma write-to-disk gap. No anomalous network or execve during install, but the `.pth` file is a new artifact signal. |
+| | PyPI | T1b: deferred bun download-and-execute via `.pth` | ✅ **New** | The `.pth` file is caught by the artifact scan at T1 before any deferred execution can occur. The bun download and `bun run _index.js` would still fire outside the install window, but the `.pth` file detection blocks the package before the host command is forwarded. |
 | **Bioinformatics & MCP wave** | PyPI | T2: `__init__.py` import hook fires on package import | ❌ | Deferred to import — outside the sandbox window. |
 | | PyPI | T3: compiled `.abi3.so` executes payload via `dlopen()` on import | ❌ | Deferred to import — outside the sandbox window. |
 | | PyPI | T4: split loader/payload across two packages, both needed at Python startup | ❌ | Neither package alone triggers during install; deferred like T1. |
@@ -307,10 +295,11 @@ The Shai-Hulud campaign has produced several named attack waves across different
 
 **What gyrseek catches, stated plainly**
 
-gyrseek reliably catches Shai-Hulud attacks where the malicious behaviour fires *during* `npm install` — specifically the `preinstall` hook variants used in the Red Hat, @antv, and Intercom npm waves. The two IoC classes that trigger detection are:
+gyrseek reliably catches Shai-Hulud attacks where the malicious behaviour fires *during* `npm install` — specifically the `preinstall` hook variants used in the Red Hat, @antv, and Intercom npm waves. The IoC classes that trigger detection are:
 
 - **New network connection** to GitHub Releases (`github.com/oven-sh/bun/releases/...`) — the Bun download
-- **Watched-process execve** `bun|run|_index.js` or `bun|run|router_runtime.js` — the payload invocation
+- **Process execution** — *any* newly introduced program execution (not just bun/deno). Previously only a `bun`/`deno` allowlist was captured; now every `execve` is recorded and diffed, so a variant using `node`, `python`, `deno`, `curl`, `wget`, or any other runtime as the payload runner is equally caught.
+- **Post-install file artifact** — `.pth` files with executable content, unexpected runtime binaries, or large files not present in baselines (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
 
 Either signal alone is sufficient to block the install before it completes.
 
@@ -318,14 +307,41 @@ Either signal alone is sufficient to block the install before it completes.
 
 The original Hades/Miasma PyPI wave and the Bioinformatics/MCP wave use `.pth` files and import hooks specifically to survive install-time scanners. The sequence:
 
-1. `pip install evil-pkg` runs inside gyrseek's sandbox — the `.pth` file is written to `site-packages` as ordinary file I/O. No network calls, no bun execve, nothing anomalous. **gyrseek sees a clean install and allows it.**
-2. The next time *any* Python interpreter starts on the host, `.pth` fires, downloads Bun from GitHub, and runs the stealer.
+1. `pip install evil-pkg` runs inside gyrseek's sandbox — the `.pth` file is written to `site-packages`. The **post-install artifact scan** catches it (detects `.pth` files with executable imports) before the container exits, and blocks the host command. Install-time process execution and network may show nothing anomalous, but the artifact diff fails closed.
+2. The next time *any* Python interpreter starts on the host, `.pth` fires, downloads Bun from GitHub, and runs the stealer — but the package was already blocked at step 1.
 
 gyrseek's sandbox window ends when `pip install` exits.
 
-**What would close this gap**
+**What closes this gap now**
 
-After the sandbox install, gyrseek could run a second strace-covered step — start a fresh Python interpreter with the installed package on `sys.path` to force `.pth` execution — and capture the Bun download and `bun run` execve the same way npm hooks are caught today. A complementary approach is static wheel diffing: comparing wheel contents between versions would surface a newly appearing `.pth` or `_index.js` file before any code runs. Both are on the roadmap.
+The **post-install file inventory** (implemented, see [dedicated section](#post-install-artifact-detection)) runs inside the Docker container after each install probe, recording every installed file via `find /work -type f` and classifying findings on the Rust side (`.pth` with executable content, binary executables, unexpected runtime binaries, files >10 MB) before the container exits. Findings are diffed across versions: a `.pth` file newly introduced in the current version (not seen in baselines) fails closed. This catches the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during install and detected inside the same container session.
+
+The remaining gap is T1b (deferred bun download-and-execute on next interpreter startup). Even though the `.pth` file is now caught at T1, a container escape or interpreter-startup interception would be needed to catch the execution phase. A post-install interpreter trigger step (start Python with the installed packages on `sys.path` to force `.pth` execution) remains on the roadmap for future hardening.
+
+## Post-Install Artifact Detection
+
+`gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, file type, first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
+
+The classifier emits four signal categories:
+
+1. **`binary`** — ELF, Mach-O, or PE executables deposited in the install tree. Catches cryptominers, compiled malware, and arbitrary native binaries.
+2. **`suspicious_pth`** — Python `.pth` files containing executable code (`import`, `exec`, `eval`, `urllib`, `subprocess`, `ctypes`, `socket` patterns). These are essentially never used by legitimate namespace-path `.pth` files and are the Hades/Miasma delivery mechanism.
+3. **`unexpected_runtime`** — bun/deno runtime binaries (identified by filename and binary type). A subset of `binary` with higher severity. Catches download-and-execute attacks that leave a runtime behind.
+4. **`large_file`** — any file >10 MB in the install tree. Catches data exfiltration staging and large payload drops.
+
+**How it works** — after each per-probe install step in the Docker matrix script, a single `find /work -type f` pipeline inventories every installed file, capturing size via `stat`, type via `file -b`, and a 300-byte content prefix via `head -c`. The raw inventory is written to `/out/gyrseek_artifacts_N.log`, embedded in the probe trace, and classified by `classify_inventory_lines` in scanning.rs before entering the diff pipeline.
+
+**Diff-based verdict** — like all of gyrseek's detection signals, artifact findings are compared across versions. A finding present in a baseline version is expected; a finding newly appearing in the current version (absent from all baselines) is **fail-closed**:
+
+```text
+❌ [gyrseek] CRITICAL WARNING: Suspicious artifact(s) discovered after install!
+Package 'evil-pkg', version '2.0.0' introduced new suspicious file artifact(s) not
+seen in baseline versions (1.9.0, 1.8.0): ["suspicious_pth|/work/site-packages/evil.pth|import socket"]
+This may indicate a .pth file with executable content or an unexpected runtime binary.
+Aborting host operation securely.
+```
+
+This closes the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during `pip install` (as ordinary file I/O, invisible to strace's `network,execve` filter) but detected by the post-install artifact scan before the container session ends. The same pipeline catches ELF-based payloads, large data exfiltration, and any future file-level IOC — all without modifying the container script.
 
 ## Configuration
 
@@ -344,6 +360,7 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 | ----------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ip_allowlist`                | empty         | IPs to ignore before anomaly blocking. Canonicalized (equivalent IPv6 forms match); invalid entries are skipped with a warning.                                                                                                                                |
 | `domain_allowlist`            | empty         | Domains to ignore. Lowercased, trailing `.` stripped. Subdomains match parents (`cdn.example.com` matches `example.com`). Only **forward-confirmed** PTR hostnames (FCrDNS) are matched, so a spoofed reverse-DNS record cannot bypass the allowlist.          |
+| `artifact_allowlist`          | empty         | Artifact findings to allow (exact `type|path|details` or prefix `type|path`). New artifacts not in baselines and not allowlisted fail closed.<br>Example: `binary|/work/bin/tool` or `suspicious_pth|/work/hack.pth|import urllib`.                             |
 | `git_clone_allowlist`         | empty         | Git clone targets to allow when new install-time clone behavior appears (case-insensitive exact URL match).                                                                                                                                                    |
 | `baseline_overrides`          | none          | Pin baseline versions per package via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines.                                                                                                                                       |
 | `baseline_count`              | `2`           | How many historical baselines to compare against.                                                                                                                                                                                                              |
@@ -353,8 +370,7 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 | `minimum_release_age_package` | off           | Minimum release age in **days**. When set, runs before burst/anomaly checks and fails closed if the current release is younger.                                                                                                                                |
 | `release_burst_threshold`     | off           | Fails closed if a package published at least this many versions within the burst window.                                                                                                                                                                       |
 | `release_burst_window_hours`  | `24`          | Lookback window (hours) for the burst checker.                                                                                                                                                                                                                 |
-| `watched_executables`         | `bun`, `deno` | Executable basenames to flag if **executed inside a scanned install** and diffed across versions (these are detection targets, not package managers gyrseek wraps). Config entries are **added to** the built-in defaults, so `bun`/`deno` are always watched. |
-| `process_exec_allowlist`      | empty         | Watched-process signatures (`bun\|run\|build`) or bare executables (`bun`) that are allowed even when newly introduced.                                                                                                                                        |
+| `process_exec_allowlist`      | empty         | Process-execution signatures (`bun\|run\|build`) or bare executables (`bun`) that are allowed even when newly introduced. All executables are monitored by default; only signatures in this list escape the fail-closed diff. Sandbox harness commands (`uv pip install`, `npm install`, `pnpm add`, interpreter discovery) are always excluded automatically. |
 
 ### Example config
 
@@ -367,6 +383,9 @@ domain_allowlist:
   - files.pythonhosted.org
 git_clone_allowlist:
   - https://github.com/acme/approved-build-scripts.git
+artifact_allowlist:
+  - binary|/work/bin/tool
+  - large_file|/work/data/reference.csv
 baseline_overrides:
   requests:
     baseline-1: "2.30.0"
@@ -384,11 +403,6 @@ internal_package_exemptions:
 minimum_release_age_package: 3
 release_burst_threshold: 3
 release_burst_window_hours: 24
-# Executables to watch for execution *inside* a scanned install (not managers to wrap).
-# bun and deno are always watched; entries here are added on top.
-watched_executables:
-  - bun
-  - deno
 process_exec_allowlist:
   - bun|run|build
   - deno
@@ -563,7 +577,7 @@ The Docker sandbox is currently tuned for practical compatibility and throughput
 - Full `--read-only` rootfs is not enabled.
 - Capabilities are not fully dropped, and `SYS_PTRACE` is explicitly added (see above).
 - Outbound network remains generally available so package-manager traffic can proceed.
-- Behavioral detection (network, git clone, watched-process execution) observes what runs **during the sandbox install**. Payloads designed to fire _outside_ the install window — e.g. the PyPI `*-setup.pth` variant that executes on the next `python`/`pip`/CI interpreter startup rather than at install — may not detonate during the scan, so their behavior may not be captured.
+- Behavioral detection (network, git clone, process execution) observes what runs **during the sandbox install**. Payloads designed to fire _outside_ the install window — e.g. the PyPI `*-setup.pth` variant that executes on the next `python`/`pip`/CI interpreter startup rather than at install — may not detonate during the scan, so their behavior may not be captured.
 
 **Why:** earlier stricter configs (read-only rootfs + full capability drop + non-root setup) caused apt/setup failures that prevented scans from running. The current config is the stable path that lets matrix probes complete in one sandbox run.
 
@@ -619,7 +633,7 @@ just test-uv
 just test-poetry
 ```
 
-Behavior test coverage includes deterministic DNS-enrichment checks, FCrDNS forward-confirmation, bracketed-argv preservation, watched-process detection, git-clone signature diffing, and release-burst policy enforcement.
+Behavior test coverage includes deterministic DNS-enrichment checks, FCrDNS forward-confirmation, bracketed-argv preservation, process-execution detection, git-clone signature diffing, and release-burst policy enforcement.
 
 ## Project Layout & Docs
 
@@ -630,7 +644,7 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 - `src/main.rs` — binary entrypoint
 - `src/lib.rs` — command routing, orchestration, config loading; inline tests for `GyrSeek::parse_package_details`
 - `src/parsing.rs` — command, lockfile, and requirements parsing; inline tests for all parsers and `rewrite_args_with_pinned_versions`
-- `src/scanning.rs` — registry lookup and behavior scanning engine; inline tests for version ordering, trace extraction, network/git-clone/watched-process detection, FCrDNS, and full scan pipeline
+- `src/scanning.rs` — registry lookup and behavior scanning engine; inline tests for version ordering, trace extraction, network/git-clone/process-execution detection, FCrDNS, and full scan pipeline
 - `src/sandbox.rs` — sandbox backends and mode selection; inline tests for docker args, strace flags, and unprivileged-payload integrity
 - `tests/cli_burst_exit_tests.rs` — release burst and minimum release age CLI exit-code tests (spawn binary)
 - `tests/forward_fail_closed_tests.rs` — fail-closed forwarding and exit-status propagation tests (spawn binary)
