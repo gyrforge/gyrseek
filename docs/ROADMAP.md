@@ -17,6 +17,7 @@
 - Prebuilt scanner image support and documented digest-pinning workflow for faster, more reproducible scans.
 - In-run scan-result caching and Docker matrix batching for multiple package/version probes in one container session.
 - Integration coverage for CLI exit-code behavior, lockfile routing, pnpm routing, version flags, artifact allowlisting, and fail-closed forwarding; inline tests cover parsing, scanning, and sandbox internals.
+- Post-install import probe for Python packages: `python -c "import <pkg>"` runs under strace after each install, capturing execve/network from `__init__.py` hooks and `.abi3.so` init routines. Multiple import-name candidates are tried (heuristic lowercase+hyphens→underscores first, original name as fallback) for namespace packages and naming divergences. The import probe's own `python -c "import"` execve is NOT filtered (it cancels out naturally in the per-version diff). Import runs before the artifact scan so hook-dropped files are inventoried. Covers Bioinformatics & MCP wave T2/T3.
 
 ## Near Term
 - Add richer requirements and constraints parsing coverage, especially environment markers and line continuations.
@@ -25,7 +26,8 @@
 - Tighten user-facing error taxonomy and remediation guidance so fail-closed outcomes are easier to triage in CI and local workflows.
 
 ## Mid Term
-- Detect post-install / startup-triggered payloads that fire outside the install window (e.g. PyPI `*-setup.pth` startup execution): exercise the package's import/startup path inside the sandbox and diff that behavior too.
+- Add import coverage for T4 split-package loader/payload scenario: after individual package import probes, test combined imports of dependent/provided-by packages.
+- Add `*-setup.pth` runtime interception: start a Python interpreter with the installed packages on `sys.path` to force `.pth` execution and capture deferred behavior.
 - Add direct runtime git clone interception path with safe heuristics.
 - Improve baseline selection strategy when fewer historical versions exist.
 - Add structured logging mode for CI and machine parsing.

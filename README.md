@@ -296,6 +296,24 @@ Aborting host operation securely.
 
 This closes the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during `pip install` (as ordinary file I/O, invisible to strace's `network,execve` filter) but detected by the post-install artifact scan before the container session ends. The same pipeline catches ELF-based payloads, large data exfiltration, and any future file-level IOC — all without modifying the container script.
 
+## Post-Install Import Probe
+
+The Bioinformatics & MCP wave uses a different technique: **import hooks**. Instead of executing during `pip install`, the malicious code hides in `__init__.py` files (T2) or compiled `.abi3.so` init routines (T3) that fire only when Python `import`s the package — well after the install window closes.
+
+`gyrseek` closes this gap by running a **post-install import probe** inside the same sandbox session. After each Python package install, the matrix script executes:
+
+```bash
+python -c "import <package>"
+```
+
+under `strace -f -e trace=network,execve`, capturing any phase-2 behavior the package triggers on import. The import traces are appended to the same per-probe trace log, so they participate in the existing baseline diff automatically — no new signal classes needed. If the current version makes network connections or spawns processes at import time that baselines did not, gyrseek fails closed.
+
+**Multiple import-name candidates.** The mapping from distribution name to Python import name is not always straightforward (e.g. `Pillow` → `PIL`, `zope.interface` is imported as a dotted name). The probe tries the heuristic name first (lowercased, hyphens replaced with underscores) and falls back to the original name if the first attempt fails, handling the vast majority of real packages without user configuration.
+
+**Runs before the artifact scan.** The import probe executes before the file inventory, so any files the import hook writes to disk (`.pth` files, downloaded payloads, temp files) are captured by the artifact scanner in the same container session.
+
+**Scope caveat.** The import probe only covers the immediate `import <pkg>` statement. Deferred startup behavior — for example, a `*-setup.pth` file that fires only on the next Python interpreter start — may execute outside the sandbox window. The post-install artifact scan closes the `.pth` delivery gap independently (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
+
 ## Shai-Hulud Detection Coverage
 
 The Shai-Hulud campaign has produced several named attack waves across different ecosystems, each using different execution techniques. The table below maps each wave to gyrseek's verdict and — where the attack fires during install — the specific IoCs gyrseek would have captured.
@@ -306,9 +324,9 @@ The Shai-Hulud campaign has produced several named attack waves across different
 |---|---|---|---|---|
 | **Hades / Miasma PyPI wave** | PyPI | T1: `*-setup.pth` auto-executes on next Python startup | ✅ **New** | **Post-install file inventory + Rust classifier** catches the `.pth` file itself — it's written to disk during `pip install` and detected by the in-container `find /work -type f` pipeline (path, size, type, content) before the container exits. The Rust-side `classify_inventory_lines` flags `.pth` files with executable content (import, exec, urllib, subprocess patterns) and diffs them against baselines via fail-closed diff. This closes the original Hades/Miasma write-to-disk gap. No anomalous network or execve during install, but the `.pth` file is a new artifact signal. |
 | | PyPI | T1b: deferred bun download-and-execute via `.pth` | ✅ **New** | The `.pth` file is caught by the artifact scan at T1 before any deferred execution can occur. The bun download and `bun run _index.js` would still fire outside the install window, but the `.pth` file detection blocks the package before the host command is forwarded. |
-| **Bioinformatics & MCP wave** | PyPI | T2: `__init__.py` import hook fires on package import | ❌ | Deferred to import — outside the sandbox window. |
-| | PyPI | T3: compiled `.abi3.so` executes payload via `dlopen()` on import | ❌ | Deferred to import — outside the sandbox window. |
-| | PyPI | T4: split loader/payload across two packages, both needed at Python startup | ❌ | Neither package alone triggers during install; deferred like T1. |
+| **Bioinformatics & MCP wave** | PyPI | T2: `__init__.py` import hook fires on package import | ✅ **New** | **Post-install import probe** runs `python -c "import <pkg>"` under strace after each install, capturing execve/network triggered by the import hook. New signals (not in baselines) fail closed. The import probe runs for current and baseline versions alike, so only version-to-version differences surface. |
+| | PyPI | T3: compiled `.abi3.so` executes payload via `dlopen()` on import | ✅ **New** | The `.abi3.so` file is detected by the **post-install artifact scan** (classified as `binary` before the container exits). Any execve/network triggered by `.abi3.so` init routines during the **post-install import probe** is captured in the strace diff. Two independent detection layers. |
+| | PyPI | T4: split loader/payload across two packages, both needed at Python startup | ⚠️ | Each package is scanned independently. If one package alone triggers import-time behavior (network, execve), the import probe catches it. If both must be imported together to trigger, neither alone fires — still deferred. |
 | **gpt-pilot GitHub source compromise** | Python (source repo) | T8: injected telemetry `__init__.py` spawns daemon on application import | ❌ | Fires on import, not `pip install`. The registry wheel is clean; the malicious code is in the source tree. |
 | **Red Hat Cloud Services npm** | npm | T5: `preinstall` hook runs `node index.js` during `npm install` | ✅ | **Network:** new outbound connection to `github.com/oven-sh/bun/releases` (Bun download). **Bun execve:** `bun\|run\|_index.js`. Both flagged vs. baseline. |
 | | npm | T5b: version-to-version bun execve signature diff | ✅ | gyrseek captures the full bun argv (`bun\|run\|<args>`) via strace and diffs the signature set across package versions. Newly introduced bun execution is flagged; existing bun execution with any new or changed arguments (e.g. `bun run build` → `bun run build` + `bun run _index.js`) is also flagged. This catches obfuscation that adds extra bun calls or changes bun arguments between versions. |
@@ -351,9 +369,11 @@ gyrseek's sandbox window ends when `pip install` exits.
 
 **What closes this gap now**
 
-The **post-install file inventory** (implemented, see [dedicated section](#post-install-artifact-detection)) runs inside the Docker container after each install probe, recording every installed file via `find /work -type f` and classifying findings on the Rust side (`.pth` with executable content, binary executables, unexpected runtime binaries, files >10 MB) before the container exits. Findings are diffed across versions: a `.pth` file newly introduced in the current version (not seen in baselines) fails closed. This catches the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during install and detected inside the same container session.
+The **post-install file inventory** runs inside the Docker container after each install probe, recording every installed file via `find /work -type f` and classifying findings on the Rust side (`.pth` with executable content, binary executables, unexpected runtime binaries, files >10 MB) before the container exits. Findings are diffed across versions: a `.pth` file newly introduced in the current version (not seen in baselines) fails closed. This catches the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during install and detected inside the same container session.
 
-The remaining gap is T1b (deferred bun download-and-execute on next interpreter startup). Even though the `.pth` file is now caught at T1, a container escape or interpreter-startup interception would be needed to catch the execution phase. A post-install interpreter trigger step (start Python with the installed packages on `sys.path` to force `.pth` execution) remains on the roadmap for future hardening.
+The **post-install import probe** (new) runs `python -c "import <pkg>"` under strace after each Python package install, capturing any execve/network triggered by `__init__.py` hooks or `.abi3.so` init routines. Multiple import-name candidates are tried (heuristic lowercase+hyphens→underscores first, original name as fallback) to handle namespace packages (`zope.interface`) and naming divergences. Import signals are appended to the same trace log so they participate in the baseline diff automatically. The probe runs before the post-install file inventory, so any files dropped by import hooks are also captured by the artifact scanner. This closes the Bioinformatics & MCP wave T2 (`__init__.py` import hook) and T3 (`.abi3.so` `dlopen()`) gaps — import-time payload behavior is now observed inside the same sandbox session.
+
+The remaining gap is T4 (split loader/payload across two packages that must both be imported to trigger) and T1b (deferred bun download-and-execute on next interpreter startup after `.pth` execution). A dual-package import phase and an interpreter-startup interception step remain on the roadmap for future hardening.
 
 ## Configuration
 
