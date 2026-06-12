@@ -95,7 +95,7 @@ Rules:
   - GYRSEEK_SANDBOX supports `microvm` mode via Docker runtime selection
   - GYRSEEK_MICROVM_RUNTIME selects the runtime for microvm mode (default `kata-runtime`), and initialization fails closed if runtime is unavailable
   - `./target/release/gyrseek sandbox runtimes` lists Docker runtimes to help choose GYRSEEK_MICROVM_RUNTIME
-  - GYRSEEK_NPM_SCANNER_IMAGE and GYRSEEK_PY_SCANNER_IMAGE override scanner images; prebuilt fast path can be enabled via GYRSEEK_PREBUILT_SCANNER_IMAGES or per-manager prebuilt env vars
+  - GYRSEEK_NPM_SCANNER_IMAGE and GYRSEEK_PY_SCANNER_IMAGE override scanner images (empty string treated as unset and falls back to the default digest-pinned image); prebuilt fast path can be enabled via GYRSEEK_PREBUILT_SCANNER_IMAGES or per-manager prebuilt env vars
   - README includes step-by-step Dockerfile/build/use guidance for prebuilt npm and python scanner images
   - README includes digest-pinning examples for scanner images to avoid tag drift and improve reproducibility
   - Roadmap now includes staged no-execution-first milestones (artifact fetch/unpack, static diff scoring, pre-runtime policy gate)

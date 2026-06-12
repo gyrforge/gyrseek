@@ -508,7 +508,10 @@ fn scanner_image_config(manager: &str) -> ScannerImageConfig {
         )
     };
 
-    let image = std::env::var(image_var).unwrap_or_else(|_| default_image.to_string());
+    let image = std::env::var(image_var)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default_image.to_string());
 
     let global_prebuilt = std::env::var("GYRSEEK_PREBUILT_SCANNER_IMAGES")
         .ok()
