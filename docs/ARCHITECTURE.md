@@ -64,21 +64,28 @@ gyrseek fails closed in the following situations:
 - Trace is empty or missing (strace produced no output — e.g. ptrace blocked).
 - Sandbox initialization fails.
 
+## Docker Sandbox Security
+- Seccomp profile (stored inline in Rust in `src/sandbox.rs`, materialized to temp at runtime) denies high-risk non-network syscalls while preserving strace/ptrace compatibility and allowing package-manager network access to registries.
+- Seccomp is enabled by default via `GYRSEEK_DOCKER_SECCOMP_PROFILE=true` (or set to `false` to disable).
+- Network access is enabled so package managers can reach PyPI, npm, etc. during install probes (necessary for behavioral capture).
+- Egress controls are planned for future phases once prebuilt scanner images and no-execution-first detection are stable.
+
 ## Current Limitations
 - Version ordering is semantic-version aware (semver for npm, PEP 440 for Python); unparseable versions fall back to sorting below parseable ones.
 - Version pinning of the forwarded command applies only to explicit unpinned install targets; lockfile-driven flows rely on the lockfile's own pins.
 - Direct runtime interception for standalone `git clone ...` commands is not enabled yet.
 - Docker mode assumes Docker CLI availability; host mode assumes strace availability and is less safe. The unprivileged-payload (`strace -u`) trace-integrity protection applies to the Docker/microvm backends. Docker mode requires `CAP_SYS_PTRACE` (added via `--cap-add`) for cross-UID tracing; environments that strip it (some K8s/seccomp setups) will fail closed rather than pass silently.
 - Trace extraction still assumes current strace output patterns.
-- Behavioral signals (network, git clone, process execution) are only captured for what executes during the sandbox install. Payloads that fire outside the install window (e.g. the PyPI `*-setup.pth` startup-execution variant) may not detonate during the scan.
+- Behavioral signals (network, git clone, process execution) are only captured for what executes during the sandbox install. Payloads that fire outside the install window (e.g. the PyPI `*-setup.pth` startup-execution variant) may not detonate during the scan. Post-install artifact scan (file inventory, classifier for binary/suspicious/.pth/unexpected runtime/large files) partially mitigates this gap.
 - Process-execution detection captures all executables by default (least-privilege). Sandbox-internal commands (install probes, interpreter discovery) are automatically excluded via `is_harness_command` to keep the diff clean. `process_exec_allowlist` is the user-facing escape hatch for expected new behavior.
+- Egress is currently unrestricted for package manager registry access; future phases will add optional egress allowlists/proxy controls.
 
 ## Main Files
 - src/main.rs: binary entrypoint
 - src/lib.rs: routing and enforcement orchestration (including the `--version`/`-V` short-circuit); inline tests for GyrSeek::parse_package_details, parse_global_options edge cases, and config parsing (new_package_exemptions, internal_package_exemptions)
 - src/parsing.rs: command, lockfile, and requirements parsing; inline tests for all parsers, rewrite_args_with_pinned_versions (including the `latest`-pin guard for skipped internal packages), PEP 508 extras, local-source exclusions, npm non-registry filtering, uv lock upgrade arg parsing
 - src/scanning.rs: registry history lookup and behavior scanning; inline tests for version ordering, trace extraction (sandbox-local IP filtering, `::ffff:` collapse, metadata-IP preserved), anomaly detection, git-clone and watched-process diffing, FCrDNS, allowlist matching (including IPv4-mapped/bare equivalence), internal-package-exemption skip, missing-baseline fail-closed
-- src/sandbox.rs: sandbox backend abstraction and mode selection; inline tests for docker args, strace flags, SYS_PTRACE, strace-stderr capture
+- src/sandbox.rs: sandbox backend abstraction and mode selection; inline seccomp profile (embedded JSON, materialized at runtime); inline tests for docker args, strace flags, SYS_PTRACE, seccomp toggle, strace-stderr capture, network isolation
 - tests/cli_burst_exit_tests.rs: release burst and minimum release age CLI exit-code tests (spawn binary)
 - tests/forward_fail_closed_tests.rs: fail-closed forwarding and host exit-status propagation (spawn binary; uses a fake `uv venv` passthrough vehicle)
 - tests/lock_routing_tests.rs: routing checks that bare `poetry lock` and `uv lock` reach the lockfile-scan branch, and that `uv venv` stays an unscanned passthrough (spawn binary)

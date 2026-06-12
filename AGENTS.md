@@ -114,6 +114,11 @@ Rules:
   - Docker runner currently avoids read-only rootfs because apt-based probe tooling setup requires writable root filesystem
   - Docker runner executes setup as root and uses `APT::Sandbox::User=root` to avoid setgroups failures under capability restrictions
   - Docker runner does not drop all Linux capabilities (apt-based setup fails under full drop) and explicitly adds SYS_PTRACE as above
+  - Repository now includes a compatibility-first seccomp profile embedded directly in src/sandbox.rs (`EMBEDDED_SECCOMP_PROFILE_JSON`) for ptrace-heavy sandbox runs, plus a staged validation runbook at docs/DOCKER_HARDENING_CHECKLIST.md
+  - Docker and microvm sandbox runs now use an embedded seccomp profile controlled by boolean `GYRSEEK_DOCKER_SECCOMP_PROFILE` (`true`/`false`, default `true`)
+  - Fixed seccomp networking regression: the embedded profile no longer denies core networking syscalls (`socket`, `connect`, `sendto`, `recvfrom`, etc.), which had broken DNS and `apt` inside the sandbox while seccomp was enabled
+  - Docker and microvm runner initialization now emits terminal seccomp status: info with embedded profile filename when enabled, warning with enablement hint when disabled
+  - Network access is enabled in sandbox containers so package managers can reach registries (PyPI, npm, etc.) during install probes; egress controls are planned for future phases after prebuilt scanner images and no-execution-first detection are stable
   - README documents current Docker hardening limitations and the prebuilt-image path to restore stricter isolation controls
   - In-run cache reuses scan results for repeated manager/package/version probes within the same execution
   - Fail-closed when package detection is expected but missing

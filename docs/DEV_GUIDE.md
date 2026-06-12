@@ -12,6 +12,15 @@
 - Fallback: `GYRSEEK_SANDBOX=host` (reduced safety)
 - Initialization failure is fail-closed (process exits non-zero).
 
+## Sandbox Security & Hardening
+- Docker/microvm sandbox runs use:
+  - `--cap-add SYS_PTRACE` for cross-UID tracing (required for `strace -u`)
+  - `--security-opt no-new-privileges`
+  - Embedded seccomp profile (opt-in via `GYRSEEK_DOCKER_SECCOMP_PROFILE=true|false`, default true)
+- Seccomp profile source: `src/sandbox.rs` (`EMBEDDED_SECCOMP_PROFILE_JSON` constant)
+- To disable seccomp: `GYRSEEK_DOCKER_SECCOMP_PROFILE=false ./target/release/gyrseek ...`
+- Startup logs announce seccomp status to stderr (`[gyrseek][INFO]` or `[gyrseek][WARN]`)
+
 ## Build and Test
 - Build debug: cargo build
 - Build release: just build
@@ -20,8 +29,9 @@
 - Run tests: just test (or cargo test directly)
 - Run lint checks: just lint
 - Format code: just fmt
-- Run inline tests for one module: cargo test --lib scanning / cargo test --lib parsing / cargo test --lib
-- Run CLI integration tests (spawn binary): cargo test --test cli_burst_exit_tests / cargo test --test forward_fail_closed_tests / cargo test --test lock_routing_tests / cargo test --test version_flag_tests
+- Run inline tests for one module: cargo test --lib sandbox / cargo test --lib scanning / cargo test --lib parsing / cargo test --lib
+	- `cargo test --lib sandbox` includes docker arg construction, seccomp profile toggle, seccomp profile content, and strace setup tests
+- Run CLI integration tests (spawn binary): cargo test --test cli_burst_exit_tests / cargo test --test forward_fail_closed_tests / cargo test --test lock_routing_tests / cargo test --test pnpm_routing_tests / cargo test --test version_flag_tests
 
 ## Policy Config Surface
 - Primary policy file: gyrseek.yaml (or override with --config / GYRSEEK_CONFIG).
@@ -60,10 +70,12 @@
 
 ## Required Change Hygiene
 After every repository change:
-1. Update AGENTS.md.
-2. Update README.md.
-3. Keep docs in docs/ in sync if architecture or workflow changed.
-4. Run just test before finishing.
+1. Update AGENTS.md (repository memory).
+2. Update README.md (user-facing docs).
+3. Update docs/ files (ARCHITECTURE.md, DEV_GUIDE.md, ROADMAP.md, FINDINGS.md) if architecture or workflow changed.
+4. Run `graphify update .` to refresh graph artifacts (or `graphify update . --force` if guard warns).
+5. Run `just test` before finishing.
+6. Run `just lint` to check formatting and clippy.
 
 ## Practical Review Checklist
 - Command path is correctly recognized.
@@ -72,3 +84,6 @@ After every repository change:
 - Bulk operations scan all intended package targets.
 - Non-target commands still passthrough when appropriate.
 - Tests cover positive and negative parse cases.
+- Sandbox hardening (seccomp, SYS_PTRACE) does not break trace capture or registry access.
+- Empty/whitespace traces fail closed (not silently passed).
+- strace capability failures are reported in captured stderr logs.
