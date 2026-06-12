@@ -29,6 +29,7 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 - [Prebuilt Scanner Images](#prebuilt-scanner-images)
 - [Behavior Reference](#behavior-reference)
 - [Docker Hardening Limitations](#docker-hardening-limitations)
+- [Seccomp and AppArmor Rollout](#seccomp-and-apparmor-rollout)
 - [Testing](#testing)
 - [Project Layout & Docs](#project-layout--docs)
 - [License](#license)
@@ -39,7 +40,7 @@ This tool was created by [Brandon Chuah](https://www.linkedin.com/in/brandonccl/
 
 Our goal is not to compete with existing vendors. Instead, we want to give open source maintainers and small businesses, especially those that might not be able to afford expensive commercial software supply chain tooling, a practical way to address the kinds of supply chain issues highlighted by incidents such as Shai-Hulud.
 
-The tool works out of the box and requires no proxy configuration, as long as Docker is installed. It can be run in host mode, but it is primarily intended for isolated sandbox environments where secrets and environment variables are not present, making it better suited for testing and validation.
+The tool works out of the box and requires no proxy configuration, as long as Docker is installed. It can be run in host mode, but host mode is only intended for isolated sandbox environments where secrets and environment variables are not present, making it better suited for testing and validation.
 
 We welcome feedback and suggestions to this repository.
 
@@ -476,6 +477,7 @@ GYRSEEK_SANDBOX=host  ./target/release/gyrseek pip3 install -r requirements.txt
 | `GYRSEEK_PY_SCANNER_IMAGE`                                     | `python:3.13-slim-bookworm@sha256:05b9...` | Python scanner image (pip/uv/poetry).     |
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES`                              | `false`                 | Enable prebuilt fast path for both managers. |
 | `GYRSEEK_NPM_SCANNER_PREBUILT` / `GYRSEEK_PY_SCANNER_PREBUILT` | `false`                 | Per-manager prebuilt override.               |
+| `GYRSEEK_DOCKER_SECCOMP_PROFILE`                               | `true`                  | Boolean toggle (`true`/`false`) for embedded seccomp profile use in Docker/microvm sandbox runs. |
 
 In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency.
 
@@ -590,20 +592,57 @@ The Docker sandbox is currently tuned for practical compatibility and throughput
 - The container is granted **`CAP_SYS_PTRACE`** (`--cap-add SYS_PTRACE`). `strace` runs as root but attaches to the install running as the unprivileged scanner user, and cross-UID `ptrace` needs this capability — Docker does not grant it by default. It is scoped to the container's own PID namespace and **cannot** trace host processes. Without it, `strace` fails with `ptrace(PTRACE_SEIZE): Operation not permitted`, which (correctly) fails the scan closed: no trace means the package is blocked, not passed.
 - Full `--read-only` rootfs is not enabled.
 - Capabilities are not fully dropped, and `SYS_PTRACE` is explicitly added (see above).
-- Outbound network remains generally available so package-manager traffic can proceed.
+- **Outbound network is enabled** so package managers can reach registries (PyPI, npm, etc.) during sandbox install probes. A malicious package running during the probe could theoretically exfiltrate data; see the roadmap for planned egress controls and no-execution-first phases.
 - Behavioral detection (network, git clone, process execution, post-install artifact scan) observes what runs **during the sandbox install**. Payloads designed to fire _outside_ the install window — e.g. the PyPI `*-setup.pth` variant that executes on the next `python`/`pip`/CI interpreter startup rather than at install — may not detonate during the scan, so their runtime behavior may not be captured, though the artifact scan detects the `.pth` file itself during install.
 
-**Why:** earlier stricter configs (read-only rootfs + full capability drop + non-root setup) caused apt/setup failures that prevented scans from running. The current config is the stable path that lets matrix probes complete in one sandbox run.
+**Why:** earlier stricter configs (read-only rootfs + full capability drop + non-root setup + network isolation) caused apt/setup failures and prevented package downloads during probes, rendering scans unable to run. The current config is the stable path that lets matrix probes complete with real package installation behavior.
 
 **Recommended hardening direction:**
 
-- Use prebuilt scanner images that already include required tooling (`strace`, certs, and `uv` where needed).
-- With prebuilt images in place, re-enable non-root runtime, read-only rootfs, and drop all capabilities except `SYS_PTRACE` (which tracing requires).
-- Add seccomp/apparmor policies and image digest pinning.
-- Consider tighter egress controls (allowlist or proxy model).
-- Add no-execution-first checks (static heuristics / provenance gates) before runtime execution, in phases: artifact fetch/unpack → static diff scoring → pre-runtime policy gating. ✅ **Artifact diff** (post-install file inventory + Rust classifier + cross-version diffing) is already implemented.
+- Use prebuilt scanner images that already include required tooling (`strace`, certs, and `uv` where needed) to reduce setup overhead.
+- Add seccomp/apparmor policies (seccomp profile is already embedded, see below) and image digest pinning.
+- Implement no-execution-first checks (static heuristics / provenance gates) before runtime detonation, in phases: artifact fetch/unpack → static diff scoring → pre-runtime policy gating. ✅ **Artifact diff** (post-install file inventory + Rust classifier + cross-version diffing) is already implemented.
+- Plan egress controls (allowlist or proxy model) for future phases after stable prebuilt image deployment.
 
 > **Performance note:** prebuilt images + prebuilt mode (`GYRSEEK_PREBUILT_SCANNER_IMAGES=true` or per-manager vars) avoid runtime setup overhead.
+
+## Seccomp and AppArmor Rollout
+
+This repo now includes a compatibility-first seccomp profile for ptrace-heavy scan workloads.
+
+The seccomp JSON is stored directly in Rust source (`src/sandbox.rs`) and materialized to a temp file at runtime.
+
+Seccomp is enabled by default (`GYRSEEK_DOCKER_SECCOMP_PROFILE=true`).
+
+Disable it explicitly when needed:
+
+```bash
+GYRSEEK_DOCKER_SECCOMP_PROFILE=false \
+./target/release/gyrseek npm install lodash
+```
+
+When Docker/microvm sandbox mode starts, gyrseek now prints seccomp status:
+
+- Enabled: `[gyrseek][INFO] Seccomp profile enabled: seccomp.gyrseek-tracing.json (embedded)`
+- Not enabled: `[gyrseek][WARN] Seccomp profile not in use. Set GYRSEEK_DOCKER_SECCOMP_PROFILE=true to enable it.`
+
+It is intentionally conservative: tracing compatibility comes first, and it denies a focused set of high-risk kernel syscalls while keeping `strace`/`ptrace` flows working and allowing package-manager network access.
+
+To validate seccomp behavior without breaking scans, follow:
+
+- `docs/DOCKER_HARDENING_CHECKLIST.md`
+
+Quick smoke test:
+
+```bash
+docker run --rm \
+  --security-opt apparmor=docker-default \
+  --cap-add SYS_PTRACE \
+  node:26.3-bookworm-slim \
+  sh -lc 'strace -V'
+```
+
+If you see `ptrace(PTRACE_SEIZE): Operation not permitted` or gyrseek reports an empty trace, check that your seccomp profile is not overly restrictive (use `GYRSEEK_DOCKER_SECCOMP_PROFILE=false` to test the baseline) and incrementally re-tighten (see checklist).
 
 ## Testing
 

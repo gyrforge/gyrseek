@@ -98,6 +98,11 @@ Rules:
   - GYRSEEK_NPM_SCANNER_IMAGE and GYRSEEK_PY_SCANNER_IMAGE override scanner images; prebuilt fast path can be enabled via GYRSEEK_PREBUILT_SCANNER_IMAGES or per-manager prebuilt env vars
   - README includes step-by-step Dockerfile/build/use guidance for prebuilt npm and python scanner images
   - README includes digest-pinning examples for scanner images to avoid tag drift and improve reproducibility
+  - Repository now includes a compatibility-first seccomp profile embedded directly in src/sandbox.rs (`EMBEDDED_SECCOMP_PROFILE_JSON`) for ptrace-heavy sandbox runs, plus a staged validation runbook at docs/DOCKER_HARDENING_CHECKLIST.md
+  - **Fixed (2026-06-12):** Empty scanner image env vars (`GYRSEEK_PY_SCANNER_IMAGE=""`) now correctly fall back to defaults instead of passing empty string to Docker (was causing "invalid reference format" errors)
+  - Docker and microvm sandbox runs now use an embedded seccomp profile controlled by boolean `GYRSEEK_DOCKER_SECCOMP_PROFILE` (`true`/`false`, default `true`)
+  - Docker and microvm runner initialization now emits terminal seccomp status: info with embedded profile filename when enabled, warning with enablement hint when disabled
+  - Network access is enabled in sandbox containers so package managers can reach registries (PyPI, npm, etc.) during install probes; egress controls are planned for future phases after prebuilt scanner images and no-execution-first detection are stable
   - Roadmap now includes staged no-execution-first milestones (artifact fetch/unpack, static diff scoring, pre-runtime policy gate)
   - Roadmap now explicitly tracks direct `git clone` runtime interception phases (parser, interception pipeline, policy gates, and integration tests)
   - Roadmap now includes generated-file comparison phases across package versions (inventory diff, hash first-pass, normalization, semantic diff, and policy gating)

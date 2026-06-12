@@ -41,14 +41,18 @@
 - Phase 5: test coverage for direct runtime clone paths (unit + integration + hostile fixture scenarios).
 
 ## Hardening
-- Improve resilience to strace output variations.
-- Add a no-execution-first comparison stage (tarball diff, install-hook/static rule checks) before runtime detonation.
-- Add provenance and integrity gates (trusted registry policy, digest/signature verification where available).
-- Add optional strict egress mediation/proxy mode for runtime scans.
-- Implement no-execution-first Phase 1: fetch and unpack target/baseline artifacts without install execution.
-- Implement no-execution-first Phase 2: static diff scoring (file tree deltas, install hooks, suspicious payload indicators).
-- Implement no-execution-first Phase 3: policy gate to block high-risk packages before runtime sandbox stage.
-- Revisit stricter container controls once prebuilt scanner images are the normal path: read-only rootfs, tighter capability drop, and stronger seccomp/apparmor defaults.
+- ✅ Embed seccomp profile in Rust (opt-in via `GYRSEEK_DOCKER_SECCOMP_PROFILE` boolean, default true).
+- ✅ Runtime seccomp status announcements (`[gyrseek][INFO]` / `[gyrseek][WARN]`).
+- ✅ No-execution-first artifact scan (post-install file inventory classifier).
+- ⏳ AppArmor profile rollout (Linux hosts).
+- ⏳ Improve resilience to strace output variations.
+- ⏳ Prebuilt scanner images for faster, reproducible scans.
+- ⏳ Add optional strict egress mediation/proxy mode for runtime scans (after no-execution-first stable).
+- ⏳ Add provenance and integrity gates (trusted registry policy, digest/signature verification where available).
+- ⏳ Implement no-execution-first Phase 1: fetch and unpack target/baseline artifacts without install execution.
+- ⏳ Implement no-execution-first Phase 2: static diff scoring (file tree deltas, install hooks, suspicious payload indicators).
+- ⏳ Implement no-execution-first Phase 3: policy gate to block high-risk packages before runtime sandbox stage.
+- ⏳ Revisit stricter container controls once prebuilt scanner images are the normal path: read-only rootfs, tighter capability drop, and stronger seccomp/apparmor defaults.
 
 ## Generated File Comparison Across Versions
 - Add artifact extraction stage to compare generated output files between current and baseline package versions.
@@ -68,5 +72,6 @@
 
 ## Collaboration
 - Keep AGENTS.md and README.md updated on every change.
-- Keep docs/ARCHITECTURE.md aligned with control-flow changes.
+- Keep docs/ARCHITECTURE.md, docs/DEV_GUIDE.md aligned with control-flow and workflow changes.
 - Keep docs/FINDINGS.md updated when a new security or correctness issue is identified and fixed.
+- Rerun `graphify update .` (or `graphify update . --force`) after code changes to keep graphify-out artifacts in sync.
