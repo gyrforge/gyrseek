@@ -1,4 +1,96 @@
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
+use tempfile::TempDir;
+
+const EMBEDDED_SECCOMP_PROFILE_NAME: &str = "seccomp.gyrseek-tracing.json";
+const EMBEDDED_SECCOMP_PROFILE_JSON: &str = r#"{
+    "defaultAction": "SCMP_ACT_ALLOW",
+    "defaultErrnoRet": 1,
+    "archMap": [
+        {
+            "architecture": "SCMP_ARCH_X86_64",
+            "subArchitectures": [
+                "SCMP_ARCH_X86",
+                "SCMP_ARCH_X32"
+            ]
+        },
+        {
+            "architecture": "SCMP_ARCH_AARCH64",
+            "subArchitectures": [
+                "SCMP_ARCH_ARM"
+            ]
+        },
+        {
+            "architecture": "SCMP_ARCH_MIPS64",
+            "subArchitectures": [
+                "SCMP_ARCH_MIPS",
+                "SCMP_ARCH_MIPS64N32"
+            ]
+        },
+        {
+            "architecture": "SCMP_ARCH_MIPS64N32",
+            "subArchitectures": [
+                "SCMP_ARCH_MIPS",
+                "SCMP_ARCH_MIPS64"
+            ]
+        },
+        {
+            "architecture": "SCMP_ARCH_MIPSEL64",
+            "subArchitectures": [
+                "SCMP_ARCH_MIPSEL",
+                "SCMP_ARCH_MIPSEL64N32"
+            ]
+        },
+        {
+            "architecture": "SCMP_ARCH_MIPSEL64N32",
+            "subArchitectures": [
+                "SCMP_ARCH_MIPSEL",
+                "SCMP_ARCH_MIPSEL64"
+            ]
+        },
+        {
+            "architecture": "SCMP_ARCH_S390X",
+            "subArchitectures": [
+                "SCMP_ARCH_S390"
+            ]
+        },
+        {
+            "architecture": "SCMP_ARCH_RISCV64",
+            "subArchitectures": []
+        }
+    ],
+    "syscalls": [
+        {
+            "names": [
+                "accept",
+                "accept4",
+                "bpf",
+                "delete_module",
+                "finit_module",
+                "fsconfig",
+                "fsmount",
+                "fspick",
+                "fsopen",
+                "init_module",
+                "kexec_file_load",
+                "kexec_load",
+                "listen",
+                "mount",
+                "move_mount",
+                "name_to_handle_at",
+                "nfsservctl",
+                "open_by_handle_at",
+                "open_tree",
+                "perf_event_open",
+                "pivot_root",
+                "umount2",
+                "userfaultfd"
+            ],
+            "action": "SCMP_ACT_ERRNO",
+            "errnoRet": 1
+        }
+    ]
+}"#;
 
 struct ScannerImageConfig {
     image: String,
@@ -35,6 +127,7 @@ pub(crate) fn build_runner_from_env() -> Result<Box<dyn SandboxRunner>, String> 
                     "Docker sandbox requested but `docker` is not available. Set GYRSEEK_SANDBOX=host only if you accept reduced safety.".to_string(),
                 );
             }
+            announce_seccomp_status();
             Ok(Box::new(DockerRunner))
         }
         "microvm" => {
@@ -51,6 +144,7 @@ pub(crate) fn build_runner_from_env() -> Result<Box<dyn SandboxRunner>, String> 
                     runtime
                 ));
             }
+            announce_seccomp_status();
             Ok(Box::new(MicroVmRunner { runtime }))
         }
         "host" => Ok(Box::new(HostRunner)),
@@ -171,7 +265,7 @@ fn trace_install_docker_matrix_with_runtime(
     let out_dir_path = out_dir.path().to_string_lossy().to_string();
 
     let script = build_matrix_script(manager, probes, image_config.prebuilt);
-    let args = build_docker_run_args(&image_config.image, &out_dir_path, runtime, &script);
+    let args = build_docker_run_args(&image_config.image, &out_dir_path, runtime, &script)?;
 
     let output = Command::new("docker")
         .args(&args)
@@ -235,7 +329,7 @@ fn trace_install_docker_single_with_runtime(
     let script = build_single_script(manager, package, version, image_config.prebuilt);
     // No /out bind mount here: the single-probe fallback captures strace output
     // from stderr rather than a log file.
-    let args = build_docker_run_args(&image_config.image, "", runtime, &script);
+    let args = build_docker_run_args(&image_config.image, "", runtime, &script)?;
 
     let output = Command::new("docker")
         .args(&args)
@@ -431,7 +525,7 @@ fn build_docker_run_args(
     out_dir_path: &str,
     runtime: Option<&str>,
     script: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let mut args = vec![
         "run".to_string(),
         "--rm".to_string(),
@@ -460,6 +554,10 @@ fn build_docker_run_args(
         "--tmpfs".to_string(),
         "/work:rw,noexec,nosuid,size=512m".to_string(),
     ];
+    if let Some(seccomp_profile) = docker_seccomp_profile_arg()? {
+        args.push("--security-opt".to_string());
+        args.push(seccomp_profile);
+    }
     if !out_dir_path.is_empty() {
         args.push("-v".to_string());
         args.push(format!("{}:/out", out_dir_path));
@@ -474,7 +572,58 @@ fn build_docker_run_args(
     args.push("sh".to_string());
     args.push("-lc".to_string());
     args.push(script.to_string());
-    args
+    Ok(args)
+}
+
+fn docker_seccomp_profile_arg() -> Result<Option<String>, String> {
+    if !docker_seccomp_enabled_from_env() {
+        return Ok(None);
+    }
+    let profile_path = embedded_seccomp_profile_path()?;
+    Ok(Some(format!("seccomp={profile_path}")))
+}
+
+fn docker_seccomp_enabled_from_env() -> bool {
+    std::env::var("GYRSEEK_DOCKER_SECCOMP_PROFILE")
+        .ok()
+        .map(|v| parse_bool_env(&v))
+        .unwrap_or(true)
+}
+
+fn embedded_seccomp_profile_path() -> Result<String, String> {
+    static PROFILE: OnceLock<Result<String, String>> = OnceLock::new();
+    PROFILE
+        .get_or_init(|| {
+            let dir = TempDir::new()
+                .map_err(|e| format!("failed to create temp dir for seccomp profile: {e}"))?;
+            let profile_path = dir.path().join(EMBEDDED_SECCOMP_PROFILE_NAME);
+            std::fs::write(&profile_path, EMBEDDED_SECCOMP_PROFILE_JSON).map_err(|e| {
+                format!(
+                    "failed to write embedded seccomp profile to '{}': {e}",
+                    profile_path.to_string_lossy()
+                )
+            })?;
+            let path = profile_path.to_string_lossy().to_string();
+            // Keep the random-named temp dir alive for the process lifetime
+            // so Docker can read the seccomp file. The random name prevents
+            // symlink attacks and TOCTOU races (see semgrep finding).
+            Box::leak(Box::new(dir));
+            Ok(path)
+        })
+        .clone()
+}
+
+fn announce_seccomp_status() {
+    if docker_seccomp_enabled_from_env() {
+        eprintln!(
+            "[gyrseek][INFO] Seccomp profile enabled: {} (embedded)",
+            EMBEDDED_SECCOMP_PROFILE_NAME
+        );
+    } else {
+        eprintln!(
+            "[gyrseek][WARN] Seccomp profile not in use. Set GYRSEEK_DOCKER_SECCOMP_PROFILE=true to enable it."
+        );
+    }
 }
 
 fn docker_available() -> bool {
@@ -572,9 +721,15 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        SCANNER_USER, build_artifact_scan_steps, build_docker_run_args, build_matrix_script,
-        build_single_script, strace_install_command,
+        EMBEDDED_SECCOMP_PROFILE_JSON, SCANNER_USER, build_artifact_scan_steps,
+        build_docker_run_args, build_matrix_script, build_single_script, strace_install_command,
     };
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     // --- #4 strace must not truncate argv/addresses ---
 
@@ -656,22 +811,47 @@ mod tests {
 
     #[test]
     fn docker_args_keep_out_mount_when_provided_and_omit_when_empty() {
-        let with_out = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi");
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "false");
+        }
+
+        let with_out = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
+            .expect("docker args should build");
         assert!(with_out.iter().any(|a| a == "/tmp/out:/out"));
         assert!(with_out.iter().any(|a| a == "no-new-privileges"));
 
-        let without_out = build_docker_run_args("img:latest", "", None, "echo hi");
+        let without_out = build_docker_run_args("img:latest", "", None, "echo hi")
+            .expect("docker args should build");
         assert!(!without_out.iter().any(|a| a.ends_with(":/out")));
+
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
+        }
     }
 
     #[test]
     fn docker_args_pass_runtime_when_set() {
-        let args = build_docker_run_args("img:latest", "/tmp/out", Some("kata-runtime"), "echo hi");
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "false");
+        }
+
+        let args = build_docker_run_args("img:latest", "/tmp/out", Some("kata-runtime"), "echo hi")
+            .expect("docker args should build");
         let pos = args
             .iter()
             .position(|a| a == "--runtime")
             .expect("runtime flag present");
         assert_eq!(args.get(pos + 1).map(String::as_str), Some("kata-runtime"));
+
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
+        }
     }
 
     #[test]
@@ -679,12 +859,117 @@ mod tests {
         // strace -u drops the install to an unprivileged user; attaching across
         // UIDs needs CAP_SYS_PTRACE, which Docker does not grant by default.
         // Without this the sandbox can never produce a trace.
-        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi");
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "false");
+        }
+
+        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
+            .expect("docker args should build");
         let pos = args
             .iter()
             .position(|a| a == "--cap-add")
             .expect("--cap-add flag present");
         assert_eq!(args.get(pos + 1).map(String::as_str), Some("SYS_PTRACE"));
+
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
+        }
+    }
+
+    #[test]
+    fn docker_args_adds_seccomp_profile_by_default() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
+        }
+
+        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
+            .expect("docker args should build");
+
+        let mut found = false;
+        for window in args.windows(2) {
+            if window[0] == "--security-opt" && window[1].starts_with("seccomp=") {
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "expected seccomp security-opt to be present by default"
+        );
+    }
+
+    #[test]
+    fn docker_args_disables_seccomp_when_env_var_false() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "false");
+        }
+
+        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
+            .expect("docker args should build");
+
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
+        }
+
+        assert!(
+            !args.iter().any(|a| a.starts_with("seccomp=")),
+            "false env var must disable seccomp profile"
+        );
+    }
+
+    #[test]
+    fn docker_args_enables_seccomp_when_env_var_true() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "true");
+        }
+
+        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
+            .expect("docker args should build");
+
+        // SAFETY: guarded by a process-wide mutex in this test module.
+        unsafe {
+            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
+        }
+
+        assert!(
+            args.iter().any(|a| a.starts_with("seccomp=")),
+            "true env var should enable seccomp profile"
+        );
+    }
+
+    #[test]
+    fn embedded_seccomp_profile_keeps_networking_available() {
+        let profile: serde_json::Value = serde_json::from_str(EMBEDDED_SECCOMP_PROFILE_JSON)
+            .expect("embedded seccomp profile should be valid JSON");
+        let syscalls = profile["syscalls"]
+            .as_array()
+            .expect("profile syscalls should be an array");
+
+        for syscall in syscalls {
+            let names = syscall["names"]
+                .as_array()
+                .expect("syscall names should be an array");
+            let denied_networking = names.iter().any(|name| {
+                matches!(
+                    name.as_str(),
+                    Some("socket" | "socketpair" | "connect" | "sendto" | "recvfrom")
+                )
+            });
+            assert!(
+                !denied_networking,
+                "embedded seccomp profile must not block container networking: {syscall:?}"
+            );
+        }
     }
 
     // --- #4 strace stderr must be captured, not discarded ---
