@@ -78,16 +78,18 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just build` | Builds the release binary (`target/release/gyrseek`). |
 | `just install` | Installs `gyrseek` into Cargo's bin directory with `cargo install --path . --locked`. |
 | `just uninstall` | Uninstalls `gyrseek` with `cargo uninstall gyrseek`. |
-| `just local-mac` | Builds the release binary and copies it to the first writable bin directory found (`/opt/homebrew/bin`, `/usr/local/bin`, or `~/.local/bin`). Also installs a versioned copy (e.g. `gyrseek-v1.2.3`) alongside the plain `gyrseek` symlink, and warns about stale binaries in other directories. |
+
 | `just tag` | Tags the current `HEAD` with the version string from `Cargo.toml` (e.g. `v1.2.3`), force-deletes any existing local/remote tag with the same name, and pushes the new tag to `origin`. |
 | `just fmt` | Formats the Rust code. |
 | `just test` | Runs `cargo test --all-features --locked`. |
 | `just lint` | Runs clippy for all targets/features and a format check. Use this before committing. |
-| `just test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. |
-| `just test-pnpm` | End-to-end test: scans and adds `lodash`, then runs `pnpm update` and `pnpm i` against the test fixture in `tests/pnpm/`. Builds the release binary first. |
-| `just test-pip` | End-to-end test: creates a venv, then scans and installs `black`, the packages from `tests/pip/requirements.txt`, and runs `pip3 install --upgrade pip` via `pip3`. Builds the release binary first. |
-| `just test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
-| `just test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
+| `just test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. Automatically uses prebuilt npm image when `GYRSEEK_NPM_SCANNER_IMAGE` is set. |
+| `just test-pnpm` | End-to-end test: scans and adds `lodash`, then runs `pnpm update` and `pnpm i` against the test fixture in `tests/pnpm/`. Builds the release binary first. Automatically uses prebuilt npm image when `GYRSEEK_NPM_SCANNER_IMAGE` is set. |
+| `just test-pip` | End-to-end test: creates a venv, then scans and installs `black`, the packages from `tests/pip/requirements.txt`, and runs `pip3 install --upgrade pip` via `pip3`. Builds the release binary first. Automatically uses prebuilt Python image when `GYRSEEK_PY_SCANNER_IMAGE` is set. |
+| `just test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. Automatically uses prebuilt Python image when `GYRSEEK_PY_SCANNER_IMAGE` is set. |
+| `just test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. Automatically uses prebuilt Python image when `GYRSEEK_PY_SCANNER_IMAGE` is set. |
+| `just docker-build-python` | Builds the Python scanner image from `docker/Dockerfile.python` as `gyrseek-python-scanner:latest`. |
+| `just docker-build-npm` | Builds the npm/pnpm scanner image from `docker/Dockerfile.npm` as `gyrseek-npm-scanner:latest`. |
 
 **Typical workflow:**
 
@@ -100,9 +102,6 @@ just install
 
 # Uninstall from Cargo's bin directory
 just uninstall
-
-# Build and install to a system bin dir on macOS (versioned + plain copy)
-just local-mac
 
 # Tag HEAD with the Cargo.toml version and push to origin
 just tag
@@ -473,52 +472,42 @@ GYRSEEK_SANDBOX=host  ./target/release/gyrseek pip3 install -r requirements.txt
 
 | Variable                                                       | Default                 | Purpose                                      |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------- |
-| `GYRSEEK_NPM_SCANNER_IMAGE`                                    | `node:22-bookworm-slim` | npm scanner image.                           |
-| `GYRSEEK_PY_SCANNER_IMAGE`                                     | `python:3.12-bookworm`  | Python scanner image.                        |
+| `GYRSEEK_NPM_SCANNER_IMAGE`                                    | `node:26.3-bookworm-slim@sha256:3fe8...` | npm/pnpm scanner image.                      |
+| `GYRSEEK_PY_SCANNER_IMAGE`                                     | `python:3.13-slim-bookworm@sha256:05b9...` | Python scanner image (pip/uv/poetry).     |
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES`                              | `false`                 | Enable prebuilt fast path for both managers. |
 | `GYRSEEK_NPM_SCANNER_PREBUILT` / `GYRSEEK_PY_SCANNER_PREBUILT` | `false`                 | Per-manager prebuilt override.               |
 
-In prebuilt mode, runtime setup (`apt-get` and Python `uv` bootstrapping) is skipped to reduce hot-path latency.
+In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency.
 
 ## Prebuilt Scanner Images
 
-For faster probe startup and fewer runtime setup failures, prebuild scanner images with the required tools already installed.
+For faster probe startup and fewer runtime setup failures, prebuild scanner images with the required tools already installed. Prebuilt Dockerfiles ship with the repo at `docker/Dockerfile.npm` and `docker/Dockerfile.python`.
 
-### 1) Build an npm scanner image
-
-`Dockerfile.npm-scanner`:
-
-```dockerfile
-FROM node:22-bookworm-slim
-RUN apt-get update \
-   && apt-get install -y --no-install-recommends strace ca-certificates \
-   && rm -rf /var/lib/apt/lists/*
-```
+### 1) Build the scanner images
 
 ```bash
-docker build -f Dockerfile.npm-scanner -t gyrseek/npm-scanner:latest .
+# npm/pnpm scanner
+just docker-build-npm
 
-GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
+# Python scanner (pip/uv/poetry)
+just docker-build-python
+```
+
+Or build directly:
+
+```bash
+docker build -f docker/Dockerfile.npm -t gyrseek-npm-scanner:latest .
+docker build -f docker/Dockerfile.python -t gyrseek-python-scanner:latest .
+```
+
+### 2) Use a prebuilt image
+
+```bash
+GYRSEEK_NPM_SCANNER_IMAGE=gyrseek-npm-scanner:latest \
 GYRSEEK_NPM_SCANNER_PREBUILT=true \
 ./target/release/gyrseek npm update
-```
 
-### 2) Build a Python scanner image
-
-`Dockerfile.py-scanner`:
-
-```dockerfile
-FROM python:3.12-bookworm
-RUN apt-get update \
-   && apt-get install -y --no-install-recommends strace ca-certificates \
-   && rm -rf /var/lib/apt/lists/*
-RUN python -m pip install --no-cache-dir uv
-```
-
-```bash
-docker build -f Dockerfile.py-scanner -t gyrseek/py-scanner:latest .
-
-GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
+GYRSEEK_PY_SCANNER_IMAGE=gyrseek-python-scanner:latest \
 GYRSEEK_PY_SCANNER_PREBUILT=true \
 ./target/release/gyrseek uv sync
 ```
@@ -527,16 +516,16 @@ GYRSEEK_PY_SCANNER_PREBUILT=true \
 
 ```bash
 GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
-GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner:latest \
-GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner:latest \
+GYRSEEK_NPM_SCANNER_IMAGE=gyrseek-npm-scanner:latest \
+GYRSEEK_PY_SCANNER_IMAGE=gyrseek-python-scanner:latest \
 ./target/release/gyrseek npm update
 ```
 
 ### 4) Verify images are usable
 
 ```bash
-docker run --rm gyrseek/npm-scanner:latest sh -lc 'strace -V'
-docker run --rm gyrseek/py-scanner:latest sh -lc 'strace -V && uv --version'
+docker run --rm gyrseek-npm-scanner:latest sh -lc 'strace -V'
+docker run --rm gyrseek-python-scanner:latest sh -lc 'strace -V && uv --version'
 ```
 
 If these pass, `GYRSEEK_*_SCANNER_PREBUILT=true` should work without runtime tool installation.
@@ -684,7 +673,7 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 
 - `just build` — release build
 - `just install` / `just uninstall` — install or remove the Cargo bin
-- `just local-mac` — build and copy to the first writable system bin dir on macOS, with a versioned copy and stale-binary warnings
+
 - `just tag` — tag `HEAD` with the `Cargo.toml` version and push to `origin`
 - `just fmt` — format Rust code
 - `just test` — run Rust tests

@@ -1,0 +1,12 @@
+FROM node:26.3-bookworm-slim@sha256:3fe807a03a4436e7bc76b7e84e6861899cd75c9028ae99bc00581940141ae150
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends strace ca-certificates && \
+    corepack enable pnpm >/dev/null 2>&1 || npm install -g pnpm >/dev/null
+
+RUN id -u gyrseek >/dev/null 2>&1 \
+    || useradd -m -d /home/gyrseek -s /bin/sh gyrseek \
+    || adduser -D -h /home/gyrseek -s /bin/sh gyrseek
+
+RUN mkdir -p /work && chown -R gyrseek /work
+

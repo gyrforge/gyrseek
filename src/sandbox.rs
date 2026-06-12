@@ -498,13 +498,13 @@ fn scanner_image_config(manager: &str) -> ScannerImageConfig {
         (
             "GYRSEEK_NPM_SCANNER_IMAGE",
             "GYRSEEK_NPM_SCANNER_PREBUILT",
-            "node:22-bookworm-slim",
+            "node:26.3-bookworm-slim@sha256:3fe807a03a4436e7bc76b7e84e6861899cd75c9028ae99bc00581940141ae150",
         )
     } else {
         (
             "GYRSEEK_PY_SCANNER_IMAGE",
             "GYRSEEK_PY_SCANNER_PREBUILT",
-            "python:3.12-bookworm",
+            "python:3.13-slim-bookworm@sha256:05b95397cac02b060ff1251afaa78087d92d7034369afbc8eb765631cada8257",
         )
     };
 
@@ -519,6 +519,10 @@ fn scanner_image_config(manager: &str) -> ScannerImageConfig {
         .ok()
         .map(|v| parse_bool_env(&v))
         .unwrap_or(global_prebuilt);
+
+    if prebuilt {
+        eprintln!("ℹ️ [gyrseek] Using prebuilt scanner image: {}", image);
+    }
 
     ScannerImageConfig { image, prebuilt }
 }

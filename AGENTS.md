@@ -29,7 +29,8 @@ Rules:
   - just build — release build (cargo build --release)
   - just install — install gyrseek with cargo install --path . --locked
   - just uninstall — uninstall gyrseek with cargo uninstall gyrseek
-  - just local-mac — build + copy to first writable system bin dir (/opt/homebrew/bin, /usr/local/bin, ~/.local/bin), installs versioned copy (gyrseek-vX.Y.Z) alongside plain gyrseek, warns about stale binaries in other dirs
+  - just docker-build-python — build Python scanner image from docker/Dockerfile.python
+  - just docker-build-npm — build npm/pnpm scanner image from docker/Dockerfile.npm
   - just tag — tag HEAD with version from Cargo.toml (e.g. v1.2.3), force-delete existing local/remote tag, push to origin
   - just fmt — format Rust code
   - just test — run cargo test --all-features --locked
