@@ -1019,13 +1019,14 @@ version = "2.31.0"
 
     #[test]
     fn parses_pip_install_multi_packages_and_requirements_file() {
-        let req_path = std::env::temp_dir().join(format!("gyrseek-req-{}.txt", std::process::id()));
-        std::fs::write(&req_path, "requests==2.31.0\npytest\n").unwrap();
+        let mut req_file = tempfile::NamedTempFile::new().unwrap();
+        let req_path = req_file.path().to_string_lossy().to_string();
+        std::io::Write::write_all(&mut req_file, b"requests==2.31.0\npytest\n").unwrap();
         let a = vec![
             "pip3".to_string(),
             "install".to_string(),
             "-r".to_string(),
-            req_path.to_string_lossy().to_string(),
+            req_path,
             "flask==3.0.0".to_string(),
         ];
         let parsed = parse_pip_install_packages_from_args(&a);
@@ -1037,7 +1038,6 @@ version = "2.31.0"
                 ("flask".to_string(), Some("3.0.0".to_string())),
             ]
         );
-        let _ = std::fs::remove_file(req_path);
     }
 
     #[test]
