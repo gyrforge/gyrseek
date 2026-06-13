@@ -8,7 +8,7 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
 2. The run function in src/lib.rs routes by manager and subcommand. A leading `--version`/`-V` is handled first and prints `gyrseek <CARGO_PKG_VERSION>` then exits 0, before any config load or sandbox init (so it works without a config file or Docker); only the first argument is matched, so a forwarded command's own `--version` flag is left untouched.
 3. Supported command paths are either:
    - single-target scans (for example uv add pkg)
-  - bulk scans (for example uv sync, uv pip sync, uv lock (bare and update flags), poetry install or poetry update or poetry lock, pip or pip3 install with multiple targets, npm install or npm i or npm update, pnpm add or pnpm install or pnpm i or pnpm update). A bare `uv lock` (no `-U`/`-P`) and a bare `poetry lock` both scan every package in the resolved lockfile, mirroring `uv lock --upgrade` and `poetry install`/`update`; they fail closed if the lockfile is missing or empty.
+   - bulk scans (for example uv sync, uv pip sync, uv lock (bare and update flags), poetry install or poetry update or poetry lock, pip or pip3 install with multiple targets, npm install or npm i or npm update, pnpm add or pnpm install or pnpm i or pnpm update). A bare `uv lock` (no `-U`/`-P`) and a bare `poetry lock` both scan every package in the resolved lockfile, mirroring `uv lock --upgrade` and `poetry install`/`update`; they fail closed if the lockfile is missing or empty.
 4. If detection and scanning pass, the command is forwarded. For explicit unpinned install targets (for example npm install pkg, pip install pkg) the forwarded command is rewritten to pin the exact version that was scanned; lockfile/manifest-driven flows (uv sync, uv pip sync, uv lock, poetry install/update/lock) are forwarded verbatim because the lockfile already pins versions.
 5. If anomaly or required detection failure occurs, execution exits non-zero (fail-closed). If the host command itself cannot be spawned after a clear scan, gyrseek also fails closed. If a sandbox probe yields an empty/whitespace trace (e.g. strace could not attach), that is a hard error and the whole batch is blocked — a blank trace is never treated as a clean install.
 6. When the host command is forwarded, gyrseek waits on the child and exits with the child's own status, so a non-zero host install is reported as non-zero rather than masked as success.
@@ -42,7 +42,7 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
   - find_new_connections returns endpoints seen in current but not in baseline.
   - The `ip_allowlist` matcher compares on the IPv4-mapped-collapsed canonical form, so an entry of `172.17.0.2` matches a `::ffff:172.17.0.2` hit and vice versa.
   - The `domain_allowlist` uses forward-confirmed reverse DNS (FCrDNS): reverse_dns_domain resolves the PTR hostname and only trusts it if its forward A/AAAA resolution includes the original IP (decision extracted into forward_confirmed_hostname for deterministic testing). A spoofed PTR record pointing at an allowlisted domain therefore cannot bypass the allowlist. New IPs remain fail-closed regardless.
-  - install-time git clone signatures are diffed across current and baseline versions; newly introduced clone behavior is fail-closed unless allowlisted.
+   - install-time git clone signatures are diffed across current and baseline versions; newly introduced clone behavior is fail-closed unless allowlisted.
    - process-execution signatures (all executables captured, least-privilege approach) are diffed across versions; a newly introduced or changed/extra invocation is fail-closed unless allowlisted (process_exec_allowlist). Sandbox-internal commands (install probe, interpreter discovery) are automatically excluded via `is_harness_command` to prevent version-string false positives. This targets the Shai-Hulud "download Bun and run a hidden payload" class of attack.
 - In-run optimization:
   - run keeps an in-memory cache keyed by manager/package/version to avoid repeating identical scans in one execution.
@@ -65,9 +65,12 @@ gyrseek fails closed in the following situations:
 - Sandbox initialization fails.
 
 ## Docker Sandbox Security
-- Seccomp profile (stored inline in Rust in `src/sandbox.rs`, materialized to temp at runtime) denies high-risk non-network syscalls while preserving strace/ptrace compatibility and allowing package-manager network access to registries.
-- Seccomp is enabled by default via `GYRSEEK_DOCKER_SECCOMP_PROFILE=true` (or set to `false` to disable).
-- Network access is enabled so package managers can reach PyPI, npm, etc. during install probes (necessary for behavioral capture).
+
+See [`docs/DOCKER_SECURITY.md`](DOCKER_SECURITY.md) for the full reference. In brief:
+
+- Seccomp (enabled by default) and AppArmor (disabled by default) profiles are embedded in `src/sandbox.rs` and loaded at runtime.
+- `SYS_PTRACE` is added for cross-UID strace; the traced payload runs unprivileged.
+- Network access is enabled for package-manager registry access during probes.
 - Egress controls are planned for future phases once prebuilt scanner images and no-execution-first detection are stable.
 
 ## Current Limitations

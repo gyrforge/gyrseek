@@ -10,16 +10,18 @@
 ## Sandbox Mode
 - Default: `GYRSEEK_SANDBOX=docker`
 - Fallback: `GYRSEEK_SANDBOX=host` (reduced safety)
+- Isolated: `GYRSEEK_SANDBOX=microvm` (requires MicroVM-capable Docker runtime on Linux)
 - Initialization failure is fail-closed (process exits non-zero).
 
 ## Sandbox Security & Hardening
-- Docker/microvm sandbox runs use:
-  - `--cap-add SYS_PTRACE` for cross-UID tracing (required for `strace -u`)
-  - `--security-opt no-new-privileges`
-  - Embedded seccomp profile (opt-in via `GYRSEEK_DOCKER_SECCOMP_PROFILE=true|false`, default true)
-- Seccomp profile source: `src/sandbox.rs` (`EMBEDDED_SECCOMP_PROFILE_JSON` constant)
-- To disable seccomp: `GYRSEEK_DOCKER_SECCOMP_PROFILE=false ./target/release/gyrseek ...`
-- Startup logs announce seccomp status to stderr (`[gyrseek][INFO]` or `[gyrseek][WARN]`)
+
+See [`docs/DOCKER_SECURITY.md`](DOCKER_SECURITY.md) for the full reference. Key points:
+
+- Docker/microvm sandbox runs use `--cap-add SYS_PTRACE`, `--security-opt no-new-privileges`, and embedded seccomp + AppArmor profiles from `src/sandbox.rs`.
+- Seccomp: enabled by default (`GYRSEEK_DOCKER_SECCOMP_PROFILE`, default `true`). Disable: `GYRSEEK_DOCKER_SECCOMP_PROFILE=false`.
+- AppArmor: disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`), requires `apparmor-utils` + prebuilt scanner image on Linux. Enable: `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`.
+- Startup logs announce seccomp/AppArmor status to stderr.
+- On macOS, AppArmor is unavailable — gyrseek warns and falls back to Docker's default profile.
 
 ## Build and Test
 - Build debug: cargo build
@@ -27,10 +29,10 @@
 - Install locally: just install
 - Uninstall locally: just uninstall
 - Run tests: just test (or cargo test directly)
-- Run lint checks: just lint
+- Run lint checks: just lint (cargo check + clippy + format check)
 - Format code: just fmt
 - Run inline tests for one module: cargo test --lib sandbox / cargo test --lib scanning / cargo test --lib parsing / cargo test --lib
-	- `cargo test --lib sandbox` includes docker arg construction, seccomp profile toggle, seccomp profile content, and strace setup tests
+  - `cargo test --lib sandbox` includes docker arg construction, seccomp/apparmor profile toggle, profile content, and strace setup tests
 - Run CLI integration tests (spawn binary): cargo test --test cli_burst_exit_tests / cargo test --test forward_fail_closed_tests / cargo test --test lock_routing_tests / cargo test --test pnpm_routing_tests / cargo test --test version_flag_tests
 
 ## Policy Config Surface
@@ -72,10 +74,10 @@
 After every repository change:
 1. Update AGENTS.md (repository memory).
 2. Update README.md (user-facing docs).
-3. Update docs/ files (ARCHITECTURE.md, DEV_GUIDE.md, ROADMAP.md, FINDINGS.md) if architecture or workflow changed.
+3. Update docs/ files (ARCHITECTURE.md, DEV_GUIDE.md, ROADMAP.md, FINDINGS.md, DOCKER_SECURITY.md) if architecture or workflow changed.
 4. Run `graphify update .` to refresh graph artifacts (or `graphify update . --force` if guard warns).
 5. Run `just test` before finishing.
-6. Run `just lint` to check formatting and clippy.
+6. Run `just lint` — cargo check, formatting, and clippy.
 
 ## Practical Review Checklist
 - Command path is correctly recognized.

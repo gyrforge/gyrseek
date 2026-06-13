@@ -19,14 +19,13 @@ test:
 
 # Test for linting errors
 lint:
+    cargo check --all-targets --all-features --locked
     cargo clippy --all-targets --all-features --locked
     cargo fmt --all --check
 
 # End-to-end tests for npm
 [working-directory: 'tests/npm']
 test-npm: build
-    #!/usr/bin/env bash
-    [ -n "${GYRSEEK_NPM_SCANNER_IMAGE:-}" ] && export GYRSEEK_NPM_SCANNER_PREBUILT=true
     "{{bin}}" npm install lodash
     "{{bin}}" npm update
     "{{bin}}" npm i
@@ -34,8 +33,6 @@ test-npm: build
 # End-to-end tests for pnpm
 [working-directory: 'tests/pnpm']
 test-pnpm: build
-    #!/usr/bin/env bash
-    [ -n "${GYRSEEK_NPM_SCANNER_IMAGE:-}" ] && export GYRSEEK_NPM_SCANNER_PREBUILT=true
     "{{bin}}" pnpm add lodash
     "{{bin}}" pnpm update
     "{{bin}}" pnpm i
@@ -43,9 +40,7 @@ test-pnpm: build
 # End-to-end tests for pip
 [working-directory: 'tests/pip']
 test-pip: build
-    #!/usr/bin/env bash
     python3 -m venv .venv
-    [ -n "${GYRSEEK_PY_SCANNER_IMAGE:-}" ] && export GYRSEEK_PY_SCANNER_PREBUILT=true
     PATH="{{pip_venv_bin}}:$PATH" "{{bin}}" pip3 install black
     PATH="{{pip_venv_bin}}:$PATH" "{{bin}}" pip3 install -r ./requirements.txt
     PATH="{{pip_venv_bin}}:$PATH" "{{bin}}" pip3 install --upgrade pip
@@ -53,8 +48,6 @@ test-pip: build
 # End-to-end tests for poetry
 [working-directory: 'tests/poetry']
 test-poetry: build
-    #!/usr/bin/env bash
-    [ -n "${GYRSEEK_PY_SCANNER_IMAGE:-}" ] && export GYRSEEK_PY_SCANNER_PREBUILT=true
     "{{bin}}" poetry add black
     "{{bin}}" poetry install --no-root
     "{{bin}}" poetry update
@@ -63,8 +56,6 @@ test-poetry: build
 # End-to-end tests for uv
 [working-directory: 'tests/uv']
 test-uv: build
-    #!/usr/bin/env bash
-    [ -n "${GYRSEEK_PY_SCANNER_IMAGE:-}" ] && export GYRSEEK_PY_SCANNER_PREBUILT=true
     "{{bin}}" uv add black
     "{{bin}}" uv pip install -r ./pyproject.toml
     "{{bin}}" uv sync

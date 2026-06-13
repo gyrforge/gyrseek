@@ -871,10 +871,9 @@ pub async fn run(args: Vec<String>) {
             config_path
         );
     }
-    println!(
-        "ℹ️ [gyrseek] Using baseline_count={}",
-        policy.baseline_count
-    );
+    let os = std::env::consts::OS;
+    let sandbox_mode = env::var("GYRSEEK_SANDBOX").unwrap_or_else(|_| "docker".to_string());
+    println!("🖥️ [gyrseek] OS: {} | Sandbox mode: {}", os, sandbox_mode);
     if !policy.min_baseline_age_hours_by_package.is_empty() {
         println!(
             "ℹ️ [gyrseek] Loaded per-package min_baseline_age_hours for {} package(s)",
