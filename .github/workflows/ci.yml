@@ -14,7 +14,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust:
+  rust-checks:
     name: Rust checks
     runs-on: ubuntu-latest
     steps:
@@ -22,7 +22,21 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev yamllint
+
+      - name: Lint all Dockerfiles recursively
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: "**/Dockerfile*"
+          recursive: true
+
+      - name: Run yamllint
+        run: yamllint .
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -32,17 +46,237 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --all --check
+      - name: Just Lint
+        run: just lint
 
-      - name: Check compilation
-        run: cargo check --all-targets --all-features --locked
+      - name: Just Test
+        run: just test
 
-      - name: Lint with Clippy
-        run: cargo clippy --all-targets --all-features --locked
+  linux-docker-uv-test:
+    name: (Linux) (Docker) Test CLI with (uv)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Run tests
-        run: cargo test --all-features --locked
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install latest version of uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Just test uv
+        env:
+          GYRSEEK_DOCKER_SECCOMP_PROFILE: false
+        run: just test-uv
+
+  linux-docker-seccomp-uv-test:
+    name: (Linux) (Docker) (Seccomp) Test CLI with (uv)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install latest version of uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Just test uv
+        run: just test-uv
+
+  linux-docker-apparmor-seccomp-uv-test:
+    name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (uv)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
+
+      - name: Install latest version of uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Build python pre-built docker scanner image
+        run: just docker-build-python
+
+      - name: Just test uv
+        env:
+          GYRSEEK_PY_SCANNER_PREBUILT: true
+          GYRSEEK_PY_SCANNER_IMAGE: "gyrseek-python-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-uv
+
+  linux-docker-apparmor-seccomp-pip-test:
+    name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (pip)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
+
+      - name: Install latest version of pip
+        uses: actions/setup-python@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Build python pre-built docker scanner image
+        run: just docker-build-python
+
+      - name: Just test pip
+        env:
+          GYRSEEK_PY_SCANNER_PREBUILT: true
+          GYRSEEK_PY_SCANNER_IMAGE: "gyrseek-python-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-pip
+
+  linux-docker-apparmor-seccomp-poetry-test:
+    name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (poetry)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
+
+      - name: Install latest python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install latest version of poetry
+        uses: abatilo/actions-poetry@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Build python pre-built docker scanner image
+        run: just docker-build-python
+
+      - name: Just test poetry
+        env:
+          GYRSEEK_PY_SCANNER_PREBUILT: true
+          GYRSEEK_PY_SCANNER_IMAGE: "gyrseek-python-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-poetry
+
+  linux-docker-apparmor-seccomp-npm-test:
+    name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (npm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
+
+      - name: Install latest version of npm
+        uses: actions/setup-node@v6
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Build npm pre-built docker scanner image
+        run: just docker-build-npm
+
+      - name: Just test npm
+        env:
+          GYRSEEK_NPM_SCANNER_PREBUILT: true
+          GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-npm
+
+  linux-docker-apparmor-seccomp-pnpm-test:
+    name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (pnpm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
+
+      - name: Install latest version of pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Build npm pre-built docker scanner image
+        run: just docker-build-npm
+
+      - name: Just test pnpm
+        env:
+          GYRSEEK_NPM_SCANNER_PREBUILT: true
+          GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-pnpm
 
   cargo-audit:
     name: Dependency advisory scan

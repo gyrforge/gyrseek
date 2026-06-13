@@ -28,8 +28,7 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 - [Sandbox Modes](#sandbox-modes)
 - [Prebuilt Scanner Images](#prebuilt-scanner-images)
 - [Behavior Reference](#behavior-reference)
-- [Docker Hardening Limitations](#docker-hardening-limitations)
-- [Seccomp and AppArmor Rollout](#seccomp-and-apparmor-rollout)
+- [Docker Security](#docker-security)
 - [Testing](#testing)
 - [Project Layout & Docs](#project-layout--docs)
 - [License](#license)
@@ -83,12 +82,12 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just tag` | Tags the current `HEAD` with the version string from `Cargo.toml` (e.g. `v1.2.3`), force-deletes any existing local/remote tag with the same name, and pushes the new tag to `origin`. |
 | `just fmt` | Formats the Rust code. |
 | `just test` | Runs `cargo test --all-features --locked`. |
-| `just lint` | Runs clippy for all targets/features and a format check. Use this before committing. |
-| `just test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. Automatically uses prebuilt npm image when `GYRSEEK_NPM_SCANNER_IMAGE` is set. |
-| `just test-pnpm` | End-to-end test: scans and adds `lodash`, then runs `pnpm update` and `pnpm i` against the test fixture in `tests/pnpm/`. Builds the release binary first. Automatically uses prebuilt npm image when `GYRSEEK_NPM_SCANNER_IMAGE` is set. |
-| `just test-pip` | End-to-end test: creates a venv, then scans and installs `black`, the packages from `tests/pip/requirements.txt`, and runs `pip3 install --upgrade pip` via `pip3`. Builds the release binary first. Automatically uses prebuilt Python image when `GYRSEEK_PY_SCANNER_IMAGE` is set. |
-| `just test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. Automatically uses prebuilt Python image when `GYRSEEK_PY_SCANNER_IMAGE` is set. |
-| `just test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. Automatically uses prebuilt Python image when `GYRSEEK_PY_SCANNER_IMAGE` is set. |
+| `just lint` | Runs `cargo check`, clippy for all targets/features, and a format check. Use this before committing. |
+| `just test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. |
+| `just test-pnpm` | End-to-end test: scans and adds `lodash`, then runs `pnpm update` and `pnpm i` against the test fixture in `tests/pnpm/`. Builds the release binary first. |
+| `just test-pip` | End-to-end test: creates a venv, then scans and installs `black`, the packages from `tests/pip/requirements.txt`, and runs `pip3 install --upgrade pip` via `pip3`. Builds the release binary first. |
+| `just test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
+| `just test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
 | `just docker-build-python` | Builds the Python scanner image from `docker/Dockerfile.python` as `gyrseek-python-scanner:latest`. |
 | `just docker-build-npm` | Builds the npm/pnpm scanner image from `docker/Dockerfile.npm` as `gyrseek-npm-scanner:latest`. |
 
@@ -478,6 +477,7 @@ GYRSEEK_SANDBOX=host  ./target/release/gyrseek pip3 install -r requirements.txt
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES`                              | `false`                 | Enable prebuilt fast path for both managers. |
 | `GYRSEEK_NPM_SCANNER_PREBUILT` / `GYRSEEK_PY_SCANNER_PREBUILT` | `false`                 | Per-manager prebuilt override.               |
 | `GYRSEEK_DOCKER_SECCOMP_PROFILE`                               | `true`                  | Boolean toggle (`true`/`false`) for embedded seccomp profile use in Docker/microvm sandbox runs. |
+| `GYRSEEK_DOCKER_APPARMOR_PROFILE`                               | `false`                 | Boolean toggle (`true`/`false`) for embedded AppArmor profile use in Docker/microvm sandbox runs. Loaded via `apparmor_parser` at runtime. On macOS (where `apparmor_parser` is unavailable), a warning is emitted and the sandbox falls back to Docker's default AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on native Linux hosts (runtime apt setup conflicts with profile). Defaults to `false` because the prerequisites are not always met. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection. |
 
 In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency.
 
@@ -581,68 +581,15 @@ Details worth knowing once you're past the basics.
 - **Post-install artifact findings** — binary executables, suspicious `.pth` files, unexpected runtimes, and large files — are diffed across versions. A finding newly present in the current version (absent from all baselines) fails closed (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
 - When a forwarded command exits non-zero, `gyrseek` **exits with the same code** rather than masking the failure as success.
 
-## Docker Hardening Limitations
+## Docker Security
 
-The Docker sandbox is currently tuned for practical compatibility and throughput, not maximum isolation.
+See [`docs/DOCKER_SECURITY.md`](docs/DOCKER_SECURITY.md) for the canonical reference on Docker sandbox hardening, including:
 
-**Current limitations:**
-
-- Container setup installs probe tooling at runtime (`apt-get`, and `uv` for Python).
-- Container setup and `strace` run as root so the trace logs are root-owned — but the **traced install payload itself runs unprivileged** (`strace -u`), so a malicious install script cannot overwrite or delete its own trace before `gyrseek` reads it.
-- The container is granted **`CAP_SYS_PTRACE`** (`--cap-add SYS_PTRACE`). `strace` runs as root but attaches to the install running as the unprivileged scanner user, and cross-UID `ptrace` needs this capability — Docker does not grant it by default. It is scoped to the container's own PID namespace and **cannot** trace host processes. Without it, `strace` fails with `ptrace(PTRACE_SEIZE): Operation not permitted`, which (correctly) fails the scan closed: no trace means the package is blocked, not passed.
-- Full `--read-only` rootfs is not enabled.
-- Capabilities are not fully dropped, and `SYS_PTRACE` is explicitly added (see above).
-- **Outbound network is enabled** so package managers can reach registries (PyPI, npm, etc.) during sandbox install probes. A malicious package running during the probe could theoretically exfiltrate data; see the roadmap for planned egress controls and no-execution-first phases.
-- Behavioral detection (network, git clone, process execution, post-install artifact scan) observes what runs **during the sandbox install**. Payloads designed to fire _outside_ the install window — e.g. the PyPI `*-setup.pth` variant that executes on the next `python`/`pip`/CI interpreter startup rather than at install — may not detonate during the scan, so their runtime behavior may not be captured, though the artifact scan detects the `.pth` file itself during install.
-
-**Why:** earlier stricter configs (read-only rootfs + full capability drop + non-root setup + network isolation) caused apt/setup failures and prevented package downloads during probes, rendering scans unable to run. The current config is the stable path that lets matrix probes complete with real package installation behavior.
-
-**Recommended hardening direction:**
-
-- Use prebuilt scanner images that already include required tooling (`strace`, certs, and `uv` where needed) to reduce setup overhead.
-- Add seccomp/apparmor policies (seccomp profile is already embedded, see below) and image digest pinning.
-- Implement no-execution-first checks (static heuristics / provenance gates) before runtime detonation, in phases: artifact fetch/unpack → static diff scoring → pre-runtime policy gating. ✅ **Artifact diff** (post-install file inventory + Rust classifier + cross-version diffing) is already implemented.
-- Plan egress controls (allowlist or proxy model) for future phases after stable prebuilt image deployment.
-
-> **Performance note:** prebuilt images + prebuilt mode (`GYRSEEK_PREBUILT_SCANNER_IMAGES=true` or per-manager vars) avoid runtime setup overhead.
-
-## Seccomp and AppArmor Rollout
-
-This repo now includes a compatibility-first seccomp profile for ptrace-heavy scan workloads.
-
-The seccomp JSON is stored directly in Rust source (`src/sandbox.rs`) and materialized to a temp file at runtime.
-
-Seccomp is enabled by default (`GYRSEEK_DOCKER_SECCOMP_PROFILE=true`).
-
-Disable it explicitly when needed:
-
-```bash
-GYRSEEK_DOCKER_SECCOMP_PROFILE=false \
-./target/release/gyrseek npm install lodash
-```
-
-When Docker/microvm sandbox mode starts, gyrseek now prints seccomp status:
-
-- Enabled: `[gyrseek][INFO] Seccomp profile enabled: seccomp.gyrseek-tracing.json (embedded)`
-- Not enabled: `[gyrseek][WARN] Seccomp profile not in use. Set GYRSEEK_DOCKER_SECCOMP_PROFILE=true to enable it.`
-
-It is intentionally conservative: tracing compatibility comes first, and it denies a focused set of high-risk kernel syscalls while leaving the networking syscalls available so DNS, `apt`, and package-manager registry access keep working inside the sandbox.
-
-To validate seccomp behavior without breaking scans, follow:
-
-- `docs/DOCKER_HARDENING_CHECKLIST.md`
-
-Quick smoke test:
-
-```bash
-docker run --rm \
-  --security-opt apparmor=docker-default \
-  --cap-add SYS_PTRACE \
-  node:26.3-bookworm-slim \
-  sh -lc 'strace -V'
-```
-
-If you see `ptrace(PTRACE_SEIZE): Operation not permitted` or gyrseek reports an empty trace, check that your seccomp profile is not overly restrictive (use `GYRSEEK_DOCKER_SECCOMP_PROFILE=false` to test the baseline) and incrementally re-tighten (see checklist).
+- **Seccomp profile** — embedded in `src/sandbox.rs`, enabled by default (`GYRSEEK_DOCKER_SECCOMP_PROFILE=true`), materialized to a temp file at runtime. Denies high-risk syscalls while preserving network access for package managers.
+- **AppArmor profile** — embedded in `src/sandbox.rs`, disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`); enable explicitly with `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`. Loaded via `apparmor_parser` at runtime. Requires `apparmor-utils` + prebuilt scanner image on Linux. Falls back with a warning on macOS. Recommended for stronger path-based protection.
+- **Capabilities** — `SYS_PTRACE` added for cross-UID strace; `no-new-privileges` enabled.
+- **Unprivileged payload** — traced install runs as unprivileged user; trace logs are root-owned.
+- **Validation checklist**, troubleshooting, backout plan, and current hardening limitations.
 
 ## Testing
 
@@ -716,7 +663,7 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 - `just tag` — tag `HEAD` with the `Cargo.toml` version and push to `origin`
 - `just fmt` — format Rust code
 - `just test` — run Rust tests
-- `just lint` — run clippy and format checks
+- `just lint` — run cargo check, clippy, and format checks
 - `just test-{npm,pnpm,pip,uv,poetry}` — end-to-end tests per manager
 
 **Collaboration docs** (for multi-developer / multi-LLM work)
@@ -725,6 +672,7 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 - `docs/DEV_GUIDE.md` — contributor workflow and change hygiene
 - `docs/ROADMAP.md` — planned improvements and next steps
 - `docs/FINDINGS.md` — security and correctness findings log (static review findings and their fixes)
+- `docs/DOCKER_SECURITY.md` — Docker sandbox security reference (seccomp, AppArmor, capabilities, validation)
 - `AGENTS.md` — repository memory and mandatory update policy
 
 > **Repository policy:** after each change, update both `AGENTS.md` and `README.md`.

@@ -1,8 +1,10 @@
 FROM python:3.13-slim-bookworm@sha256:05b95397cac02b060ff1251afaa78087d92d7034369afbc8eb765631cada8257
 
+# hadolint ignore=DL3008,DL3013
 RUN apt-get update && \
     apt-get install -y --no-install-recommends strace ca-certificates && \
-    python -m pip install --quiet uv
+    rm -rf /var/lib/apt/lists/* && \
+    python -m pip install --no-cache-dir --quiet uv
 
 RUN id -u gyrseek >/dev/null 2>&1 \
     || useradd -m -d /home/gyrseek -s /bin/sh gyrseek \

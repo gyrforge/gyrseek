@@ -178,9 +178,9 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 **Fix direction:** Add an upfront allowlist check before sandbox init. Any manager not in `["pip", "pip3", "uv", "poetry", "npm"]` (except `sandbox runtimes`) should exit 1 with a clear message.
 
-**✅ Fix status — FIXED.** `SUPPORTED_MANAGERS` allowlist added at `lib.rs:769`. Unrecognized managers exit 1 with:
+**✅ Fix status — FIXED.** `SUPPORTED_MANAGERS` allowlist added at `lib.rs:769` (later expanded to include `pnpm`). Unrecognized managers exit 1 with:
 ```
-❌ [gyrseek] Unrecognized manager 'curl'. Supported managers: pip, pip3, uv, poetry, npm. Failing closed.
+❌ [gyrseek] Unrecognized manager 'curl'. Supported managers: pip, pip3, uv, poetry, npm, pnpm. Failing closed.
 ```
 
 ---

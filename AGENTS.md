@@ -24,6 +24,7 @@ Rules:
   - src/parsing.rs (parsing helpers)
   - src/scanning.rs (registry lookup and anomaly scanning)
   - src/sandbox.rs (sandbox runner backends and mode selection)
+- CI: `.github/workflows/ci.yml` — `rust-checks` (just lint + just test with hadolint/yamllint), `linux-docker-uv-test` (test-uv with seccomp disabled), `linux-docker-seccomp-uv-test` (test-uv with seccomp enabled), `linux-docker-apparmor-seccomp-{uv,pip,poetry,npm,pnpm}-test` (test each manager with AppArmor + prebuilt scanner images), `cargo-audit` (dependency advisory scan). Installs just 1.52.0 via `extractions/setup-just@v4` for `[working-directory]` support
 - Build and scripts:
   - Justfile is the task runner entrypoint; run `just --list` to see recipes
   - just build — release build (cargo build --release)
@@ -34,14 +35,14 @@ Rules:
   - just tag — tag HEAD with version from Cargo.toml (e.g. v1.2.3), force-delete existing local/remote tag, push to origin
   - just fmt — format Rust code
   - just test — run cargo test --all-features --locked
-  - just lint — clippy all targets/features + format check; run before committing (does NOT run cargo test — use just test for that)
+  - just lint — cargo check + clippy all targets/features + format check; run before committing (does NOT run cargo test — use just test for that)
   - just test-{npm,pnpm,pip,uv,poetry} — end-to-end tests per manager using the release binary; require Docker
 - Test strategy:
   - All unit and integration tests that do not require spawning the compiled binary live inline in their src/ module under `#[cfg(test)]` — this follows Rust convention and lets tests access private items directly
   - Only tests that need to spawn the real binary (CLI exit-code checks, forward behavior) remain in tests/ as integration test files
   - Run with cargo test (or just test)
   - src/scanning.rs (inline) — version ordering, IPv4/IPv6 trace extraction (sandbox-local IP filtering, IPv4-mapped `::ffff:` collapse, cloud-metadata-IP preservation), burst filtering, FCrDNS (forward_confirmed_hostname), bracketed-argv preservation, process-execution detection and allowlisting (with harness-command filtering via `is_harness_command` to exclude sandbox's own `uv pip install`, `npm install`, `pnpm add`, `python get_interpreter_info`, and `env HOME=/work` wrappers from exec signatures), git-clone signature diffing, network anomaly detection, DNS enrichment, IP/domain allowlist filtering (including IPv4-mapped/bare-IPv4 equivalence), internal-package-exemption skip, git-clone simulation; artifact scan (classify_inventory_lines, extract_artifact_findings, strip_artifact_section, inventory-based artifact scan with Rust-side classification for binary, suspicious_pth, unexpected_runtime, large_file signals; inline tests: classify_inventory_binary_elf, classify_inventory_unexpected_runtime, classify_inventory_suspicious_pth, classify_inventory_benign_pth, classify_inventory_large_file, classify_inventory_skips_malformed_lines, classify_inventory_empty_input, classify_inventory_mixed_findings); artifact allowlist (filter_allowlisted_artifact_findings — exact and prefix matching; inline tests: artifact_allowlist_matches_exact_finding_and_prefix); integration tests for artifact allowlist unblocking (artifact_allowlist_unblocks_new_findings) and fail-closed on new artifacts (flags_new_artifact_findings_across_versions); test RAII via `EnvVarGuard` (holds `env_lock` + sets/removes env var on drop, recovers from poison)
-  - src/sandbox.rs (inline) — SYS_PTRACE capability in docker args, strace-stderr capture, no-truncation flags, unprivileged-payload integrity, post-install artifact scan (build_artifact_scan_steps — single file inventory pipeline — embedded in matrix script)
+  - src/sandbox.rs (inline) — SYS_PTRACE capability in docker args, strace-stderr capture, no-truncation flags, unprivileged-payload integrity, post-install artifact scan (build_artifact_scan_steps — single file inventory pipeline — embedded in matrix script); seccomp profile toggle and content tests; AppArmor profile content and env-var toggle tests
   - src/parsing.rs (inline) — PEP 508 extras stripping (strip_pep508_extras), extras-aware pinning, poetry local directory-source exclusion, rewrite_args_with_pinned_versions (including the `latest`-pin guard so a skipped internal package is not rewritten to an invalid `name==latest`/`name@latest`), lockfile/requirements/npm parsing for all managers
   - src/lib.rs (inline) — GyrSeek::parse_package_details for all supported managers and subcommands; config parsing for new_package_exemptions and internal_package_exemptions; `run()` refactored with `bulk_scan!` macro (four explicit-list branches), `ForwardMode` enum, `scan_targets` wrapper, `exit_with(msg) -> !` helper
   - tests/cli_burst_exit_tests.rs — release burst threshold and minimum_release_age_package CLI exit-code behavior (spawns binary)
@@ -54,6 +55,7 @@ Rules:
   - docs/DEV_GUIDE.md
   - docs/ROADMAP.md
   - docs/FINDINGS.md
+  - docs/DOCKER_SECURITY.md
 - Current behavior highlights:
   - Supports uv add, uv pip install, uv pip sync, uv sync, uv lock (bare and update flags), pip/pip3 install, poetry add/update/install/lock, npm install/i/update, pnpm add/install/i/update
   - `--version`/`-V` is handled as a leading top-level flag before config load or sandbox init: prints `gyrseek <CARGO_PKG_VERSION>` and exits 0 (works with no config file / no Docker). Only the first arg is matched, so a forwarded command's own `--version` (e.g. `gyrseek pip install foo --version`) is passed through, not intercepted
@@ -110,16 +112,11 @@ Rules:
   - Docker runner adds `--cap-add SYS_PTRACE`: strace runs as root but attaches to the install running as the unprivileged scanner user, and cross-UID ptrace needs CAP_SYS_PTRACE (not granted by Docker default). Scoped to the container PID namespace; cannot trace host processes. Without it strace fails `ptrace(PTRACE_SEIZE): Operation not permitted` and the scan fails closed. This was surfaced by the empty-trace fix below (FINDINGS.md #1)
   - An empty/whitespace sandbox trace is now a hard error (block the whole batch) rather than an empty-but-clean pass: trace_install_docker_matrix_with_runtime returns Err on a blank matrix log + failed single-probe fallback, and the single-probe fallback checks docker exit status. Previously unwrap_or_default() returned "" → empty TraceSignals → allowed:true on any strace failure (was FINDINGS.md #1)
   - strace's own stderr is captured per-probe to `/out/gyrseek_err_N.log` instead of `>/dev/null 2>&1`; `|| true` is kept only so one failing install does not abort sibling probes — a genuine attach failure leaves a blank trace which the empty-trace check turns into a block (was FINDINGS.md #4; deliberately did NOT use `set -e` to abort on strace exit, since strace returns the tracee's exit code and a legitimately failing baseline install would otherwise DoS the whole batch)
-  - If the host command cannot be spawned after a clear scan, gyrseek fails closed (non-zero exit) instead of panicking
-  - Docker runner currently avoids read-only rootfs because apt-based probe tooling setup requires writable root filesystem
-  - Docker runner executes setup as root and uses `APT::Sandbox::User=root` to avoid setgroups failures under capability restrictions
-  - Docker runner does not drop all Linux capabilities (apt-based setup fails under full drop) and explicitly adds SYS_PTRACE as above
-  - Repository now includes a compatibility-first seccomp profile embedded directly in src/sandbox.rs (`EMBEDDED_SECCOMP_PROFILE_JSON`) for ptrace-heavy sandbox runs, plus a staged validation runbook at docs/DOCKER_HARDENING_CHECKLIST.md
-  - Docker and microvm sandbox runs now use an embedded seccomp profile controlled by boolean `GYRSEEK_DOCKER_SECCOMP_PROFILE` (`true`/`false`, default `true`)
-  - Fixed seccomp networking regression: the embedded profile no longer denies core networking syscalls (`socket`, `connect`, `sendto`, `recvfrom`, etc.), which had broken DNS and `apt` inside the sandbox while seccomp was enabled
-  - Docker and microvm runner initialization now emits terminal seccomp status: info with embedded profile filename when enabled, warning with enablement hint when disabled
-  - Network access is enabled in sandbox containers so package managers can reach registries (PyPI, npm, etc.) during install probes; egress controls are planned for future phases after prebuilt scanner images and no-execution-first detection are stable
-  - README documents current Docker hardening limitations and the prebuilt-image path to restore stricter isolation controls
+  - Docker sandbox security (see [`docs/DOCKER_SECURITY.md`](docs/DOCKER_SECURITY.md) for full reference): embedded seccomp + AppArmor profiles in `src/sandbox.rs`; `--cap-add SYS_PTRACE` for cross-UID strace; `--security-opt no-new-privileges`; unprivileged payload via `strace -u gyrseek` with root-owned trace logs; probe batching in single container sessions; strace stderr captured per-probe; empty-trace fail-closed
+  - Seccomp: enabled by default (`GYRSEEK_DOCKER_SECCOMP_PROFILE`, default `true`); conservative profile that avoids denying networking syscalls (fixed regression that broke DNS/apt)
+  - AppArmor: disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`); loaded via `apparmor_parser --cache-loc <tmpdir>`; requires `apparmor-utils` + prebuilt scanner image on Linux; falls back with warning on macOS. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection.
+  - Capabilities not fully dropped; read-only rootfs not enabled (both blocked by runtime apt setup; prebuilt images unblock tighter defaults)
+  - Network access enabled for registry access during probes; egress controls planned for future phases
   - In-run cache reuses scan results for repeated manager/package/version probes within the same execution
   - Fail-closed when package detection is expected but missing
   - README detection coverage table now includes four new TeamPCP attack waves: Telnyx Python SDK T26 (import-time, ❌ gap), Namastex/CanisterSprawl T27 (npm postinstall, ✅), SAP CAP T28 (npm preinstall+Bun, ✅), Bitwarden CLI T29 (npm CI/CD pipeline compromise, ✅)
@@ -130,7 +127,7 @@ After every code or behavior change in this repository:
 2. Update README.md so user-facing documentation matches the current implementation.
 3. Rerun `/graphify` with `graphify update .` so `graphify-out/` stays in sync with the latest code.
 4. Ensure these updates happen in the same change set whenever possible.
-5. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, and docs/ROADMAP.md.
+5. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, docs/ROADMAP.md, and docs/DOCKER_SECURITY.md.
 6. If a new security or correctness finding is identified and fixed, document it in docs/FINDINGS.md.
 
 ## Quick Post-Change Checklist
@@ -143,3 +140,4 @@ After every code or behavior change in this repository:
 - [ ] docs/DEV_GUIDE.md updated if needed
 - [ ] docs/ROADMAP.md updated if needed
 - [ ] docs/FINDINGS.md updated if needed
+- [ ] docs/DOCKER_SECURITY.md updated if needed

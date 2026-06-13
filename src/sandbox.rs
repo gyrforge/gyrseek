@@ -92,6 +92,69 @@ const EMBEDDED_SECCOMP_PROFILE_JSON: &str = r#"{
     ]
 }"#;
 
+const EMBEDDED_APPARMOR_PROFILE_NAME: &str = "gyrseek-tracing";
+/// Embedded AppArmor profile for Docker sandbox containers. Allows outbound
+/// networking (package registries), ptrace (strace), and file access for
+/// install probes (apt, uv, npm, pnpm). Loaded into the kernel via
+/// apparmor_parser at runtime when GYRSEEK_DOCKER_APPARMOR_PROFILE=true.
+/// Falls back to Docker's default profile if apparmor_parser is unavailable.
+const EMBEDDED_APPARMOR_PROFILE_TEXT: &str = r#"#include <tunables/global>
+
+profile gyrseek-tracing flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/consoles>
+
+  capability chown,
+  capability sys_ptrace,
+  capability dac_override,
+  capability dac_read_search,
+  capability fowner,
+  capability fsetid,
+  capability kill,
+  capability setgid,
+  capability setuid,
+  capability sys_chroot,
+  capability mknod,
+  capability setpcap,
+  capability sys_resource,
+
+  ptrace (trace,read,tracedby,readby),
+  signal (send,receive),
+
+  network inet tcp,
+  network inet udp,
+  network inet6 tcp,
+  network inet6 udp,
+
+  / r,
+  /etc/** r,
+  /usr/** rix,
+  /bin/** rix,
+  /sbin/** rix,
+  /lib/** rix,
+  /opt/** rix,
+  /work/ rw,
+  /work/** rwixk,
+  /out/ rw,
+  /out/** rwk,
+  /tmp/ rw,
+  /tmp/** rwixk,
+  /var/** r,
+  /root/ r,
+  /root/** r,
+  /home/ rw,
+  /home/** rwixk,
+  /proc/ r,
+  /proc/** r,
+  /dev/ rw,
+  /dev/** rw,
+  /sys/ r,
+  /sys/** r,
+  /run/ r,
+  /run/** rw,
+}"#;
+
 struct ScannerImageConfig {
     image: String,
     prebuilt: bool,
@@ -128,6 +191,7 @@ pub(crate) fn build_runner_from_env() -> Result<Box<dyn SandboxRunner>, String> 
                 );
             }
             announce_seccomp_status();
+            announce_apparmor_status();
             Ok(Box::new(DockerRunner))
         }
         "microvm" => {
@@ -145,6 +209,7 @@ pub(crate) fn build_runner_from_env() -> Result<Box<dyn SandboxRunner>, String> 
                 ));
             }
             announce_seccomp_status();
+            announce_apparmor_status();
             Ok(Box::new(MicroVmRunner { runtime }))
         }
         "host" => Ok(Box::new(HostRunner)),
@@ -270,14 +335,27 @@ fn trace_install_docker_matrix_with_runtime(
     let output = Command::new("docker")
         .args(&args)
         .stderr(Stdio::piped())
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .output()
         .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
 
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let tail = stdout
+            .lines()
+            .rev()
+            .take(20)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
         return Err(format!(
-            "docker sandbox command failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "docker sandbox command failed (exit code: {}).\nstderr:\n{}\nstdout (last 20 lines):\n{}",
+            output.status.code().unwrap_or(-1),
+            stderr,
+            tail,
         ));
     }
 
@@ -439,9 +517,12 @@ fn strace_install_command(manager: &str, pkg_spec: &str, out_log: Option<&str>) 
 fn image_setup_steps(manager: &str, prebuilt: bool) -> Vec<String> {
     let mut steps = vec!["set -e".to_string()];
     if !prebuilt {
-        steps.push("apt-get -o APT::Sandbox::User=root update >/dev/null".to_string());
         steps.push(
-            "apt-get -o APT::Sandbox::User=root install -y --no-install-recommends strace ca-certificates >/dev/null"
+            "env DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root update >&2"
+                .to_string(),
+        );
+        steps.push(
+            "env DEBIAN_FRONTEND=noninteractive apt-get -o APT::Sandbox::User=root install -y --no-install-recommends strace ca-certificates >&2"
                 .to_string(),
         );
         if manager == "pnpm" {
@@ -558,6 +639,10 @@ fn build_docker_run_args(
         args.push("--security-opt".to_string());
         args.push(seccomp_profile);
     }
+    if let Some(apparmor_profile) = docker_apparmor_profile_name() {
+        args.push("--security-opt".to_string());
+        args.push(format!("apparmor={}", apparmor_profile));
+    }
     if !out_dir_path.is_empty() {
         args.push("-v".to_string());
         args.push(format!("{}:/out", out_dir_path));
@@ -590,6 +675,101 @@ fn docker_seccomp_enabled_from_env() -> bool {
         .unwrap_or(true)
 }
 
+fn docker_apparmor_enabled_from_env() -> bool {
+    std::env::var("GYRSEEK_DOCKER_APPARMOR_PROFILE")
+        .ok()
+        .map(|v| parse_bool_env(&v))
+        .unwrap_or(false)
+}
+
+/// Stores the stderr from the last failed `apparmor_parser` invocation so
+/// `announce_apparmor_status` can include it in the warning message.
+static APPARMOR_LOAD_ERR: OnceLock<String> = OnceLock::new();
+
+/// Runs `apparmor_parser -r -W --cache-loc <cache_dir> <profile>`, writing
+/// the binary cache to a writable location instead of `/var/cache/apparmor`.
+/// If the direct invocation lacks permissions and `GITHUB_ACTIONS=true` (GitHub
+/// Actions runners are non-root with passwordless sudo), retries with `sudo -n`.
+/// Returns `Ok(())` on success or the captured stderr on failure.
+fn try_load_apparmor(
+    profile_path: &std::path::Path,
+    cache_dir: &std::path::Path,
+) -> Result<(), String> {
+    let cache_loc = cache_dir.to_string_lossy();
+    let profile_loc = profile_path.to_string_lossy();
+
+    let run = |use_sudo: bool| -> Result<String, String> {
+        let mut cmd = if use_sudo {
+            let mut c = Command::new("sudo");
+            c.arg("-n").arg("apparmor_parser");
+            c
+        } else {
+            Command::new("apparmor_parser")
+        };
+        let output = cmd
+            .args(["-r", "-W", "--cache-loc"])
+            .arg(cache_loc.as_ref())
+            .arg(profile_loc.as_ref())
+            .stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .output()
+            .map_err(|e| format!("failed to execute: {e}"))?;
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if output.status.success() {
+            Ok(stderr)
+        } else {
+            Err(stderr)
+        }
+    };
+    match run(false) {
+        Ok(_) => Ok(()),
+        Err(stderr)
+            if (stderr.contains("Access denied") || stderr.contains("policy admin privileges"))
+                && std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true") =>
+        {
+            eprintln!(
+                "ℹ️ [gyrseek] GitHub Actions runner detected — retrying with sudo to load AppArmor profile"
+            );
+            run(true).map(|_| ())
+        }
+        Err(stderr) => Err(stderr),
+    }
+}
+
+/// Loads the embedded AppArmor profile into the kernel via `apparmor_parser`
+/// and returns the profile name on success, `None` if disabled by env var or
+/// if loading fails (silent — the caller should announce status). The profile
+/// is loaded once and cached for the process lifetime.
+///
+/// Uses `--cache-loc` to write the binary cache to the same writable temp dir
+/// as the profile text, avoiding permission errors on `/var/cache/apparmor`
+/// (common in containers/CI).
+fn docker_apparmor_profile_name() -> Option<String> {
+    if !docker_apparmor_enabled_from_env() {
+        return None;
+    }
+    static PROFILE_LOADED: OnceLock<Option<String>> = OnceLock::new();
+    PROFILE_LOADED
+        .get_or_init(|| {
+            let dir = TempDir::new().ok()?;
+            let profile_path = dir.path().join(EMBEDDED_APPARMOR_PROFILE_NAME);
+            std::fs::write(&profile_path, EMBEDDED_APPARMOR_PROFILE_TEXT).ok()?;
+
+            match try_load_apparmor(&profile_path, dir.path()) {
+                Ok(()) => {
+                    Box::leak(Box::new(dir));
+                    Some(EMBEDDED_APPARMOR_PROFILE_NAME.to_string())
+                }
+                Err(e) => {
+                    let _ = APPARMOR_LOAD_ERR.set(e);
+                    None
+                }
+            }
+        })
+        .clone()
+}
+
 fn embedded_seccomp_profile_path() -> Result<String, String> {
     static PROFILE: OnceLock<Result<String, String>> = OnceLock::new();
     PROFILE
@@ -616,13 +796,38 @@ fn embedded_seccomp_profile_path() -> Result<String, String> {
 fn announce_seccomp_status() {
     if docker_seccomp_enabled_from_env() {
         eprintln!(
-            "[gyrseek][INFO] Seccomp profile enabled: {} (embedded)",
+            "ℹ️ [gyrseek] Seccomp profile enabled: {} (embedded)",
             EMBEDDED_SECCOMP_PROFILE_NAME
         );
     } else {
         eprintln!(
-            "[gyrseek][WARN] Seccomp profile not in use. Set GYRSEEK_DOCKER_SECCOMP_PROFILE=true to enable it."
+            "⚠️ [gyrseek] Seccomp profile not in use. Set GYRSEEK_DOCKER_SECCOMP_PROFILE=true to enable it."
         );
+    }
+}
+
+fn announce_apparmor_status() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    match docker_apparmor_profile_name() {
+        Some(name) => eprintln!("ℹ️ [gyrseek] AppArmor profile loaded: {} (embedded)", name),
+        None if !docker_apparmor_enabled_from_env() => {
+            eprintln!(
+                "ℹ️ [gyrseek] AppArmor profile disabled via GYRSEEK_DOCKER_APPARMOR_PROFILE=false"
+            )
+        }
+        None => {
+            let detail = APPARMOR_LOAD_ERR
+                .get()
+                .map(|s| s.as_str())
+                .unwrap_or("apparmor_parser not found or failed");
+            eprintln!(
+                "⚠️ [gyrseek] AppArmor profile not available: {detail}\n\
+                 Container will use Docker's default AppArmor profile. \
+                 Set GYRSEEK_DOCKER_APPARMOR_PROFILE=false to silence this warning."
+            )
+        }
     }
 }
 
@@ -721,8 +926,10 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
+        EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
         EMBEDDED_SECCOMP_PROFILE_JSON, SCANNER_USER, build_artifact_scan_steps,
-        build_docker_run_args, build_matrix_script, build_single_script, strace_install_command,
+        build_docker_run_args, build_matrix_script, build_single_script,
+        docker_apparmor_enabled_from_env, docker_apparmor_profile_name, strace_install_command,
     };
     use std::sync::{Mutex, OnceLock};
 
@@ -969,6 +1176,100 @@ mod tests {
                 !denied_networking,
                 "embedded seccomp profile must not block container networking: {syscall:?}"
             );
+        }
+    }
+
+    // --- AppArmor profile ---
+
+    #[test]
+    fn embedded_apparmor_profile_mentions_cap_sys_ptrace() {
+        assert!(
+            EMBEDDED_APPARMOR_PROFILE_TEXT.contains("capability sys_ptrace"),
+            "AppArmor profile must allow sys_ptrace for strace cross-UID tracing"
+        );
+    }
+
+    #[test]
+    fn embedded_apparmor_profile_allows_network() {
+        assert!(
+            EMBEDDED_APPARMOR_PROFILE_TEXT.contains("network inet tcp"),
+            "AppArmor profile must allow TCP for package registries: {}",
+            EMBEDDED_APPARMOR_PROFILE_TEXT
+        );
+        assert!(
+            EMBEDDED_APPARMOR_PROFILE_TEXT.contains("network inet6 tcp"),
+            "AppArmor profile must allow TCP6 for package registries"
+        );
+    }
+
+    #[test]
+    fn embedded_apparmor_profile_allows_ptrace() {
+        assert!(
+            EMBEDDED_APPARMOR_PROFILE_TEXT.contains("ptrace (trace,read,tracedby,readby)"),
+            "AppArmor profile must allow ptrace for strace"
+        );
+    }
+
+    #[test]
+    fn embedded_apparmor_profile_allows_work_out_tmp_writes() {
+        assert!(
+            EMBEDDED_APPARMOR_PROFILE_TEXT.contains("/work/ rw"),
+            "profile must grant rw to /work"
+        );
+        assert!(
+            EMBEDDED_APPARMOR_PROFILE_TEXT.contains("/out/ rw"),
+            "profile must grant rw to /out"
+        );
+        assert!(
+            EMBEDDED_APPARMOR_PROFILE_TEXT.contains("/tmp/ rw"),
+            "profile must grant rw to /tmp"
+        );
+    }
+
+    #[test]
+    fn embedded_apparmor_profile_valid_profile_name() {
+        assert_eq!(EMBEDDED_APPARMOR_PROFILE_NAME, "gyrseek-tracing");
+    }
+
+    #[test]
+    fn apparmor_env_var_default_false() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        unsafe {
+            std::env::remove_var("GYRSEEK_DOCKER_APPARMOR_PROFILE");
+        }
+
+        assert!(
+            !docker_apparmor_enabled_from_env(),
+            "default should be false"
+        );
+
+        unsafe {
+            std::env::set_var("GYRSEEK_DOCKER_APPARMOR_PROFILE", "true");
+        }
+        assert!(docker_apparmor_enabled_from_env());
+
+        unsafe {
+            std::env::set_var("GYRSEEK_DOCKER_APPARMOR_PROFILE", "false");
+        }
+        assert!(!docker_apparmor_enabled_from_env());
+
+        unsafe {
+            std::env::remove_var("GYRSEEK_DOCKER_APPARMOR_PROFILE");
+        }
+    }
+
+    #[test]
+    fn apparmor_disabled_wont_call_apparmor_parser() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        unsafe {
+            std::env::set_var("GYRSEEK_DOCKER_APPARMOR_PROFILE", "false");
+        }
+
+        let result = docker_apparmor_profile_name();
+        assert!(result.is_none(), "disabled profile should return None");
+
+        unsafe {
+            std::env::remove_var("GYRSEEK_DOCKER_APPARMOR_PROFILE");
         }
     }
 

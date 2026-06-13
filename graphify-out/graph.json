@@ -124,7 +124,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "plugins_graphify",
-      "community": 12,
+      "community": 30,
       "norm_label": "graphify.js"
     },
     {
@@ -134,7 +134,7 @@
       "source_location": "L6",
       "_origin": "ast",
       "id": "plugins_graphify_graphifyplugin",
-      "community": 12,
+      "community": 30,
       "norm_label": "graphifyplugin()"
     },
     {
@@ -761,7 +761,7 @@
       "label": "parses_uv_add_as_latest_when_unpinned()",
       "file_type": "code",
       "source_file": "src/lib.rs",
-      "source_location": "L1250",
+      "source_location": "L1249",
       "_origin": "ast",
       "id": "src_lib_parses_uv_add_as_latest_when_unpinned",
       "community": 1,
@@ -771,7 +771,7 @@
       "label": "parses_uv_pip_install_with_pinned_version()",
       "file_type": "code",
       "source_file": "src/lib.rs",
-      "source_location": "L1262",
+      "source_location": "L1261",
       "_origin": "ast",
       "id": "src_lib_parses_uv_pip_install_with_pinned_version",
       "community": 1,
@@ -781,7 +781,7 @@
       "label": "parses_poetry_update_as_latest_when_unpinned()",
       "file_type": "code",
       "source_file": "src/lib.rs",
-      "source_location": "L1275",
+      "source_location": "L1274",
       "_origin": "ast",
       "id": "src_lib_parses_poetry_update_as_latest_when_unpinned",
       "community": 1,
@@ -791,7 +791,7 @@
       "label": "ignores_non_install_commands()",
       "file_type": "code",
       "source_file": "src/lib.rs",
-      "source_location": "L1287",
+      "source_location": "L1286",
       "_origin": "ast",
       "id": "src_lib_ignores_non_install_commands",
       "community": 1,
@@ -801,7 +801,7 @@
       "label": "parses_npm_install_as_latest_when_unpinned()",
       "file_type": "code",
       "source_file": "src/lib.rs",
-      "source_location": "L1299",
+      "source_location": "L1298",
       "_origin": "ast",
       "id": "src_lib_parses_npm_install_as_latest_when_unpinned",
       "community": 1,
@@ -811,7 +811,7 @@
       "label": "parses_npm_install_with_pinned_version()",
       "file_type": "code",
       "source_file": "src/lib.rs",
-      "source_location": "L1311",
+      "source_location": "L1310",
       "_origin": "ast",
       "id": "src_lib_parses_npm_install_with_pinned_version",
       "community": 1,
@@ -821,7 +821,7 @@
       "label": "parses_pnpm_add_as_latest_when_unpinned()",
       "file_type": "code",
       "source_file": "src/lib.rs",
-      "source_location": "L1323",
+      "source_location": "L1322",
       "_origin": "ast",
       "id": "src_lib_parses_pnpm_add_as_latest_when_unpinned",
       "community": 1,
@@ -831,7 +831,7 @@
       "label": "parses_pnpm_add_with_pinned_version()",
       "file_type": "code",
       "source_file": "src/lib.rs",
-      "source_location": "L1335",
+      "source_location": "L1334",
       "_origin": "ast",
       "id": "src_lib_parses_pnpm_add_with_pinned_version",
       "community": 1,
@@ -841,7 +841,7 @@
       "label": "uv_sync_has_no_single_package_target()",
       "file_type": "code",
       "source_file": "src/lib.rs",
-      "source_location": "L1347",
+      "source_location": "L1346",
       "_origin": "ast",
       "id": "src_lib_uv_sync_has_no_single_package_target",
       "community": 1,
@@ -854,7 +854,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_main",
-      "community": 14,
+      "community": 1,
       "norm_label": "main.rs"
     },
     {
@@ -864,7 +864,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "src_main_main",
-      "community": 14,
+      "community": 1,
       "norm_label": "main()"
     },
     {
@@ -1601,7 +1601,7 @@
       "label": "ScannerImageConfig",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L91",
+      "source_location": "L158",
       "_origin": "ast",
       "id": "src_sandbox_scannerimageconfig",
       "community": 2,
@@ -1611,7 +1611,7 @@
       "label": "String",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L92",
+      "source_location": "L159",
       "_origin": "ast",
       "id": "src_sandbox_rs_string",
       "community": 2,
@@ -1621,7 +1621,7 @@
       "label": "SandboxRunner",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L99",
+      "source_location": "L166",
       "_origin": "ast",
       "id": "src_sandbox_sandboxrunner",
       "community": 2,
@@ -1631,7 +1631,7 @@
       "label": "build_runner_from_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L116",
+      "source_location": "L183",
       "_origin": "ast",
       "id": "src_sandbox_build_runner_from_env",
       "community": 2,
@@ -1641,7 +1641,7 @@
       "label": "Result",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L116",
+      "source_location": "L183",
       "_origin": "ast",
       "id": "src_sandbox_rs_result",
       "community": 2,
@@ -1651,7 +1651,7 @@
       "label": "Box",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L116",
+      "source_location": "L183",
       "_origin": "ast",
       "id": "box",
       "community": 2,
@@ -1661,7 +1661,7 @@
       "label": "HostRunner",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L154",
+      "source_location": "L223",
       "_origin": "ast",
       "id": "src_sandbox_hostrunner",
       "community": 2,
@@ -1671,7 +1671,7 @@
       "label": ".trace_install()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L157",
+      "source_location": "L226",
       "_origin": "ast",
       "id": "src_sandbox_hostrunner_trace_install",
       "community": 2,
@@ -1681,7 +1681,7 @@
       "label": "DockerRunner",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L205",
+      "source_location": "L274",
       "_origin": "ast",
       "id": "src_sandbox_dockerrunner",
       "community": 2,
@@ -1691,7 +1691,7 @@
       "label": "MicroVmRunner",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L207",
+      "source_location": "L276",
       "_origin": "ast",
       "id": "src_sandbox_microvmrunner",
       "community": 2,
@@ -1701,7 +1701,7 @@
       "label": ".trace_install()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L212",
+      "source_location": "L281",
       "_origin": "ast",
       "id": "src_sandbox_dockerrunner_trace_install",
       "community": 2,
@@ -1711,7 +1711,7 @@
       "label": ".trace_install_matrix()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L221",
+      "source_location": "L290",
       "_origin": "ast",
       "id": "src_sandbox_dockerrunner_trace_install_matrix",
       "community": 2,
@@ -1721,7 +1721,7 @@
       "label": "Vec",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L221",
+      "source_location": "L290",
       "_origin": "ast",
       "id": "src_sandbox_rs_vec",
       "community": 2,
@@ -1731,7 +1731,7 @@
       "label": "ProbeTrace",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L221",
+      "source_location": "L290",
       "_origin": "ast",
       "id": "probetrace",
       "community": 2,
@@ -1741,7 +1741,7 @@
       "label": ".trace_install()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L231",
+      "source_location": "L300",
       "_origin": "ast",
       "id": "src_sandbox_microvmrunner_trace_install",
       "community": 2,
@@ -1751,7 +1751,7 @@
       "label": ".trace_install_matrix()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L240",
+      "source_location": "L309",
       "_origin": "ast",
       "id": "src_sandbox_microvmrunner_trace_install_matrix",
       "community": 2,
@@ -1761,7 +1761,7 @@
       "label": "trace_install_docker_matrix_with_runtime()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L249",
+      "source_location": "L318",
       "_origin": "ast",
       "id": "src_sandbox_trace_install_docker_matrix_with_runtime",
       "community": 2,
@@ -1771,7 +1771,7 @@
       "label": "Option",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L249",
+      "source_location": "L318",
       "_origin": "ast",
       "id": "src_sandbox_rs_option",
       "community": 2,
@@ -1781,7 +1781,7 @@
       "label": "trace_install_docker_single_with_runtime()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L318",
+      "source_location": "L400",
       "_origin": "ast",
       "id": "src_sandbox_trace_install_docker_single_with_runtime",
       "community": 2,
@@ -1791,7 +1791,7 @@
       "label": "is_npm_family_manager()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L356",
+      "source_location": "L438",
       "_origin": "ast",
       "id": "src_sandbox_is_npm_family_manager",
       "community": 2,
@@ -1801,7 +1801,7 @@
       "label": "npm_family_install_subcommand()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L360",
+      "source_location": "L442",
       "_origin": "ast",
       "id": "src_sandbox_npm_family_install_subcommand",
       "community": 2,
@@ -1811,7 +1811,7 @@
       "label": "npm_family_install_dir_flag()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L364",
+      "source_location": "L446",
       "_origin": "ast",
       "id": "src_sandbox_npm_family_install_dir_flag",
       "community": 2,
@@ -1821,7 +1821,7 @@
       "label": "package_spec()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L373",
+      "source_location": "L455",
       "_origin": "ast",
       "id": "src_sandbox_package_spec",
       "community": 2,
@@ -1831,7 +1831,7 @@
       "label": "scanner_user_setup_steps()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L383",
+      "source_location": "L465",
       "_origin": "ast",
       "id": "src_sandbox_scanner_user_setup_steps",
       "community": 2,
@@ -1841,7 +1841,7 @@
       "label": "install_invocation()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L399",
+      "source_location": "L481",
       "_origin": "ast",
       "id": "src_sandbox_install_invocation",
       "community": 2,
@@ -1851,7 +1851,7 @@
       "label": "strace_install_command()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L422",
+      "source_location": "L504",
       "_origin": "ast",
       "id": "src_sandbox_strace_install_command",
       "community": 2,
@@ -1861,7 +1861,7 @@
       "label": "image_setup_steps()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L435",
+      "source_location": "L517",
       "_origin": "ast",
       "id": "src_sandbox_image_setup_steps",
       "community": 2,
@@ -1871,7 +1871,7 @@
       "label": "build_artifact_scan_steps()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L459",
+      "source_location": "L544",
       "_origin": "ast",
       "id": "src_sandbox_build_artifact_scan_steps",
       "community": 2,
@@ -1881,7 +1881,7 @@
       "label": "build_matrix_script()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L481",
+      "source_location": "L566",
       "_origin": "ast",
       "id": "src_sandbox_build_matrix_script",
       "community": 2,
@@ -1891,7 +1891,7 @@
       "label": "build_single_script()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L507",
+      "source_location": "L592",
       "_origin": "ast",
       "id": "src_sandbox_build_single_script",
       "community": 2,
@@ -1901,7 +1901,7 @@
       "label": "build_docker_run_args()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L519",
+      "source_location": "L604",
       "_origin": "ast",
       "id": "src_sandbox_build_docker_run_args",
       "community": 2,
@@ -1911,7 +1911,7 @@
       "label": "docker_seccomp_profile_arg()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L574",
+      "source_location": "L663",
       "_origin": "ast",
       "id": "src_sandbox_docker_seccomp_profile_arg",
       "community": 2,
@@ -1921,17 +1921,57 @@
       "label": "docker_seccomp_enabled_from_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L582",
+      "source_location": "L671",
       "_origin": "ast",
       "id": "src_sandbox_docker_seccomp_enabled_from_env",
       "community": 2,
       "norm_label": "docker_seccomp_enabled_from_env()"
     },
     {
+      "label": "docker_apparmor_enabled_from_env()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L678",
+      "_origin": "ast",
+      "id": "src_sandbox_docker_apparmor_enabled_from_env",
+      "community": 2,
+      "norm_label": "docker_apparmor_enabled_from_env()"
+    },
+    {
+      "label": "try_load_apparmor()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L694",
+      "_origin": "ast",
+      "id": "src_sandbox_try_load_apparmor",
+      "community": 2,
+      "norm_label": "try_load_apparmor()"
+    },
+    {
+      "label": "Path",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L694",
+      "_origin": "ast",
+      "id": "src_sandbox_rs_path",
+      "community": 2,
+      "norm_label": "path"
+    },
+    {
+      "label": "docker_apparmor_profile_name()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L748",
+      "_origin": "ast",
+      "id": "src_sandbox_docker_apparmor_profile_name",
+      "community": 2,
+      "norm_label": "docker_apparmor_profile_name()"
+    },
+    {
       "label": "embedded_seccomp_profile_path()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L589",
+      "source_location": "L773",
       "_origin": "ast",
       "id": "src_sandbox_embedded_seccomp_profile_path",
       "community": 2,
@@ -1941,17 +1981,27 @@
       "label": "announce_seccomp_status()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L605",
+      "source_location": "L796",
       "_origin": "ast",
       "id": "src_sandbox_announce_seccomp_status",
       "community": 2,
       "norm_label": "announce_seccomp_status()"
     },
     {
+      "label": "announce_apparmor_status()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L809",
+      "_origin": "ast",
+      "id": "src_sandbox_announce_apparmor_status",
+      "community": 2,
+      "norm_label": "announce_apparmor_status()"
+    },
+    {
       "label": "docker_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L618",
+      "source_location": "L834",
       "_origin": "ast",
       "id": "src_sandbox_docker_available",
       "community": 2,
@@ -1961,7 +2011,7 @@
       "label": "docker_runtime_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L628",
+      "source_location": "L844",
       "_origin": "ast",
       "id": "src_sandbox_docker_runtime_available",
       "community": 2,
@@ -1971,7 +2021,7 @@
       "label": "scanner_image_config()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L634",
+      "source_location": "L850",
       "_origin": "ast",
       "id": "src_sandbox_scanner_image_config",
       "community": 2,
@@ -1981,7 +2031,7 @@
       "label": "parse_bool_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L671",
+      "source_location": "L887",
       "_origin": "ast",
       "id": "src_sandbox_parse_bool_env",
       "community": 2,
@@ -1991,7 +2041,7 @@
       "label": "list_docker_runtimes()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L678",
+      "source_location": "L894",
       "_origin": "ast",
       "id": "src_sandbox_list_docker_runtimes",
       "community": 2,
@@ -2001,7 +2051,7 @@
       "label": "shell_single_quoted()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L706",
+      "source_location": "L922",
       "_origin": "ast",
       "id": "src_sandbox_shell_single_quoted",
       "community": 2,
@@ -2011,7 +2061,7 @@
       "label": "env_lock()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L718",
+      "source_location": "L936",
       "_origin": "ast",
       "id": "src_sandbox_env_lock",
       "community": 2,
@@ -2021,7 +2071,7 @@
       "label": "Mutex",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L718",
+      "source_location": "L936",
       "_origin": "ast",
       "id": "src_sandbox_rs_mutex",
       "community": 2,
@@ -2031,7 +2081,7 @@
       "label": "strace_command_disables_string_truncation()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L726",
+      "source_location": "L944",
       "_origin": "ast",
       "id": "src_sandbox_strace_command_disables_string_truncation",
       "community": 2,
@@ -2041,7 +2091,7 @@
       "label": "matrix_and_single_scripts_disable_truncation()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L735",
+      "source_location": "L953",
       "_origin": "ast",
       "id": "src_sandbox_matrix_and_single_scripts_disable_truncation",
       "community": 2,
@@ -2051,7 +2101,7 @@
       "label": "strace_drops_payload_to_unprivileged_user()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L752",
+      "source_location": "L970",
       "_origin": "ast",
       "id": "src_sandbox_strace_drops_payload_to_unprivileged_user",
       "community": 2,
@@ -2061,7 +2111,7 @@
       "label": "matrix_script_creates_scanner_user_before_install()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L765",
+      "source_location": "L983",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_creates_scanner_user_before_install",
       "community": 2,
@@ -2071,7 +2121,7 @@
       "label": "pnpm_install_invocation_uses_pnpm_add()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L784",
+      "source_location": "L1002",
       "_origin": "ast",
       "id": "src_sandbox_pnpm_install_invocation_uses_pnpm_add",
       "community": 2,
@@ -2081,7 +2131,7 @@
       "label": "pnpm_non_prebuilt_image_enables_pnpm()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L791",
+      "source_location": "L1009",
       "_origin": "ast",
       "id": "src_sandbox_pnpm_non_prebuilt_image_enables_pnpm",
       "community": 2,
@@ -2091,7 +2141,7 @@
       "label": "docker_args_keep_out_mount_when_provided_and_omit_when_empty()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L802",
+      "source_location": "L1020",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_keep_out_mount_when_provided_and_omit_when_empty",
       "community": 2,
@@ -2101,7 +2151,7 @@
       "label": "docker_args_pass_runtime_when_set()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L825",
+      "source_location": "L1043",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_pass_runtime_when_set",
       "community": 2,
@@ -2111,7 +2161,7 @@
       "label": "docker_args_grant_sys_ptrace_capability()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L847",
+      "source_location": "L1065",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_grant_sys_ptrace_capability",
       "community": 2,
@@ -2121,7 +2171,7 @@
       "label": "docker_args_adds_seccomp_profile_by_default()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L872",
+      "source_location": "L1090",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_adds_seccomp_profile_by_default",
       "community": 2,
@@ -2131,7 +2181,7 @@
       "label": "docker_args_disables_seccomp_when_env_var_false()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L896",
+      "source_location": "L1114",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_disables_seccomp_when_env_var_false",
       "community": 2,
@@ -2141,7 +2191,7 @@
       "label": "docker_args_enables_seccomp_when_env_var_true()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L918",
+      "source_location": "L1136",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_enables_seccomp_when_env_var_true",
       "community": 2,
@@ -2151,17 +2201,87 @@
       "label": "embedded_seccomp_profile_keeps_networking_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L940",
+      "source_location": "L1158",
       "_origin": "ast",
       "id": "src_sandbox_embedded_seccomp_profile_keeps_networking_available",
       "community": 2,
       "norm_label": "embedded_seccomp_profile_keeps_networking_available()"
     },
     {
+      "label": "embedded_apparmor_profile_mentions_cap_sys_ptrace()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1185",
+      "_origin": "ast",
+      "id": "src_sandbox_embedded_apparmor_profile_mentions_cap_sys_ptrace",
+      "community": 2,
+      "norm_label": "embedded_apparmor_profile_mentions_cap_sys_ptrace()"
+    },
+    {
+      "label": "embedded_apparmor_profile_allows_network()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1193",
+      "_origin": "ast",
+      "id": "src_sandbox_embedded_apparmor_profile_allows_network",
+      "community": 2,
+      "norm_label": "embedded_apparmor_profile_allows_network()"
+    },
+    {
+      "label": "embedded_apparmor_profile_allows_ptrace()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1206",
+      "_origin": "ast",
+      "id": "src_sandbox_embedded_apparmor_profile_allows_ptrace",
+      "community": 2,
+      "norm_label": "embedded_apparmor_profile_allows_ptrace()"
+    },
+    {
+      "label": "embedded_apparmor_profile_allows_work_out_tmp_writes()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1214",
+      "_origin": "ast",
+      "id": "src_sandbox_embedded_apparmor_profile_allows_work_out_tmp_writes",
+      "community": 2,
+      "norm_label": "embedded_apparmor_profile_allows_work_out_tmp_writes()"
+    },
+    {
+      "label": "embedded_apparmor_profile_valid_profile_name()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1230",
+      "_origin": "ast",
+      "id": "src_sandbox_embedded_apparmor_profile_valid_profile_name",
+      "community": 2,
+      "norm_label": "embedded_apparmor_profile_valid_profile_name()"
+    },
+    {
+      "label": "apparmor_env_var_default_false()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1235",
+      "_origin": "ast",
+      "id": "src_sandbox_apparmor_env_var_default_false",
+      "community": 2,
+      "norm_label": "apparmor_env_var_default_false()"
+    },
+    {
+      "label": "apparmor_disabled_wont_call_apparmor_parser()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1262",
+      "_origin": "ast",
+      "id": "src_sandbox_apparmor_disabled_wont_call_apparmor_parser",
+      "community": 2,
+      "norm_label": "apparmor_disabled_wont_call_apparmor_parser()"
+    },
+    {
       "label": "matrix_script_captures_strace_stderr_not_devnull()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L973",
+      "source_location": "L1279",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_captures_strace_stderr_not_devnull",
       "community": 2,
@@ -2171,7 +2291,7 @@
       "label": "artifact_scan_steps_inventory_all_files()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L999",
+      "source_location": "L1305",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_inventory_all_files",
       "community": 2,
@@ -2181,7 +2301,7 @@
       "label": "artifact_scan_steps_pipe_char_in_content_replaced()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1021",
+      "source_location": "L1327",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_pipe_char_in_content_replaced",
       "community": 2,
@@ -2191,7 +2311,7 @@
       "label": "artifact_scan_steps_output_to_correct_log()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1031",
+      "source_location": "L1337",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_output_to_correct_log",
       "community": 2,
@@ -2201,7 +2321,7 @@
       "label": "matrix_script_includes_artifact_scan_after_each_probe()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1039",
+      "source_location": "L1345",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_includes_artifact_scan_after_each_probe",
       "community": 2,
@@ -2234,7 +2354,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "hashset",
-      "community": 11,
+      "community": 4,
       "norm_label": "hashset"
     },
     {
@@ -2244,7 +2364,7 @@
       "source_location": "L17",
       "_origin": "ast",
       "id": "src_scanning_rs_string",
-      "community": 11,
+      "community": 4,
       "norm_label": "string"
     },
     {
@@ -2354,7 +2474,7 @@
       "source_location": "L107",
       "_origin": "ast",
       "id": "src_scanning_tracesignals",
-      "community": 11,
+      "community": 4,
       "norm_label": "tracesignals"
     },
     {
@@ -2474,7 +2594,7 @@
       "source_location": "L236",
       "_origin": "ast",
       "id": "src_scanning_normalize_domain",
-      "community": 11,
+      "community": 4,
       "norm_label": "normalize_domain()"
     },
     {
@@ -2484,7 +2604,7 @@
       "source_location": "L240",
       "_origin": "ast",
       "id": "src_scanning_domain_is_allowlisted",
-      "community": 11,
+      "community": 4,
       "norm_label": "domain_is_allowlisted()"
     },
     {
@@ -2494,7 +2614,7 @@
       "source_location": "L251",
       "_origin": "ast",
       "id": "src_scanning_filter_domain_allowlisted_new_connections_with",
-      "community": 20,
+      "community": 4,
       "norm_label": "filter_domain_allowlisted_new_connections_with()"
     },
     {
@@ -2504,7 +2624,7 @@
       "source_location": "L251",
       "_origin": "ast",
       "id": "f",
-      "community": 20,
+      "community": 4,
       "norm_label": "f"
     },
     {
@@ -2554,7 +2674,7 @@
       "source_location": "L303",
       "_origin": "ast",
       "id": "src_scanning_enrich_new_connection_domains_with",
-      "community": 20,
+      "community": 4,
       "norm_label": "enrich_new_connection_domains_with()"
     },
     {
@@ -2604,7 +2724,7 @@
       "source_location": "L586",
       "_origin": "ast",
       "id": "src_scanning_trace_sandbox_install_matrix",
-      "community": 11,
+      "community": 4,
       "norm_label": "trace_sandbox_install_matrix()"
     },
     {
@@ -2614,7 +2734,7 @@
       "source_location": "L586",
       "_origin": "ast",
       "id": "src_scanning_rs_sandboxrunner",
-      "community": 5,
+      "community": 4,
       "norm_label": "sandboxrunner"
     },
     {
@@ -2624,7 +2744,7 @@
       "source_location": "L586",
       "_origin": "ast",
       "id": "src_scanning_rs_result",
-      "community": 11,
+      "community": 4,
       "norm_label": "result"
     },
     {
@@ -2644,7 +2764,7 @@
       "source_location": "L654",
       "_origin": "ast",
       "id": "src_scanning_parse_execve_argvs",
-      "community": 11,
+      "community": 4,
       "norm_label": "parse_execve_argvs()"
     },
     {
@@ -2654,7 +2774,7 @@
       "source_location": "L685",
       "_origin": "ast",
       "id": "src_scanning_executable_basename",
-      "community": 11,
+      "community": 3,
       "norm_label": "executable_basename()"
     },
     {
@@ -2664,7 +2784,7 @@
       "source_location": "L689",
       "_origin": "ast",
       "id": "src_scanning_extract_git_clone_signatures",
-      "community": 11,
+      "community": 4,
       "norm_label": "extract_git_clone_signatures()"
     },
     {
@@ -2674,7 +2794,7 @@
       "source_location": "L743",
       "_origin": "ast",
       "id": "src_scanning_is_harness_command",
-      "community": 11,
+      "community": 3,
       "norm_label": "is_harness_command()"
     },
     {
@@ -2684,7 +2804,7 @@
       "source_location": "L781",
       "_origin": "ast",
       "id": "src_scanning_extract_process_exec_signatures",
-      "community": 11,
+      "community": 3,
       "norm_label": "extract_process_exec_signatures()"
     },
     {
@@ -2694,7 +2814,7 @@
       "source_location": "L797",
       "_origin": "ast",
       "id": "src_scanning_find_new_git_clone_signatures",
-      "community": 11,
+      "community": 4,
       "norm_label": "find_new_git_clone_signatures()"
     },
     {
@@ -2704,7 +2824,7 @@
       "source_location": "L807",
       "_origin": "ast",
       "id": "src_scanning_find_new_process_exec_signatures",
-      "community": 11,
+      "community": 3,
       "norm_label": "find_new_process_exec_signatures()"
     },
     {
@@ -3034,7 +3154,7 @@
       "source_location": "L1790",
       "_origin": "ast",
       "id": "src_scanning_extract_process_exec_captures_bun_run_with_argv",
-      "community": 11,
+      "community": 3,
       "norm_label": "extract_process_exec_captures_bun_run_with_argv()"
     },
     {
@@ -3074,7 +3194,7 @@
       "source_location": "L1832",
       "_origin": "ast",
       "id": "src_scanning_extract_process_exec_preserves_brackets_in_argv",
-      "community": 11,
+      "community": 3,
       "norm_label": "extract_process_exec_preserves_brackets_in_argv()"
     },
     {
@@ -3084,7 +3204,7 @@
       "source_location": "L1843",
       "_origin": "ast",
       "id": "src_scanning_extract_process_exec_uses_basename_so_path_does_not_matter",
-      "community": 11,
+      "community": 3,
       "norm_label": "extract_process_exec_uses_basename_so_path_does_not_matter()"
     },
     {
@@ -3094,7 +3214,7 @@
       "source_location": "L1856",
       "_origin": "ast",
       "id": "src_scanning_extract_process_exec_captures_all_executables",
-      "community": 11,
+      "community": 3,
       "norm_label": "extract_process_exec_captures_all_executables()"
     },
     {
@@ -3104,7 +3224,7 @@
       "source_location": "L1870",
       "_origin": "ast",
       "id": "src_scanning_extract_process_exec_skips_harness_uv_pip_install",
-      "community": 11,
+      "community": 3,
       "norm_label": "extract_process_exec_skips_harness_uv_pip_install()"
     },
     {
@@ -3114,7 +3234,7 @@
       "source_location": "L1884",
       "_origin": "ast",
       "id": "src_scanning_extract_process_exec_skips_harness_python_interpreter_info",
-      "community": 11,
+      "community": 3,
       "norm_label": "extract_process_exec_skips_harness_python_interpreter_info()"
     },
     {
@@ -3124,7 +3244,7 @@
       "source_location": "L1896",
       "_origin": "ast",
       "id": "src_scanning_extract_process_exec_skips_harness_env_wrapper",
-      "community": 11,
+      "community": 3,
       "norm_label": "extract_process_exec_skips_harness_env_wrapper()"
     },
     {
@@ -3144,7 +3264,7 @@
       "source_location": "L1923",
       "_origin": "ast",
       "id": "src_scanning_extract_process_exec_skips_harness_pnpm_add",
-      "community": 11,
+      "community": 3,
       "norm_label": "extract_process_exec_skips_harness_pnpm_add()"
     },
     {
@@ -3154,7 +3274,7 @@
       "source_location": "L1936",
       "_origin": "ast",
       "id": "src_scanning_case_1_new_bun_is_flagged_against_clean_baseline",
-      "community": 11,
+      "community": 3,
       "norm_label": "case_1_new_bun_is_flagged_against_clean_baseline()"
     },
     {
@@ -3164,7 +3284,7 @@
       "source_location": "L1949",
       "_origin": "ast",
       "id": "src_scanning_case_2_existing_bun_plus_additional_invocation_is_flagged",
-      "community": 11,
+      "community": 3,
       "norm_label": "case_2_existing_bun_plus_additional_invocation_is_flagged()"
     },
     {
@@ -3174,7 +3294,7 @@
       "source_location": "L1966",
       "_origin": "ast",
       "id": "src_scanning_case_2b_changed_bun_arguments_are_flagged",
-      "community": 11,
+      "community": 3,
       "norm_label": "case_2b_changed_bun_arguments_are_flagged()"
     },
     {
@@ -3404,7 +3524,7 @@
       "source_location": "L2303",
       "_origin": "ast",
       "id": "src_scanning_dns_enrichment_reports_context_and_domain_overlap_matches",
-      "community": 20,
+      "community": 4,
       "norm_label": "dns_enrichment_reports_context_and_domain_overlap_matches()"
     },
     {
@@ -3414,7 +3534,7 @@
       "source_location": "L2331",
       "_origin": "ast",
       "id": "src_scanning_dns_enrichment_ignores_unresolved_ips_without_failing",
-      "community": 20,
+      "community": 4,
       "norm_label": "dns_enrichment_ignores_unresolved_ips_without_failing()"
     },
     {
@@ -3434,7 +3554,7 @@
       "source_location": "L2353",
       "_origin": "ast",
       "id": "src_scanning_domain_allowlist_filters_resolved_domains_before_blocking",
-      "community": 20,
+      "community": 4,
       "norm_label": "domain_allowlist_filters_resolved_domains_before_blocking()"
     },
     {
@@ -3444,7 +3564,7 @@
       "source_location": "L2374",
       "_origin": "ast",
       "id": "src_scanning_domain_allowlist_does_not_filter_when_lookup_fails",
-      "community": 20,
+      "community": 4,
       "norm_label": "domain_allowlist_does_not_filter_when_lookup_fails()"
     },
     {
@@ -3454,7 +3574,7 @@
       "source_location": "L2388",
       "_origin": "ast",
       "id": "src_scanning_domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot",
-      "community": 20,
+      "community": 4,
       "norm_label": "domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot()"
     },
     {
@@ -3504,7 +3624,7 @@
       "source_location": "L2470",
       "_origin": "ast",
       "id": "src_scanning_mockrunner",
-      "community": 11,
+      "community": 4,
       "norm_label": "mockrunner"
     },
     {
@@ -3514,7 +3634,7 @@
       "source_location": "L2475",
       "_origin": "ast",
       "id": "src_scanning_mockrunner_trace_install",
-      "community": 11,
+      "community": 4,
       "norm_label": ".trace_install()"
     },
     {
@@ -3544,7 +3664,7 @@
       "source_location": "L2500",
       "_origin": "ast",
       "id": "src_scanning_envvarguard",
-      "community": 5,
+      "community": 15,
       "norm_label": "envvarguard"
     },
     {
@@ -3554,7 +3674,7 @@
       "source_location": "L2501",
       "_origin": "ast",
       "id": "mutexguard",
-      "community": 5,
+      "community": 15,
       "norm_label": "mutexguard"
     },
     {
@@ -3574,7 +3694,7 @@
       "source_location": "L2517",
       "_origin": "ast",
       "id": "src_scanning_rs_drop",
-      "community": 5,
+      "community": 15,
       "norm_label": "drop"
     },
     {
@@ -3584,7 +3704,7 @@
       "source_location": "L2518",
       "_origin": "ast",
       "id": "src_scanning_envvarguard_drop",
-      "community": 5,
+      "community": 15,
       "norm_label": ".drop()"
     },
     {
@@ -4043,7 +4163,7 @@
       "source_file": "tests/forward_fail_closed_tests.rs",
       "source_location": "L7",
       "_origin": "ast",
-      "id": "path",
+      "id": "tests_forward_fail_closed_tests_rs_path",
       "community": 12,
       "norm_label": "path"
     },
@@ -4274,7 +4394,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "agents",
-      "community": 15,
+      "community": 14,
       "norm_label": "agents.md"
     },
     {
@@ -4284,7 +4404,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "gyrseek_agents_agents_memory_and_workflow",
-      "community": 15,
+      "community": 14,
       "norm_label": "agents memory and workflow"
     },
     {
@@ -4294,7 +4414,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "gyrseek_agents_purpose",
-      "community": 15,
+      "community": 14,
       "norm_label": "purpose"
     },
     {
@@ -4304,7 +4424,7 @@
       "source_location": "L6",
       "_origin": "ast",
       "id": "gyrseek_agents_graphify",
-      "community": 15,
+      "community": 14,
       "norm_label": "graphify"
     },
     {
@@ -4314,27 +4434,27 @@
       "source_location": "L18",
       "_origin": "ast",
       "id": "gyrseek_agents_repository_memory",
-      "community": 15,
+      "community": 14,
       "norm_label": "repository memory"
     },
     {
       "label": "Mandatory Update Policy (After Every Change)",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L127",
+      "source_location": "L124",
       "_origin": "ast",
       "id": "gyrseek_agents_mandatory_update_policy_after_every_change",
-      "community": 15,
+      "community": 14,
       "norm_label": "mandatory update policy (after every change)"
     },
     {
       "label": "Quick Post-Change Checklist",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L136",
+      "source_location": "L133",
       "_origin": "ast",
       "id": "gyrseek_agents_quick_post_change_checklist",
-      "community": 15,
+      "community": 14,
       "norm_label": "quick post-change checklist"
     },
     {
@@ -4391,7 +4511,7 @@
       "label": "Mandatory Update Policy (After Every Change)",
       "file_type": "document",
       "source_file": "CLAUDE.md",
-      "source_location": "L127",
+      "source_location": "L124",
       "_origin": "ast",
       "id": "claude_mandatory_update_policy_after_every_change",
       "community": 17,
@@ -4401,7 +4521,7 @@
       "label": "Quick Post-Change Checklist",
       "file_type": "document",
       "source_file": "CLAUDE.md",
-      "source_location": "L136",
+      "source_location": "L133",
       "_origin": "ast",
       "id": "claude_quick_post_change_checklist",
       "community": 17,
@@ -4441,7 +4561,7 @@
       "label": "Introduction",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L37",
+      "source_location": "L36",
       "_origin": "ast",
       "id": "readme_introduction",
       "community": 8,
@@ -4451,7 +4571,7 @@
       "label": "Quick Start",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L47",
+      "source_location": "L46",
       "_origin": "ast",
       "id": "readme_quick_start",
       "community": 8,
@@ -4461,7 +4581,7 @@
       "label": "1. Prerequisites",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L49",
+      "source_location": "L48",
       "_origin": "ast",
       "id": "readme_1_prerequisites",
       "community": 8,
@@ -4471,7 +4591,7 @@
       "label": "2. Build",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L57",
+      "source_location": "L56",
       "_origin": "ast",
       "id": "readme_2_build",
       "community": 8,
@@ -4481,7 +4601,7 @@
       "label": "3. Run your first scan",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L64",
+      "source_location": "L63",
       "_origin": "ast",
       "id": "readme_3_run_your_first_scan",
       "community": 8,
@@ -4491,7 +4611,7 @@
       "label": "Just Recipes",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L73",
+      "source_location": "L72",
       "_origin": "ast",
       "id": "readme_just_recipes",
       "community": 8,
@@ -4501,7 +4621,7 @@
       "label": "Supported Commands",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L126",
+      "source_location": "L125",
       "_origin": "ast",
       "id": "readme_supported_commands",
       "community": 8,
@@ -4511,7 +4631,7 @@
       "label": "How It Works",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L140",
+      "source_location": "L139",
       "_origin": "ast",
       "id": "readme_how_it_works",
       "community": 8,
@@ -4521,7 +4641,7 @@
       "label": "Usage",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L166",
+      "source_location": "L165",
       "_origin": "ast",
       "id": "readme_usage",
       "community": 8,
@@ -4531,7 +4651,7 @@
       "label": "Python examples",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L176",
+      "source_location": "L175",
       "_origin": "ast",
       "id": "readme_python_examples",
       "community": 8,
@@ -4541,7 +4661,7 @@
       "label": "npm examples",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L193",
+      "source_location": "L192",
       "_origin": "ast",
       "id": "readme_npm_examples",
       "community": 8,
@@ -4551,7 +4671,7 @@
       "label": "pnpm examples",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L204",
+      "source_location": "L203",
       "_origin": "ast",
       "id": "readme_pnpm_examples",
       "community": 8,
@@ -4561,7 +4681,7 @@
       "label": "Network Behavior Detection",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L217",
+      "source_location": "L216",
       "_origin": "ast",
       "id": "readme_network_behavior_detection",
       "community": 8,
@@ -4571,7 +4691,7 @@
       "label": "Git Clone Behavior Detection",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L248",
+      "source_location": "L247",
       "_origin": "ast",
       "id": "readme_git_clone_behavior_detection",
       "community": 8,
@@ -4581,7 +4701,7 @@
       "label": "Process-Execution Detection",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L262",
+      "source_location": "L261",
       "_origin": "ast",
       "id": "readme_process_execution_detection",
       "community": 8,
@@ -4591,7 +4711,7 @@
       "label": "Post-Install Artifact Detection",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L274",
+      "source_location": "L273",
       "_origin": "ast",
       "id": "readme_post_install_artifact_detection",
       "community": 8,
@@ -4601,7 +4721,7 @@
       "label": "Package Related Supply Chain Attack Detection Coverage",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L299",
+      "source_location": "L298",
       "_origin": "ast",
       "id": "readme_package_related_supply_chain_attack_detection_coverage",
       "community": 8,
@@ -4611,7 +4731,7 @@
       "label": "Configuration",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L368",
+      "source_location": "L367",
       "_origin": "ast",
       "id": "readme_configuration",
       "community": 8,
@@ -4621,7 +4741,7 @@
       "label": "Config keys",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L380",
+      "source_location": "L379",
       "_origin": "ast",
       "id": "readme_config_keys",
       "community": 8,
@@ -4631,7 +4751,7 @@
       "label": "Example config",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L398",
+      "source_location": "L397",
       "_origin": "ast",
       "id": "readme_example_config",
       "community": 8,
@@ -4641,7 +4761,7 @@
       "label": "Config loading behavior",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L434",
+      "source_location": "L433",
       "_origin": "ast",
       "id": "readme_config_loading_behavior",
       "community": 8,
@@ -4651,7 +4771,7 @@
       "label": "Sandbox Modes",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L439",
+      "source_location": "L438",
       "_origin": "ast",
       "id": "readme_sandbox_modes",
       "community": 8,
@@ -4661,7 +4781,7 @@
       "label": "MicroVM configuration",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L457",
+      "source_location": "L456",
       "_origin": "ast",
       "id": "readme_microvm_configuration",
       "community": 8,
@@ -4671,7 +4791,7 @@
       "label": "Platform support matrix",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L464",
+      "source_location": "L463",
       "_origin": "ast",
       "id": "readme_platform_support_matrix",
       "community": 8,
@@ -4681,7 +4801,7 @@
       "label": "Scanner image configuration",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L472",
+      "source_location": "L471",
       "_origin": "ast",
       "id": "readme_scanner_image_configuration",
       "community": 8,
@@ -4758,30 +4878,20 @@
       "norm_label": "behavior reference"
     },
     {
-      "label": "Docker Hardening Limitations",
+      "label": "Docker Security",
       "file_type": "document",
       "source_file": "README.md",
       "source_location": "L584",
       "_origin": "ast",
-      "id": "readme_docker_hardening_limitations",
+      "id": "readme_docker_security",
       "community": 8,
-      "norm_label": "docker hardening limitations"
-    },
-    {
-      "label": "Seccomp and AppArmor Rollout",
-      "file_type": "document",
-      "source_file": "README.md",
-      "source_location": "L609",
-      "_origin": "ast",
-      "id": "readme_seccomp_and_apparmor_rollout",
-      "community": 8,
-      "norm_label": "seccomp and apparmor rollout"
+      "norm_label": "docker security"
     },
     {
       "label": "Testing",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L647",
+      "source_location": "L594",
       "_origin": "ast",
       "id": "readme_testing",
       "community": 8,
@@ -4791,7 +4901,7 @@
       "label": "Project Layout & Docs",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L694",
+      "source_location": "L641",
       "_origin": "ast",
       "id": "readme_project_layout_docs",
       "community": 8,
@@ -4801,7 +4911,7 @@
       "label": "License",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L732",
+      "source_location": "L680",
       "_origin": "ast",
       "id": "readme_license",
       "community": 8,
@@ -4814,7 +4924,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_architecture",
-      "community": 14,
+      "community": 1,
       "norm_label": "architecture.md"
     },
     {
@@ -4824,7 +4934,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_architecture_architecture",
-      "community": 14,
+      "community": 1,
       "norm_label": "architecture"
     },
     {
@@ -4834,7 +4944,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "docs_architecture_goal",
-      "community": 14,
+      "community": 1,
       "norm_label": "goal"
     },
     {
@@ -4844,7 +4954,7 @@
       "source_location": "L6",
       "_origin": "ast",
       "id": "docs_architecture_runtime_entry_flow",
-      "community": 14,
+      "community": 1,
       "norm_label": "runtime entry flow"
     },
     {
@@ -4854,7 +4964,7 @@
       "source_location": "L16",
       "_origin": "ast",
       "id": "docs_architecture_core_components",
-      "community": 14,
+      "community": 1,
       "norm_label": "core components"
     },
     {
@@ -4864,7 +4974,7 @@
       "source_location": "L50",
       "_origin": "ast",
       "id": "docs_architecture_decision_model",
-      "community": 14,
+      "community": 1,
       "norm_label": "decision model"
     },
     {
@@ -4884,27 +4994,27 @@
       "source_location": "L67",
       "_origin": "ast",
       "id": "docs_architecture_docker_sandbox_security",
-      "community": 14,
+      "community": 1,
       "norm_label": "docker sandbox security"
     },
     {
       "label": "Current Limitations",
       "file_type": "document",
       "source_file": "docs/ARCHITECTURE.md",
-      "source_location": "L73",
+      "source_location": "L76",
       "_origin": "ast",
       "id": "docs_architecture_current_limitations",
-      "community": 14,
+      "community": 1,
       "norm_label": "current limitations"
     },
     {
       "label": "Main Files",
       "file_type": "document",
       "source_file": "docs/ARCHITECTURE.md",
-      "source_location": "L83",
+      "source_location": "L86",
       "_origin": "ast",
       "id": "docs_architecture_main_files",
-      "community": 14,
+      "community": 1,
       "norm_label": "main files"
     },
     {
@@ -4961,7 +5071,7 @@
       "label": "Build and Test",
       "file_type": "document",
       "source_file": "docs/DEV_GUIDE.md",
-      "source_location": "L24",
+      "source_location": "L25",
       "_origin": "ast",
       "id": "docs_dev_guide_build_and_test",
       "community": 10,
@@ -4971,7 +5081,7 @@
       "label": "Policy Config Surface",
       "file_type": "document",
       "source_file": "docs/DEV_GUIDE.md",
-      "source_location": "L36",
+      "source_location": "L37",
       "_origin": "ast",
       "id": "docs_dev_guide_policy_config_surface",
       "community": 5,
@@ -4981,17 +5091,17 @@
       "label": "Adding a New Supported Command",
       "file_type": "document",
       "source_file": "docs/DEV_GUIDE.md",
-      "source_location": "L53",
+      "source_location": "L54",
       "_origin": "ast",
       "id": "docs_dev_guide_adding_a_new_supported_command",
-      "community": 5,
+      "community": 10,
       "norm_label": "adding a new supported command"
     },
     {
       "label": "Version Ordering Notes",
       "file_type": "document",
       "source_file": "docs/DEV_GUIDE.md",
-      "source_location": "L62",
+      "source_location": "L63",
       "_origin": "ast",
       "id": "docs_dev_guide_version_ordering_notes",
       "community": 10,
@@ -5001,7 +5111,7 @@
       "label": "Test Locations",
       "file_type": "document",
       "source_file": "docs/DEV_GUIDE.md",
-      "source_location": "L66",
+      "source_location": "L67",
       "_origin": "ast",
       "id": "docs_dev_guide_test_locations",
       "community": 10,
@@ -5011,7 +5121,7 @@
       "label": "Required Change Hygiene",
       "file_type": "document",
       "source_file": "docs/DEV_GUIDE.md",
-      "source_location": "L71",
+      "source_location": "L72",
       "_origin": "ast",
       "id": "docs_dev_guide_required_change_hygiene",
       "community": 10,
@@ -5021,141 +5131,371 @@
       "label": "Practical Review Checklist",
       "file_type": "document",
       "source_file": "docs/DEV_GUIDE.md",
-      "source_location": "L80",
+      "source_location": "L81",
       "_origin": "ast",
       "id": "docs_dev_guide_practical_review_checklist",
       "community": 10,
       "norm_label": "practical review checklist"
     },
     {
-      "label": "DOCKER_HARDENING_CHECKLIST.md",
+      "label": "DOCKER_SECURITY.md",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
+      "source_file": "docs/DOCKER_SECURITY.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist",
-      "community": 18,
-      "norm_label": "docker_hardening_checklist.md"
+      "id": "docs_docker_security",
+      "community": 11,
+      "norm_label": "docker_security.md"
     },
     {
-      "label": "Docker Hardening Validation Checklist",
+      "label": "Docker Security",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
+      "source_file": "docs/DOCKER_SECURITY.md",
       "source_location": "L1",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "community": 18,
-      "norm_label": "docker hardening validation checklist"
+      "id": "docs_docker_security_docker_security",
+      "community": 11,
+      "norm_label": "docker security"
     },
     {
-      "label": "Scope",
+      "label": "Overview",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
+      "source_file": "docs/DOCKER_SECURITY.md",
       "source_location": "L5",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_scope",
-      "community": 18,
-      "norm_label": "scope"
+      "id": "docs_docker_security_overview",
+      "community": 11,
+      "norm_label": "overview"
     },
     {
-      "label": "Files in repo",
+      "label": "Sandbox Infrastructure",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L10",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L11",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_files_in_repo",
-      "community": 18,
-      "norm_label": "files in repo"
+      "id": "docs_docker_security_sandbox_infrastructure",
+      "community": 11,
+      "norm_label": "sandbox infrastructure"
+    },
+    {
+      "label": "Capabilities and privileges",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L13",
+      "_origin": "ast",
+      "id": "docs_docker_security_capabilities_and_privileges",
+      "community": 11,
+      "norm_label": "capabilities and privileges"
+    },
+    {
+      "label": "Unprivileged payload integrity",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L20",
+      "_origin": "ast",
+      "id": "docs_docker_security_unprivileged_payload_integrity",
+      "community": 11,
+      "norm_label": "unprivileged payload integrity"
+    },
+    {
+      "label": "Probe batching",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L24",
+      "_origin": "ast",
+      "id": "docs_docker_security_probe_batching",
+      "community": 11,
+      "norm_label": "probe batching"
+    },
+    {
+      "label": "strace configuration",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L28",
+      "_origin": "ast",
+      "id": "docs_docker_security_strace_configuration",
+      "community": 11,
+      "norm_label": "strace configuration"
+    },
+    {
+      "label": "Seccomp",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L35",
+      "_origin": "ast",
+      "id": "docs_docker_security_seccomp",
+      "community": 11,
+      "norm_label": "seccomp"
+    },
+    {
+      "label": "Configuration",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L39",
+      "_origin": "ast",
+      "id": "docs_docker_security_configuration",
+      "community": 11,
+      "norm_label": "configuration"
+    },
+    {
+      "label": "Profile behavior",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L51",
+      "_origin": "ast",
+      "id": "docs_docker_security_profile_behavior",
+      "community": 11,
+      "norm_label": "profile behavior"
+    },
+    {
+      "label": "Status output",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L57",
+      "_origin": "ast",
+      "id": "docs_docker_security_status_output",
+      "community": 11,
+      "norm_label": "status output"
     },
     {
       "label": "Platform note",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L15",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L62",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_platform_note",
-      "community": 18,
+      "id": "docs_docker_security_platform_note",
+      "community": 11,
       "norm_label": "platform note"
+    },
+    {
+      "label": "AppArmor",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L66",
+      "_origin": "ast",
+      "id": "docs_docker_security_apparmor",
+      "community": 11,
+      "norm_label": "apparmor"
+    },
+    {
+      "label": "Configuration",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L70",
+      "_origin": "ast",
+      "id": "docs_docker_security_configuration_70",
+      "community": 11,
+      "norm_label": "configuration"
+    },
+    {
+      "label": "Requirements",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L82",
+      "_origin": "ast",
+      "id": "docs_docker_security_requirements",
+      "community": 11,
+      "norm_label": "requirements"
+    },
+    {
+      "label": "Allowed operations",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L92",
+      "_origin": "ast",
+      "id": "docs_docker_security_allowed_operations",
+      "community": 11,
+      "norm_label": "allowed operations"
+    },
+    {
+      "label": "Setup",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L98",
+      "_origin": "ast",
+      "id": "docs_docker_security_setup",
+      "community": 11,
+      "norm_label": "setup"
+    },
+    {
+      "label": "Status output",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L122",
+      "_origin": "ast",
+      "id": "docs_docker_security_status_output_122",
+      "community": 11,
+      "norm_label": "status output"
+    },
+    {
+      "label": "Platform note",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L128",
+      "_origin": "ast",
+      "id": "docs_docker_security_platform_note_128",
+      "community": 11,
+      "norm_label": "platform note"
+    },
+    {
+      "label": "Recommendation",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L132",
+      "_origin": "ast",
+      "id": "docs_docker_security_recommendation",
+      "community": 11,
+      "norm_label": "recommendation"
+    },
+    {
+      "label": "Platform support matrix",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L136",
+      "_origin": "ast",
+      "id": "docs_docker_security_platform_support_matrix",
+      "community": 11,
+      "norm_label": "platform support matrix"
+    },
+    {
+      "label": "Prebuilt scanner images",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L147",
+      "_origin": "ast",
+      "id": "docs_docker_security_prebuilt_scanner_images",
+      "community": 11,
+      "norm_label": "prebuilt scanner images"
+    },
+    {
+      "label": "Current hardening limitations",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L169",
+      "_origin": "ast",
+      "id": "docs_docker_security_current_hardening_limitations",
+      "community": 11,
+      "norm_label": "current hardening limitations"
+    },
+    {
+      "label": "Hardening direction",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L180",
+      "_origin": "ast",
+      "id": "docs_docker_security_hardening_direction",
+      "community": 11,
+      "norm_label": "hardening direction"
+    },
+    {
+      "label": "Validation checklist",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L190",
+      "_origin": "ast",
+      "id": "docs_docker_security_validation_checklist",
+      "community": 11,
+      "norm_label": "validation checklist"
     },
     {
       "label": "Step 1: Baseline sanity (no custom seccomp/apparmor)",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L20",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L194",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_step_1_baseline_sanity_no_custom_seccomp_apparmor",
-      "community": 18,
+      "id": "docs_docker_security_step_1_baseline_sanity_no_custom_seccomp_apparmor",
+      "community": 11,
       "norm_label": "step 1: baseline sanity (no custom seccomp/apparmor)"
     },
     {
-      "label": "Step 2: Validate seccomp profile syntax quickly",
+      "label": "Step 2: Validate seccomp profile syntax",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L35",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L203",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_step_2_validate_seccomp_profile_syntax_quickly",
-      "community": 18,
-      "norm_label": "step 2: validate seccomp profile syntax quickly"
+      "id": "docs_docker_security_step_2_validate_seccomp_profile_syntax",
+      "community": 11,
+      "norm_label": "step 2: validate seccomp profile syntax"
     },
     {
-      "label": "Step 3: Smoke test ptrace path with network access",
+      "label": "Step 3: Smoke test ptrace with network access",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L62",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L214",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_step_3_smoke_test_ptrace_path_with_network_access",
-      "community": 18,
-      "norm_label": "step 3: smoke test ptrace path with network access"
+      "id": "docs_docker_security_step_3_smoke_test_ptrace_with_network_access",
+      "community": 11,
+      "norm_label": "step 3: smoke test ptrace with network access"
     },
     {
-      "label": "Step 4: Run gyrseek e2e recipes with seccomp set",
+      "label": "Step 4: Run gyrseek e2e with seccomp enabled",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L77",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L225",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_step_4_run_gyrseek_e2e_recipes_with_seccomp_set",
-      "community": 18,
-      "norm_label": "step 4: run gyrseek e2e recipes with seccomp set"
+      "id": "docs_docker_security_step_4_run_gyrseek_e2e_with_seccomp_enabled",
+      "community": 11,
+      "norm_label": "step 4: run gyrseek e2e with seccomp enabled"
     },
     {
-      "label": "Step 5: AppArmor rollout (Linux hosts)",
+      "label": "Step 5: AppArmor validation (Linux hosts)",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L109",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L241",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_step_5_apparmor_rollout_linux_hosts",
-      "community": 18,
-      "norm_label": "step 5: apparmor rollout (linux hosts)"
+      "id": "docs_docker_security_step_5_apparmor_validation_linux_hosts",
+      "community": 11,
+      "norm_label": "step 5: apparmor validation (linux hosts)"
     },
     {
-      "label": "Regression signals to watch for",
+      "label": "Step 5a: Troubleshooting",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L123",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L264",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_regression_signals_to_watch_for",
-      "community": 18,
-      "norm_label": "regression signals to watch for"
+      "id": "docs_docker_security_step_5a_troubleshooting",
+      "community": 11,
+      "norm_label": "step 5a: troubleshooting"
+    },
+    {
+      "label": "Regression signals",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L269",
+      "_origin": "ast",
+      "id": "docs_docker_security_regression_signals",
+      "community": 11,
+      "norm_label": "regression signals"
     },
     {
       "label": "Backout plan",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L129",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L275",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_backout_plan",
-      "community": 18,
+      "id": "docs_docker_security_backout_plan",
+      "community": 11,
       "norm_label": "backout plan"
     },
     {
-      "label": "Suggested next hardening step after stable rollout",
+      "label": "Related env vars",
       "file_type": "document",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L137",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L283",
       "_origin": "ast",
-      "id": "docs_docker_hardening_checklist_suggested_next_hardening_step_after_stable_rollout",
-      "community": 18,
-      "norm_label": "suggested next hardening step after stable rollout"
+      "id": "docs_docker_security_related_env_vars",
+      "community": 11,
+      "norm_label": "related env vars"
+    },
+    {
+      "label": "Related source files",
+      "file_type": "document",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L297",
+      "_origin": "ast",
+      "id": "docs_docker_security_related_source_files",
+      "community": 11,
+      "norm_label": "related source files"
     },
     {
       "label": "FINDINGS.md",
@@ -5578,7 +5918,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 11,
+      "community": 3,
       "norm_label": "shai-hulud attack",
       "id": "readme_shai_hulud"
     },
@@ -5643,7 +5983,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 11,
+      "community": 4,
       "norm_label": "behavioral diffing across versions",
       "id": "docs_architecture_behavioral_diffing"
     },
@@ -5708,7 +6048,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 14,
+      "community": 1,
       "norm_label": "internal package exemption",
       "id": "docs_architecture_internal_package_exemption"
     },
@@ -5721,7 +6061,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 11,
+      "community": 3,
       "norm_label": "watched-process execution detection",
       "id": "docs_architecture_watched_process_detection"
     },
@@ -5786,7 +6126,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 11,
+      "community": 3,
       "norm_label": "shai-hulud attack class",
       "id": "docs_architecture_shai_hulud"
     },
@@ -5851,7 +6191,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 11,
+      "community": 4,
       "norm_label": "direct git clone runtime interception",
       "id": "docs_roadmap_direct_git_clone_interception"
     },
@@ -5877,7 +6217,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 14,
+      "community": 1,
       "norm_label": "structured logging mode (planned)",
       "id": "docs_roadmap_structured_logging"
     },
@@ -5916,7 +6256,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 11,
+      "community": 4,
       "norm_label": "finding 3: argv regex truncation at ]",
       "id": "docs_findings_finding_3_argv_truncation"
     },
@@ -6240,17 +6580,6 @@
       "confidence_score": 1.0,
       "source": "opencode_opencode",
       "target": "opencode_opencode_schema"
-    },
-    {
-      "relation": "imports_from",
-      "context": "import",
-      "confidence": "EXTRACTED",
-      "source_file": ".opencode/plugins/graphify.js",
-      "source_location": "L4",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "plugins_graphify",
-      "target": "path"
     },
     {
       "relation": "contains",
@@ -7589,6 +7918,17 @@
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "src_lib_trims_package_keys_for_baseline_and_age_policies",
+      "target": "src_lib_load"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "INFERRED",
+      "confidence_score": 0.8,
+      "source_file": "src/sandbox.rs",
+      "source_location": "L721",
+      "weight": 1.0,
+      "source": "src_sandbox_docker_apparmor_profile_name",
       "target": "src_lib_load"
     },
     {
@@ -10893,10 +11233,40 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L771",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_announce_apparmor_status"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L605",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_announce_seccomp_status",
+      "target": "src_sandbox_announce_seccomp_status"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1208",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_apparmor_disabled_wont_call_apparmor_parser"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1235",
+      "weight": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_apparmor_env_var_default_false",
       "confidence_score": 1.0
     },
     {
@@ -10983,11 +11353,31 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L667",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_docker_apparmor_enabled_from_env"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L679",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_docker_apparmor_profile_name"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L872",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_docker_args_adds_seccomp_profile_by_default",
-      "confidence_score": 1.0
+      "target": "src_sandbox_docker_args_adds_seccomp_profile_by_default"
     },
     {
       "relation": "contains",
@@ -10995,9 +11385,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L896",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_docker_args_disables_seccomp_when_env_var_false",
-      "confidence_score": 1.0
+      "target": "src_sandbox_docker_args_disables_seccomp_when_env_var_false"
     },
     {
       "relation": "contains",
@@ -11005,9 +11395,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L918",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_docker_args_enables_seccomp_when_env_var_true",
-      "confidence_score": 1.0
+      "target": "src_sandbox_docker_args_enables_seccomp_when_env_var_true"
     },
     {
       "relation": "contains",
@@ -11065,9 +11455,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L582",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_docker_seccomp_enabled_from_env",
-      "confidence_score": 1.0
+      "target": "src_sandbox_docker_seccomp_enabled_from_env"
     },
     {
       "relation": "contains",
@@ -11075,9 +11465,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L574",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_docker_seccomp_profile_arg",
-      "confidence_score": 1.0
+      "target": "src_sandbox_docker_seccomp_profile_arg"
     },
     {
       "relation": "contains",
@@ -11093,11 +11483,61 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L1142",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_embedded_apparmor_profile_allows_network"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1155",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_embedded_apparmor_profile_allows_ptrace"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1163",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_embedded_apparmor_profile_allows_work_out_tmp_writes"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1134",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_embedded_apparmor_profile_mentions_cap_sys_ptrace"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1179",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_embedded_apparmor_profile_valid_profile_name"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L940",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_embedded_seccomp_profile_keeps_networking_available",
-      "confidence_score": 1.0
+      "target": "src_sandbox_embedded_seccomp_profile_keeps_networking_available"
     },
     {
       "relation": "contains",
@@ -11105,9 +11545,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L589",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_embedded_seccomp_profile_path",
-      "confidence_score": 1.0
+      "target": "src_sandbox_embedded_seccomp_profile_path"
     },
     {
       "relation": "contains",
@@ -11115,9 +11555,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L718",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_env_lock",
-      "confidence_score": 1.0
+      "target": "src_sandbox_env_lock"
     },
     {
       "relation": "contains",
@@ -11380,6 +11820,16 @@
       "target": "src_sandbox_trace_install_docker_single_with_runtime"
     },
     {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L680",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_try_load_apparmor"
+    },
+    {
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
@@ -11460,12 +11910,23 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L679",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_docker_apparmor_profile_name",
+      "target": "src_sandbox_rs_string"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L574",
       "weight": 1.0,
       "context": "generic_arg",
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_seccomp_profile_arg",
-      "target": "src_sandbox_rs_string",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_string"
     },
     {
       "relation": "references",
@@ -11496,9 +11957,9 @@
       "source_location": "L589",
       "weight": 1.0,
       "context": "generic_arg",
+      "confidence_score": 1.0,
       "source": "src_sandbox_embedded_seccomp_profile_path",
-      "target": "src_sandbox_rs_string",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_string"
     },
     {
       "relation": "references",
@@ -11647,6 +12108,17 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L680",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_try_load_apparmor",
+      "target": "src_sandbox_rs_string"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L28",
       "weight": 1.0,
       "context": "generic_arg",
@@ -11730,11 +12202,22 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L199",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_build_runner_from_env",
+      "target": "src_sandbox_announce_apparmor_status"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L126",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_build_runner_from_env",
-      "target": "src_sandbox_announce_seccomp_status",
-      "confidence_score": 1.0
+      "target": "src_sandbox_announce_seccomp_status"
     },
     {
       "relation": "calls",
@@ -11816,9 +12299,9 @@
       "source_location": "L519",
       "weight": 1.0,
       "context": "return_type",
+      "confidence_score": 1.0,
       "source": "src_sandbox_build_docker_run_args",
-      "target": "src_sandbox_rs_result",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_result"
     },
     {
       "relation": "references",
@@ -11827,9 +12310,9 @@
       "source_location": "L574",
       "weight": 1.0,
       "context": "return_type",
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_seccomp_profile_arg",
-      "target": "src_sandbox_rs_result",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_result"
     },
     {
       "relation": "references",
@@ -11860,9 +12343,9 @@
       "source_location": "L589",
       "weight": 1.0,
       "context": "return_type",
+      "confidence_score": 1.0,
       "source": "src_sandbox_embedded_seccomp_profile_path",
-      "target": "src_sandbox_rs_result",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_result"
     },
     {
       "relation": "references",
@@ -11928,6 +12411,17 @@
       "context": "return_type",
       "confidence_score": 1.0,
       "source": "src_sandbox_trace_install_docker_single_with_runtime",
+      "target": "src_sandbox_rs_result"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L680",
+      "weight": 1.0,
+      "context": "return_type",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_try_load_apparmor",
       "target": "src_sandbox_rs_result"
     },
     {
@@ -12276,12 +12770,23 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L679",
+      "weight": 1.0,
+      "context": "return_type",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_docker_apparmor_profile_name",
+      "target": "src_sandbox_rs_option"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L574",
       "weight": 1.0,
       "context": "generic_arg",
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_seccomp_profile_arg",
-      "target": "src_sandbox_rs_option",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_option"
     },
     {
       "relation": "references",
@@ -12605,11 +13110,22 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L631",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_build_docker_run_args",
+      "target": "src_sandbox_docker_apparmor_profile_name"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L553",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_build_docker_run_args",
-      "target": "src_sandbox_docker_seccomp_profile_arg",
-      "confidence_score": 1.0
+      "target": "src_sandbox_docker_seccomp_profile_arg"
     },
     {
       "relation": "calls",
@@ -12618,9 +13134,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L879",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_args_adds_seccomp_profile_by_default",
-      "target": "src_sandbox_build_docker_run_args",
-      "confidence_score": 1.0
+      "target": "src_sandbox_build_docker_run_args"
     },
     {
       "relation": "calls",
@@ -12629,9 +13145,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L903",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_args_disables_seccomp_when_env_var_false",
-      "target": "src_sandbox_build_docker_run_args",
-      "confidence_score": 1.0
+      "target": "src_sandbox_build_docker_run_args"
     },
     {
       "relation": "calls",
@@ -12640,9 +13156,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L925",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_args_enables_seccomp_when_env_var_true",
-      "target": "src_sandbox_build_docker_run_args",
-      "confidence_score": 1.0
+      "target": "src_sandbox_build_docker_run_args"
     },
     {
       "relation": "calls",
@@ -12684,9 +13200,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L575",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_seccomp_profile_arg",
-      "target": "src_sandbox_docker_seccomp_enabled_from_env",
-      "confidence_score": 1.0
+      "target": "src_sandbox_docker_seccomp_enabled_from_env"
     },
     {
       "relation": "calls",
@@ -12695,9 +13211,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L578",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_seccomp_profile_arg",
-      "target": "src_sandbox_embedded_seccomp_profile_path",
-      "confidence_score": 1.0
+      "target": "src_sandbox_embedded_seccomp_profile_path"
     },
     {
       "relation": "calls",
@@ -12706,9 +13222,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L606",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_announce_seccomp_status",
-      "target": "src_sandbox_docker_seccomp_enabled_from_env",
-      "confidence_score": 1.0
+      "target": "src_sandbox_docker_seccomp_enabled_from_env"
     },
     {
       "relation": "calls",
@@ -12717,9 +13233,86 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L585",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_seccomp_enabled_from_env",
-      "target": "src_sandbox_parse_bool_env",
-      "confidence_score": 1.0
+      "target": "src_sandbox_parse_bool_env"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L746",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_announce_apparmor_status",
+      "target": "src_sandbox_docker_apparmor_enabled_from_env"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L670",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_docker_apparmor_enabled_from_env",
+      "target": "src_sandbox_parse_bool_env"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L680",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_docker_apparmor_profile_name",
+      "target": "src_sandbox_docker_apparmor_enabled_from_env"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L719",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_docker_apparmor_profile_name",
+      "target": "src_sandbox_try_load_apparmor"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L680",
+      "weight": 1.0,
+      "context": "parameter_type",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_try_load_apparmor",
+      "target": "src_sandbox_rs_path"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L772",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_announce_apparmor_status",
+      "target": "src_sandbox_docker_apparmor_profile_name"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1214",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_apparmor_disabled_wont_call_apparmor_parser",
+      "target": "src_sandbox_docker_apparmor_profile_name"
     },
     {
       "relation": "calls",
@@ -12748,11 +13341,33 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
-      "source_location": "L873",
+      "source_location": "L1209",
       "weight": 1.0,
-      "source": "src_sandbox_docker_args_adds_seccomp_profile_by_default",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_apparmor_disabled_wont_call_apparmor_parser",
+      "target": "src_sandbox_env_lock"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1236",
+      "weight": 1.0,
+      "source": "src_sandbox_apparmor_env_var_default_false",
       "target": "src_sandbox_env_lock",
       "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L873",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_docker_args_adds_seccomp_profile_by_default",
+      "target": "src_sandbox_env_lock"
     },
     {
       "relation": "calls",
@@ -12761,9 +13376,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L897",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_args_disables_seccomp_when_env_var_false",
-      "target": "src_sandbox_env_lock",
-      "confidence_score": 1.0
+      "target": "src_sandbox_env_lock"
     },
     {
       "relation": "calls",
@@ -12772,9 +13387,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L919",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_args_enables_seccomp_when_env_var_true",
-      "target": "src_sandbox_env_lock",
-      "confidence_score": 1.0
+      "target": "src_sandbox_env_lock"
     },
     {
       "relation": "calls",
@@ -12783,9 +13398,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L851",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_args_grant_sys_ptrace_capability",
-      "target": "src_sandbox_env_lock",
-      "confidence_score": 1.0
+      "target": "src_sandbox_env_lock"
     },
     {
       "relation": "calls",
@@ -12794,9 +13409,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L803",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_args_keep_out_mount_when_provided_and_omit_when_empty",
-      "target": "src_sandbox_env_lock",
-      "confidence_score": 1.0
+      "target": "src_sandbox_env_lock"
     },
     {
       "relation": "calls",
@@ -12805,9 +13420,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L826",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_docker_args_pass_runtime_when_set",
-      "target": "src_sandbox_env_lock",
-      "confidence_score": 1.0
+      "target": "src_sandbox_env_lock"
     },
     {
       "relation": "references",
@@ -12816,9 +13431,9 @@
       "source_location": "L718",
       "weight": 1.0,
       "context": "return_type",
+      "confidence_score": 1.0,
       "source": "src_sandbox_env_lock",
-      "target": "src_sandbox_rs_mutex",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_mutex"
     },
     {
       "relation": "imports_from",
@@ -17571,9 +18186,9 @@
       "source_location": "L2488",
       "weight": 1.0,
       "context": "return_type",
+      "confidence_score": 1.0,
       "source": "src_scanning_env_lock",
-      "target": "src_scanning_rs_mutex",
-      "confidence_score": 1.0
+      "target": "src_scanning_rs_mutex"
     },
     {
       "relation": "calls",
@@ -17930,17 +18545,6 @@
       "target": "command"
     },
     {
-      "relation": "imports_from",
-      "confidence": "EXTRACTED",
-      "source_file": "tests/forward_fail_closed_tests.rs",
-      "source_location": "L3",
-      "weight": 1.0,
-      "context": "import",
-      "confidence_score": 1.0,
-      "source": "tests_forward_fail_closed_tests",
-      "target": "path"
-    },
-    {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "tests/forward_fail_closed_tests.rs",
@@ -17991,6 +18595,17 @@
       "target": "tests_forward_fail_closed_tests_prepend_path"
     },
     {
+      "relation": "imports_from",
+      "confidence": "EXTRACTED",
+      "source_file": "tests/forward_fail_closed_tests.rs",
+      "source_location": "L3",
+      "weight": 1.0,
+      "context": "import",
+      "confidence_score": 1.0,
+      "source": "tests_forward_fail_closed_tests",
+      "target": "tests_forward_fail_closed_tests_rs_path"
+    },
+    {
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "tests/forward_fail_closed_tests.rs",
@@ -17999,7 +18614,7 @@
       "context": "parameter_type",
       "confidence_score": 1.0,
       "source": "tests_forward_fail_closed_tests_fake_binary",
-      "target": "path"
+      "target": "tests_forward_fail_closed_tests_rs_path"
     },
     {
       "relation": "calls",
@@ -18032,7 +18647,7 @@
       "context": "parameter_type",
       "confidence_score": 1.0,
       "source": "tests_forward_fail_closed_tests_prepend_path",
-      "target": "path"
+      "target": "tests_forward_fail_closed_tests_rs_path"
     },
     {
       "relation": "calls",
@@ -18249,9 +18864,9 @@
       "source_file": "AGENTS.md",
       "source_location": "L1",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "agents",
-      "target": "gyrseek_agents_agents_memory_and_workflow"
+      "target": "gyrseek_agents_agents_memory_and_workflow",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -18259,19 +18874,19 @@
       "source_file": "AGENTS.md",
       "source_location": "L6",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "gyrseek_agents_agents_memory_and_workflow",
-      "target": "gyrseek_agents_graphify"
+      "target": "gyrseek_agents_graphify",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENTS.md",
-      "source_location": "L115",
+      "source_location": "L124",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "gyrseek_agents_agents_memory_and_workflow",
-      "target": "gyrseek_agents_mandatory_update_policy_after_every_change"
+      "target": "gyrseek_agents_mandatory_update_policy_after_every_change",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -18279,19 +18894,19 @@
       "source_file": "AGENTS.md",
       "source_location": "L3",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "gyrseek_agents_agents_memory_and_workflow",
-      "target": "gyrseek_agents_purpose"
+      "target": "gyrseek_agents_purpose",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "AGENTS.md",
-      "source_location": "L123",
+      "source_location": "L133",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "gyrseek_agents_agents_memory_and_workflow",
-      "target": "gyrseek_agents_quick_post_change_checklist"
+      "target": "gyrseek_agents_quick_post_change_checklist",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -18299,9 +18914,9 @@
       "source_file": "AGENTS.md",
       "source_location": "L18",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "gyrseek_agents_agents_memory_and_workflow",
-      "target": "gyrseek_agents_repository_memory"
+      "target": "gyrseek_agents_repository_memory",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -18397,11 +19012,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "README.md",
-      "source_location": "L556",
+      "source_location": "L584",
       "weight": 1.0,
-      "confidence_score": 1.0,
       "source": "readme_gyrseek",
-      "target": "readme_docker_hardening_limitations"
+      "target": "readme_docker_security",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -18532,16 +19147,6 @@
       "confidence_score": 1.0,
       "source": "readme_gyrseek",
       "target": "readme_sandbox_modes"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "README.md",
-      "source_location": "L609",
-      "weight": 1.0,
-      "source": "readme_gyrseek",
-      "target": "readme_seccomp_and_apparmor_rollout",
-      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -18799,9 +19404,9 @@
       "source_file": "docs/ARCHITECTURE.md",
       "source_location": "L67",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_architecture_architecture",
-      "target": "docs_architecture_docker_sandbox_security",
-      "confidence_score": 1.0
+      "target": "docs_architecture_docker_sandbox_security"
     },
     {
       "relation": "contains",
@@ -18979,9 +19584,9 @@
       "source_file": "docs/DEV_GUIDE.md",
       "source_location": "L15",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_dev_guide_developer_guide",
-      "target": "docs_dev_guide_sandbox_security_hardening",
-      "confidence_score": 1.0
+      "target": "docs_dev_guide_sandbox_security_hardening"
     },
     {
       "relation": "contains",
@@ -19016,121 +19621,351 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
+      "source_file": "docs/DOCKER_SECURITY.md",
       "source_location": "L1",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist",
-      "target": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
+      "source": "docs_docker_security",
+      "target": "docs_docker_security_docker_security",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L129",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L66",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_backout_plan",
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_apparmor",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L10",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L275",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_files_in_repo",
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_backout_plan",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L15",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L169",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_platform_note",
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_current_hardening_limitations",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L123",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L180",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_regression_signals_to_watch_for",
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_hardening_direction",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
+      "source_file": "docs/DOCKER_SECURITY.md",
       "source_location": "L5",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_scope",
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_overview",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L20",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L136",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_step_1_baseline_sanity_no_custom_seccomp_apparmor",
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_platform_support_matrix",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L147",
+      "weight": 1.0,
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_prebuilt_scanner_images",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L269",
+      "weight": 1.0,
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_regression_signals",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L283",
+      "weight": 1.0,
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_related_env_vars",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L297",
+      "weight": 1.0,
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_related_source_files",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L11",
+      "weight": 1.0,
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_sandbox_infrastructure",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
       "source_location": "L35",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_step_2_validate_seccomp_profile_syntax_quickly",
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_seccomp",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L190",
+      "weight": 1.0,
+      "source": "docs_docker_security_docker_security",
+      "target": "docs_docker_security_validation_checklist",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L13",
+      "weight": 1.0,
+      "source": "docs_docker_security_sandbox_infrastructure",
+      "target": "docs_docker_security_capabilities_and_privileges",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L24",
+      "weight": 1.0,
+      "source": "docs_docker_security_sandbox_infrastructure",
+      "target": "docs_docker_security_probe_batching",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L28",
+      "weight": 1.0,
+      "source": "docs_docker_security_sandbox_infrastructure",
+      "target": "docs_docker_security_strace_configuration",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L20",
+      "weight": 1.0,
+      "source": "docs_docker_security_sandbox_infrastructure",
+      "target": "docs_docker_security_unprivileged_payload_integrity",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L39",
+      "weight": 1.0,
+      "source": "docs_docker_security_seccomp",
+      "target": "docs_docker_security_configuration",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
       "source_location": "L62",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_step_3_smoke_test_ptrace_path_with_network_access",
+      "source": "docs_docker_security_seccomp",
+      "target": "docs_docker_security_platform_note",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L77",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L51",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_step_4_run_gyrseek_e2e_recipes_with_seccomp_set",
+      "source": "docs_docker_security_seccomp",
+      "target": "docs_docker_security_profile_behavior",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L109",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L57",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_step_5_apparmor_rollout_linux_hosts",
+      "source": "docs_docker_security_seccomp",
+      "target": "docs_docker_security_status_output",
       "confidence_score": 1.0
     },
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
-      "source_file": "docs/DOCKER_HARDENING_CHECKLIST.md",
-      "source_location": "L137",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L92",
       "weight": 1.0,
-      "source": "docs_docker_hardening_checklist_docker_hardening_validation_checklist",
-      "target": "docs_docker_hardening_checklist_suggested_next_hardening_step_after_stable_rollout",
+      "source": "docs_docker_security_apparmor",
+      "target": "docs_docker_security_allowed_operations",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L70",
+      "weight": 1.0,
+      "source": "docs_docker_security_apparmor",
+      "target": "docs_docker_security_configuration_70",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L128",
+      "weight": 1.0,
+      "source": "docs_docker_security_apparmor",
+      "target": "docs_docker_security_platform_note_128",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L132",
+      "weight": 1.0,
+      "source": "docs_docker_security_apparmor",
+      "target": "docs_docker_security_recommendation",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L82",
+      "weight": 1.0,
+      "source": "docs_docker_security_apparmor",
+      "target": "docs_docker_security_requirements",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L98",
+      "weight": 1.0,
+      "source": "docs_docker_security_apparmor",
+      "target": "docs_docker_security_setup",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L122",
+      "weight": 1.0,
+      "source": "docs_docker_security_apparmor",
+      "target": "docs_docker_security_status_output_122",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L194",
+      "weight": 1.0,
+      "source": "docs_docker_security_validation_checklist",
+      "target": "docs_docker_security_step_1_baseline_sanity_no_custom_seccomp_apparmor",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L203",
+      "weight": 1.0,
+      "source": "docs_docker_security_validation_checklist",
+      "target": "docs_docker_security_step_2_validate_seccomp_profile_syntax",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L214",
+      "weight": 1.0,
+      "source": "docs_docker_security_validation_checklist",
+      "target": "docs_docker_security_step_3_smoke_test_ptrace_with_network_access",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L225",
+      "weight": 1.0,
+      "source": "docs_docker_security_validation_checklist",
+      "target": "docs_docker_security_step_4_run_gyrseek_e2e_with_seccomp_enabled",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L241",
+      "weight": 1.0,
+      "source": "docs_docker_security_validation_checklist",
+      "target": "docs_docker_security_step_5_apparmor_validation_linux_hosts",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/DOCKER_SECURITY.md",
+      "source_location": "L264",
+      "weight": 1.0,
+      "source": "docs_docker_security_validation_checklist",
+      "target": "docs_docker_security_step_5a_troubleshooting",
       "confidence_score": 1.0
     },
     {
@@ -19707,5 +20542,5 @@
       "source_file": "docs/DEV_GUIDE.md"
     }
   ],
-  "built_at_commit": "45570ede5656cf4fe92301e93b6dfd184542759f"
+  "built_at_commit": "819abb4c25ab0a0840bda1eedd927993bfbfc9b5"
 }
