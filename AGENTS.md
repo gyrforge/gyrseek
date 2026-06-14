@@ -15,6 +15,12 @@ Rules:
 - When the user types `/graphify`, invoke the `skill` tool with `skill: "graphify"` before doing anything else.
 - Always rerun `/graphify` via `graphify update .` after every code change to keep graph artifacts current before handing off or committing (AST-only, no API cost).
 
+## Agent Portability Symlinks
+- `.claude/skills` → `.agents/skills` (folder-level symlink; auto-picks up new skills)
+- `.github/skills` → `.agents/skills` (same)
+- `CLAUDE.md` → `AGENTS.md` (changes to AGENTS.md propagate instantly to Claude Code)
+- `skills-lock.json` at repo root tracks 6 external skills: 3 from `semgrep/skills` (code-security, llm-security, semgrep) and 3 from `DietrichGebert/ponytail` (ponytail, ponytail-help, ponytail-review). See `docs/DEV_GUIDE.md` for details.
+
 ## Repository Memory
 - Project name: gyrseek
 - Language: Rust
