@@ -78,7 +78,6 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just build` | Builds the release binary (`target/release/gyrseek`). |
 | `just install` | Installs `gyrseek` into Cargo's bin directory with `cargo install --path . --locked`. |
 | `just uninstall` | Uninstalls `gyrseek` with `cargo uninstall gyrseek`. |
-
 | `just tag` | Tags the current `HEAD` with the version string from `Cargo.toml` (e.g. `v1.2.3`), force-deletes any existing local/remote tag with the same name, and pushes the new tag to `origin`. |
 | `just fmt` | Formats the Rust code. |
 | `just test` | Runs `cargo test --all-features --locked`. |
