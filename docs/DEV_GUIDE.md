@@ -7,6 +7,18 @@
 4. Ensure Docker CLI is available in PATH for default sandbox mode.
 5. If using host mode (`GYRSEEK_SANDBOX=host`), ensure strace is available in PATH.
 
+## Agent Portability Symlinks
+
+The repo uses symlinks so multiple AI coding tools share the same skills and instructions without duplication:
+
+| Symlink | Target | Purpose |
+|---|---|---|
+| `.claude/skills` | `../.agents/skills` | Claude Code skill discovery |
+| `.github/skills` | `../.agents/skills` | GitHub Copilot skill discovery |
+| `CLAUDE.md` | `AGENTS.md` | Claude Code instruction alias (looks for `CLAUDE.md`, not `AGENTS.md`) |
+
+New skills added under `.agents/skills/` are automatically picked up by all tools. Because `CLAUDE.md` → `AGENTS.md`, any instruction changes in `AGENTS.md` are instantly reflected for Claude Code with no extra step. If you add support for another agent (Cursor, Windsurf, etc.), create a similar symlink here instead of copying files.
+
 ## Sandbox Mode
 - Default: `GYRSEEK_SANDBOX=docker`
 - Fallback: `GYRSEEK_SANDBOX=host` (reduced safety)
