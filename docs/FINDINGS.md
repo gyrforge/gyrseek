@@ -1,14 +1,14 @@
-# Security & Correctness Findings
+# Findings
 
-**Scope:** `src/lib.rs`, `src/scanning.rs`, `src/parsing.rs`, `src/sandbox.rs`  
-**Method:** 7-angle static review (line-by-line, removed-behavior, cross-file, reuse, simplification, efficiency, altitude) + 1-vote verification
+**Scope:** `src/lib.rs`, `src/scanning.rs`, `src/parsing.rs`, `src/sandbox.rs`
 
 ---
 
 ## How to read this document
 
-Each finding has:
+Two categories of findings are tracked:
 
+**Security & Correctness** findings follow the full format:
 - **Location** — file and line number at the time of discovery
 - **Severity** — Critical / High / Medium / Low
 - **Summary** — one sentence describing the defect
@@ -17,9 +17,16 @@ Each finding has:
 - **Fix direction** — suggested remediation
 - **Fix status** — ✅ Fixed (with what changed) or ⚠️ Open
 
+**Complexity & Over-Engineering** findings use a lighter table format:
+- **Tag** — `shrink` (same logic, fewer lines) or `yagni` (abstraction with one caller/call site)
+- **What** — what is over-engineered
+- **Fix** — the replacement
+
 ---
 
-## Summary
+## Security & Correctness Findings
+
+### Summary
 
 | #  | File          | Line | Severity | Description                                                           | Status    |
 |----|---------------|------|----------|-----------------------------------------------------------------------|-----------|
@@ -46,7 +53,7 @@ Each finding has:
 
 ---
 
-## Finding 1 — Critical | `sandbox.rs:188` | ✅ Fixed
+### Finding 1 — Critical | `sandbox.rs:188` | ✅ Fixed
 
 **Summary:** A missing trace log silently falls back to an empty string, which the scanner treats as a clean zero-connection trace, allowing the package.
 
@@ -62,7 +69,7 @@ Each finding has:
 
 ---
 
-## Finding 2 — Critical | `scanning.rs:199` | ✅ Fixed
+### Finding 2 — Critical | `scanning.rs:199` | ✅ Fixed
 
 **Summary:** The domain allowlist is checked against the attacker-controlled PTR record of the connecting IP, allowing a C2 server to bypass the allowlist by setting its reverse-DNS to an allowlisted domain.
 
@@ -76,7 +83,7 @@ Each finding has:
 
 ---
 
-## Finding 3 — High | `scanning.rs:427` | ✅ Fixed
+### Finding 3 — High | `scanning.rs:427` | ✅ Fixed
 
 **Summary:** The execve argv regex `[^\]]*` stops at the first `]` in any argument, silently truncating arguments that contain `]` — such as PEP 508 package extras or bracket-containing paths.
 
@@ -96,7 +103,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 4 — High | `sandbox.rs:307` | ✅ Fixed
+### Finding 4 — High | `sandbox.rs:307` | ✅ Fixed
 
 **Summary:** The matrix script appends `>/dev/null 2>&1 || true` to each strace invocation, discarding strace's stderr and masking its exit code, so ptrace capability failures produce an empty log file with no diagnostic.
 
@@ -110,7 +117,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 5 — High | `parsing.rs:113` | ✅ Fixed
+### Finding 5 — High | `parsing.rs:113` | ✅ Fixed
 
 **Summary:** The poetry lock parser only excludes `develop=true` directory-source entries; non-develop local-path packages pass through and are submitted to the registry scanner as public packages.
 
@@ -124,7 +131,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 6 — Medium | `parsing.rs:298` | ✅ Fixed
+### Finding 6 — Medium | `parsing.rs:298` | ✅ Fixed
 
 **Summary:** PEP 508 extras (e.g., `requests[security]`) are preserved in the package name after `split_once("==")`, causing the PyPI registry lookup to 404 and leaving the package with zero baselines.
 
@@ -140,7 +147,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 7 — Medium | `parsing.rs:576` | ✅ Fixed
+### Finding 7 — Medium | `parsing.rs:576` | ✅ Fixed
 
 **Summary:** `rewrite_args_with_pinned_versions` strips extras before looking up the package in the `pins` map, but `pins` is keyed by the full name including extras, so the lookup misses and the install is forwarded unpinned.
 
@@ -154,7 +161,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 8 — Medium | `lib.rs:536` | ✅ Fixed
+### Finding 8 — Medium | `lib.rs:536` | ✅ Fixed
 
 **Summary:** The child process exit status is discarded — if the host package manager exits non-zero, gyrseek exits 0 and misreports a failed install as successful.
 
@@ -168,7 +175,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 9 — Medium | `lib.rs` | ✅ Fixed
+### Finding 9 — Medium | `lib.rs` | ✅ Fixed
 
 **Summary:** Unrecognized managers were silently forwarded unscanned, violating gyrseek's core contract.
 
@@ -185,7 +192,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 10 — Critical | `scanning.rs:654` | ⚠️ Open
+### Finding 10 — Critical | `scanning.rs:654` | ⚠️ Open
 
 **Summary:** `select_effective_baselines` inserts baseline override versions without checking equality to `current`; a self-referencing override disables all anomaly detection for the affected package.
 
@@ -199,7 +206,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 11 — High | `parsing.rs:468` | ⚠️ Open
+### Finding 11 — High | `parsing.rs:468` | ⚠️ Open
 
 **Summary:** When all npm CLI args are non-registry specs (`file:`, `git+`, `https://`, `link:`), the package.json fallback fires and scans unrelated registry dependencies; any policy hit on those deps blocks the install the user actually requested.
 
@@ -213,7 +220,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 12 — High | `lib.rs:1021` | ⚠️ Open
+### Finding 12 — High | `lib.rs:1021` | ⚠️ Open
 
 **Summary:** When all npm CLI args are non-registry specs and no `package.json` exists, gyrseek exits 1, blocking a valid local or URL-based install.
 
@@ -225,7 +232,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-## Finding 13 — Medium | `scanning.rs:1852` | ✅ Fixed
+### Finding 13 — Medium | `scanning.rs:1852` | ✅ Fixed
 
 **Summary:** Async scan tests set/remove an env var with bare `unsafe` calls and no drop-guard; a panic between the two leaves the var set and may poison the shared `Mutex`, masking the real failure with cascade lock-poison panics.
 
@@ -245,7 +252,7 @@ impl Drop for EnvGuard {
 
 ---
 
-## Finding 14 — Low | `parsing.rs:880` | ⚠️ Open
+### Finding 14 — Low | `parsing.rs:880` | ⚠️ Open
 
 **Summary:** A test writes a temp requirements file but only removes it on the success path — assertion failures leave the file on disk.
 
@@ -327,3 +334,27 @@ The two actionable items from the Round 3 assessment that were code (not roadmap
 All 188 unit tests + integration tests pass; `cargo clippy --all-targets` clean.
 
 - **Finding 15 — Empty `GYRSEEK_*_SCANNER_IMAGE` env var.** See Finding 15 above. `scanner_image_config` used `std::env::var(image_var).unwrap_or_else(|_| default_image)`, so an env var set to `""` (empty string) was treated as a valid image reference. Docker CLI parses an empty name as "invalid reference format" and fails. Fix: filter out empty strings via `.ok().filter(|v| !v.is_empty())` before falling back.
+
+---
+
+## Complexity & Over-Engineering Findings (Ponytail Review — 2026-06-14)
+
+**Scope:** Full tree scan for unnecessary complexity, redundant abstraction, and stdlib-avoidable code.  
+**Net score:** ~350 lines removable without losing safety or test coverage.
+
+| #  | File          | Tag      | What                                                                                     | Fix                                                                 |
+|----|---------------|----------|------------------------------------------------------------------------------------------|---------------------------------------------------------------------|
+| C1 | `lib.rs:64-95` | shrink   | 31-line manual arg-loop for `--config`/`-c`.                                            | `clap` or a `match` with `Positional` → ~10 lines.                 |
+| C2 | `lib.rs:97-274` | shrink | `load_policy_config` is 177 lines of trim→filter→collect for 8 list fields.             | `fn parse_list(v: Vec<String>) -> HashSet<String>` saves ~50 lines. |
+| C3 | `lib.rs:572-583` | yagni | `NoopRunner` struct with full trait impl for test bypass.                                | `\|_\| Err(...)` closure is 1 line.                                  |
+| C4 | `lib.rs:701-717` | shrink | `ScanTimer` struct with `Instant`, `Drop`, two print branches.                           | `let start = Instant::now();` at call site is 3 lines, not 16. |
+| C5 | `lib.rs:802-810` | yagni | `scan_targets` is a 1-line delegate to `scan_many_with_cache`.                           | Call `scan_many_with_cache` directly.                               |
+| C6 | `Cargo.toml:7` | shrink   | `tokio` with `features = ["full"]` pulls in 30+ features.                                | Only `rt`, `macros` needed; or switch to `reqwest` blocking client. |
+| C7 | `scanning.rs:76-95` | shrink | `compare_version_strings` repeats the same Ok/Err/Err/Ok match on both branches.         | Fold into `Result::then` on `Version::parse` → ~8 lines.            |
+| C8 | `scanning.rs:1009-1013` | yagni | `burst_triggered` has one caller (`burst_policy_warning`).                              | Inline the `match`.                                                 |
+| C9 | `scanning.rs:1325-1343, 1400-1415, 1440-1473` | shrink | Three near-identical "CRITICAL WARNING: Behavioral anomaly flagged" blocks.              | `fn block_and_warn(...)` saves ~80 lines.                           |
+| C10 | `parsing.rs:648-714` | shrink | `parse_package_details` has 5-layer nested if/else per manager.                          | `&[(manager, subcommand, offset)]` table → ~8 lines.                |
+| C11 | `parsing.rs:79-239` | shrink | `parse_poetry_lock_packages_from_content` has 7-param closure. Shares shape with uv lock parser. | Generic TOML-section parser with skip predicate.               |
+| C12 | `sandbox.rs:462-477` | shrink | `scanner_user_setup_steps` returns `vec!["..."]`, called once.                           | Inline at call site.                                                |
+| C13 | `sandbox.rs:517-538` | shrink | `image_setup_steps` 4× `steps.push(...)` with `format!`.                                 | `vec![if !prebuilt { ... }]` is half the lines.                    |
+| C14 | `sandbox.rs:662-669` | yagni | `docker_seccomp_profile_arg` wraps one format call.                                      | Inline `format!("seccomp={}", path?)`.                              |
