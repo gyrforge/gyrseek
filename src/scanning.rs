@@ -394,6 +394,7 @@ fn decode_dns_name(raw: &[u8], offset: &mut usize) -> Option<String> {
     let mut pos = *offset;
     let mut jumped = false;
     let mut resume_at = 0;
+    let mut pointer_count = 0;
 
     loop {
         if pos >= raw.len() {
@@ -411,6 +412,14 @@ fn decode_dns_name(raw: &[u8], offset: &mut usize) -> Option<String> {
                 return None;
             }
             let ptr = ((len & 0x3f) << 8) | raw[pos + 1] as usize;
+            pointer_count += 1;
+            // Limit pointer hops to prevent circular/repeating pointers
+            // from hanging the parser.  5 hops covers any legitimate DNS
+            // name (RFC permits at most 255 total bytes in a name, and
+            // each compression pointer saves at least 1 byte).
+            if pointer_count > 5 {
+                return None;
+            }
             if !jumped {
                 resume_at = pos + 2;
                 jumped = true;
@@ -3207,6 +3216,42 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         let raw = b"\x10\x01\x02"; // label length 16 but only 2 bytes available
         let mut offset = 0usize;
         assert!(decode_dns_name(raw, &mut offset).is_none());
+    }
+
+    #[test]
+    fn decode_dns_name_circular_pointer_returns_none() {
+        // Self-referencing compression pointer: at offset 0, the byte is
+        // 0xc0 | 0x00 = 0xc0, second byte is 0x00, so the 14-bit target
+        // is 0 — pointing back to itself.
+        let raw = b"\xc0\x00";
+        let mut offset = 0usize;
+        assert!(decode_dns_name(raw, &mut offset).is_none());
+        // Ensure offset is unmodified on failure (no partial advance).
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn decode_dns_name_long_but_not_circular_pointer_chain() {
+        // Three valid pointer hops: offset 0\xc0\x02 → offset 2\xc0\x04 →
+        // offset 4\xc0\x06 → offset 6\x03foo\x00 → resolves to "foo".
+        let raw = b"\xc0\x02\xc0\x04\xc0\x06\x03foo\x00";
+        let mut offset = 0usize;
+        let result = decode_dns_name(raw, &mut offset);
+        assert_eq!(result.as_deref(), Some("foo"));
+        assert_eq!(offset, 2);
+    }
+
+    #[test]
+    fn decode_dns_name_excessive_pointer_hops_returns_none() {
+        // Six pointer hops (limit is 5).  Each hop points 2 bytes ahead.
+        // Offsets: 0→2→4→6→8→10→12 → next hop is within bounds but exceeds count.
+        let mut raw = Vec::new();
+        for _ in 0..6 {
+            raw.extend_from_slice(b"\xc0\x02"); // ptr to next 2-byte ptr
+        }
+        raw.extend_from_slice(b"\x03foo\x00");
+        let mut offset = 0usize;
+        assert!(decode_dns_name(&raw, &mut offset).is_none());
     }
 
     #[test]
