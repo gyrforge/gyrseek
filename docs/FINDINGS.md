@@ -45,11 +45,15 @@ Two categories of findings are tracked:
 | 13 | `scanning.rs` | 1852 | Medium   | Async tests set env var without drop-guard — panic leaves it set      | ✅ Fixed  |
 | 14 | `parsing.rs`  | 880  | Low      | Temp file not cleaned up on test assertion failure                    | ⚠️ Open  |
 | 15 | `sandbox.rs`  | 511  | Low      | Empty `GYRSEEK_*_SCANNER_IMAGE` env var used as docker image ref     | ✅ Fixed  |
+| 16 | `scanning.rs`  | 509  | Medium   | `extract_dns_map` regex missing `\s*` — never matches real strace output | ✅ Fixed  |
+| 17 | `scanning.rs`  | 972  | High     | `-xx` strace flag hex-escapes execve argv → `is_harness_command` false positives | ✅ Fixed  |
+| 18 | `scanning.rs`  | 467  | Medium   | `parse_dns_response` RDLEN offset reads TTL bytes instead of RDLENGTH  | ✅ Fixed  |
 
 **Chains:**
 - **#4 → #1:** strace errors suppressed → empty log → empty trace → package allowed
 - **#6 → #7:** extras break PyPI lookup AND break version pinning for the same package
 - **#11 → #12:** the `is_non_registry_npm_spec` fix introduced both as side-effects — the filter correctly stops local specs from reaching the registry, but causes the package.json fallback to fire when it shouldn't
+- **#17 → #16→ #18:** strace `-xx` added for DNS wire-format capture (#16's parser, #18's RDLEN bug) but inadvertently hex-escaped execve argv, breaking harness filtering (#17)
 
 ---
 
@@ -264,6 +268,72 @@ impl Drop for EnvGuard {
 
 ---
 
+### Finding 15 — Low | `sandbox.rs:511` | ✅ Fixed
+
+**Summary:** Empty `GYRSEEK_*_SCANNER_IMAGE` env var is treated as a valid Docker image reference, producing an "invalid reference format" error from the Docker CLI.
+
+**Root cause:** `scanner_image_config` used `std::env::var(image_var).unwrap_or_else(|_| default_image)`. When the env var is set to `""` (empty string), `std::env::var` returns `Ok("")`, so `unwrap_or_else` is not reached — the empty string is passed directly to Docker.
+
+**Failure scenario:** A CI pipeline sets `GYRSEEK_NPM_SCANNER_IMAGE: ""` (intending "use default"). The Docker CLI receives an empty image name and exits with "invalid reference format". The scan path treats this as a sandbox failure and blocks the install — correct behaviour (fail-closed) for the wrong reason (Docker parse error, not a meaningful block).
+
+**Fix direction:** Filter out empty strings after the `Option` conversion: `.ok().filter(|v| !v.is_empty())`.
+
+**✅ Fix status — FIXED as suggested.** (`sandbox.rs:515–518`; test `empty_scanner_image_env_falls_back_to_default`.)
+
+---
+
+### Finding 16 — Medium | `scanning.rs:509` | ✅ Fixed
+
+**Summary:** The `extract_dns_map` regex matches `recvfrom` arguments with `",\d+,\d+,\{` but strace output inserts spaces after commas (e.g. `", 1024, 0, {sa_family..."`), so the regex never matches real strace output and DNS interceptor data is always empty in production.
+
+**Root cause:** The regex literal `",\d+,\d+,\{[^}]*\bsin_port=htons\(53\)` requires digits immediately after each comma with no whitespace flexibility. Linux strace separates multi-argument syscalls with `, ` (comma + space). The existing test `extract_dns_map_malformed_payload_skipped` passed for the wrong reason: the malformed payload would be rejected by `parse_dns_response` regardless of match, so the empty-map assertion was trivially satisfied even when the regex didn't fire.
+
+**Failure scenario:** Any real strace trace with DNS responses is silently ignored. The DNS interceptor fallback is an unreachable code path in production. CDN rotations without PTR records (e.g. Fastly, Cloudflare) are flagged as anomalous — the original known-limitation gap described in the old test `domain_aware_diff_cdn_rotation_without_ptr_is_known_limitation`.
+
+**Fix direction:** Change `",\d+,\d+,\{` to `",\s*\d+,\s*\d+,\s*\{` to tolerate optional whitespace after commas.
+
+**✅ Fix status — FIXED as suggested.** (`scanning.rs:509`; end-to-end test `dns_interceptor_end_to_end_with_realistic_strace_trace` now validates the full pipeline with a realistic trace containing spaces. Also retroactively validates the previously-nonfunctional test `extract_dns_map_malformed_payload_skipped` — it now genuinely exercises the regex match path.)
+
+---
+
+### Finding 17 — High | `scanning.rs:972` | ✅ Fixed
+
+**Summary:** Adding `-xx` to strace flags for DNS wire-format capture inadvertently hex-escapes all execve argv strings (e.g. `/usr/local/bin/python` → `\x2f\x75\x73\x72...`), so `is_harness_command` cannot recognise harness commands and every sandbox probe produces spurious Shai-Hulud process-execution anomalies.
+
+**Root cause:** `extract_process_exec_signatures` passes the raw hex-escaped argv from the strace trace directly to `executable_basename` and `is_harness_command`. `executable_basename` uses `rsplit('/')` to find the base name — but the hex-escaped path `\x2f\x75\x73\x72...` has no literal `/`, so `rsplit` returns the whole hex string as a single token. `is_harness_command` matches against literal names like `"uv"`, `"npm"`, `"python"`, `"env"` — none of which match the hex form. Every install+postinstall command leaks through as a "newly introduced process execution" anomaly.
+
+**Failure scenario:** Every `just test-uv`, `just test-pip`, `just test-npm`, etc. run fails on a Shai-Hulud block reporting hex-escaped signatures for every harness command (`uv pip install black==26.5.1`, `env HOME=/work uv pip install ...`, `python -I -B -c import sys;...`), even when the same commands are present in baseline traces.
+
+**Chained with:** Findings 16, 18. The `-xx` flag was added for DNS interceptor support (itself non-functional due to Finding 16). Neither the DNS parser nor exec signatures were updated to handle the `-xx` hex-escape format until this fix.
+
+**Fix direction:** Unescape hex-escaped argv strings before passing to `executable_basename` and `is_harness_command`. Reuse `unescape_strace_string` (already written for DNS parser) on each argv element.
+
+**✅ Fix status — FIXED.** `extract_process_exec_signatures` now unescapes each argv element via `String::from_utf8_lossy(&unescape_strace_string(a))` before building the signature. (`scanning.rs:975–981`.)
+
+---
+
+### Finding 18 — Medium | `scanning.rs:467` | ✅ Fixed
+
+**Summary:** `parse_dns_response` reads the DNS answer RDLENGTH field at the wrong offset (last 2 bytes of TTL instead of bytes 8–9 past the NAME pointer), producing an incorrect RDATA length and potentially missing A/AAAA records.
+
+**Root cause:** After skipping the NAME compression pointer (`offset += 2`), the remaining answer record header is:
+- TYPE (2 bytes, offset+0)
+- CLASS (2 bytes, offset+2)
+- TTL (4 bytes, offset+4)
+- RDLENGTH (2 bytes, offset+8)
+
+The code read `rdlen` from `raw[offset + 6]` and `raw[offset + 7]` — which are the last two bytes of TTL — and advanced `offset += 8` instead of `offset += 10`. RDLENGTH is at `raw[offset + 8]` and `raw[offset + 9]`, and the correct advance is 10 bytes.
+
+**Failure scenario:** A DNS response with a large TTL value (e.g. TTL = 300 = `0x0000012c`) causes `rdlen` to be read as `0x012c` = 300 instead of the actual RDATA length (typically 4 for A, 16 for AAAA). The subsequent `offset += rdlen` jumps far past the packet boundary, corrupting parsing of all subsequent answers. With TTL = 0 (`0x00000000`), `rdlen` is `0x0000` = 0 and the RDATA is never consumed, also corrupting subsequent answers.
+
+**Note:** The existing unit tests `parse_dns_response_a_record` and `parse_dns_response_aaaa_record` used crafted payloads whose TTL value (300) happened to produce an incorrect RDLEN that still satisfied the match and did not overflow the packet in those specific single-answer cases. The multi-answer case would always fail.
+
+**Fix direction:** Change the offset reads: `raw[offset + 8]`, `raw[offset + 9]` for RDLEN, and `offset += 10` for the advance.
+
+**✅ Fix status — FIXED as suggested.** (`scanning.rs:467–469`; the existing single-answer tests now exercise the correct offset path; multi-answer parsing is implicitly fixed but not independently tested.)
+
+---
+
 ## Review history
 
 ### Round 1 — 2026-06-09
@@ -334,6 +404,17 @@ The two actionable items from the Round 3 assessment that were code (not roadmap
 All 188 unit tests + integration tests pass; `cargo clippy --all-targets` clean.
 
 - **Finding 15 — Empty `GYRSEEK_*_SCANNER_IMAGE` env var.** See Finding 15 above. `scanner_image_config` used `std::env::var(image_var).unwrap_or_else(|_| default_image)`, so an env var set to `""` (empty string) was treated as a valid image reference. Docker CLI parses an empty name as "invalid reference format" and fails. Fix: filter out empty strings via `.ok().filter(|v| !v.is_empty())` before falling back.
+
+### Round 5 — 2026-06-16 — DNS interceptor + `-xx` strace
+
+All 234 unit/integration tests pass; `just test-uv` and `just test-pip` pass end-to-end; `cargo clippy --all-targets` and `cargo fmt --check` clean.
+
+- **Finding 16 — `extract_dns_map` regex missing `\s*`.** The regex `",\d+,\d+,\{"` expected no whitespace after commas. Real strace output has `", 1024, 0, {"` (spaces after commas). Zero maps extracted in production. Fixed: `",\s*\d+,\s*\d+,\s*\{"`. See Finding 16 above.
+- **Finding 17 — `-xx` breaks process-exec harness filtering.** The `-xx` flag hex-escapes all strace output including execve argv. `is_harness_command` matched literal names (`uv`, `npm`, `python`, `env`) which don't appear in `\x2f\x75...` form. Every scan produced Shai-Hulud false positives. Fixed: unescape argv via `unescape_strace_string` before signature construction and harness filtering. See Finding 17 above.
+- **Finding 18 — `parse_dns_response` RDLEN offset off by 2 bytes.** Read last 2 bytes of TTL field (offset+6/+7) instead of RDLENGTH (offset+8/+9). Multi-answer DNS responses always corrupted. Fixed: correct offsets and advance. See Finding 18 above.
+- Three DNS interceptor edge-case tests added (domain not in baseline, forward resolver fails, end-to-end with realistic strace trace).
+- `docs/TESTS.md` updated to 50 tests documented.
+- `AGENTS.md` and `README.md` updated with DNS interceptor/`-xx`/exec-unescape details.
 
 ---
 

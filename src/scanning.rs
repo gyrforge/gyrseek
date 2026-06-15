@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::OnceLock;
 
 use chrono::{DateTime, Duration, Utc};
@@ -111,6 +111,10 @@ struct TraceSignals {
     /// Findings from post-install file artifact scan (class-specific IoCs
     /// like suspicious .pth files, unexpected runtime binaries).
     artifact_findings: HashSet<String>,
+    /// Domain → IP map extracted from DNS responses captured by strace.
+    /// Used as a fallback when FCrDNS is unavailable (e.g. CDN edge IPs
+    /// without PTR records).
+    dns_map: HashMap<String, Vec<IpAddr>>,
 }
 
 #[derive(Clone)]
@@ -194,11 +198,64 @@ pub(crate) fn is_sandbox_local_ip(ip: &str) -> bool {
 }
 
 /// Returns connections present in the current version but absent in baseline versions.
-pub(crate) fn find_new_connections(
+/// Domain-aware IP diff: if a current IP resolves via FCrDNS to a domain that
+/// was already seen in baseline traffic, it is not a new connection — just a
+/// benign CDN edge rotation. IPs that do not resolve (no PTR record, or FCrDNS
+/// fails) fall back to a plain IP-level membership check, so the diff remains
+/// fail-closed for genuinely new or spoofed endpoints.
+pub(crate) fn find_new_connections_domain_aware<F, G>(
     ips_curr: &HashSet<String>,
     baseline_ips: &HashSet<String>,
-) -> Vec<String> {
-    ips_curr.difference(baseline_ips).cloned().collect()
+    resolver: F,
+    dns_map: &HashMap<String, Vec<IpAddr>>,
+    baseline_dns_domains: &HashSet<String>,
+    forward_resolver: G,
+) -> Vec<String>
+where
+    F: Fn(&str) -> Option<String>,
+    G: Fn(&str) -> Option<Vec<IpAddr>>,
+{
+    // Build set of domains known from baseline runs: FCrDNS of baseline IPs
+    // plus any domains observed in baseline DNS traces.
+    let baseline_domains: HashSet<String> = baseline_ips
+        .iter()
+        .filter_map(|ip| resolver(ip))
+        .chain(baseline_dns_domains.iter().cloned())
+        .collect();
+
+    ips_curr
+        .iter()
+        .filter(|ip| match resolver(ip) {
+            Some(domain) => !baseline_domains.contains(&domain),
+            None => {
+                // FCrDNS failed (no PTR record, e.g. CDN edge IP).
+                // Fall back to DNS interceptor: if a baseline-known domain
+                // was observed resolving to this IP inside the sandbox,
+                // verify the binding on the host side and skip if valid.
+                let host_verified: bool = dns_map.iter().any(|(domain, dns_ips)| {
+                    if !baseline_domains.contains(domain.as_str()) {
+                        return false;
+                    }
+                    let parsed: IpAddr = match ip.parse() {
+                        Ok(a) => a,
+                        Err(_) => return false,
+                    };
+                    if !dns_ips.contains(&parsed) {
+                        return false;
+                    }
+                    // Host-side forward resolution: confirm the domain
+                    // legitimately resolves to this IP (anti-spoofing).
+                    matches!(forward_resolver(domain), Some(ref addrs) if addrs.contains(&parsed))
+                });
+                if host_verified {
+                    false
+                } else {
+                    !baseline_ips.contains(*ip)
+                }
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn filter_allowlisted_new_connections(
@@ -300,34 +357,167 @@ where
     }
 }
 
-pub(crate) fn enrich_new_connection_domains_with<F>(
-    new_connections: &[String],
-    baseline_ips: &HashSet<String>,
-    resolver: F,
-) -> (Vec<String>, Vec<String>)
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let mut baseline_domains = HashSet::new();
-    for ip in baseline_ips {
-        if let Some(domain) = resolver(ip) {
-            baseline_domains.insert(domain);
-        }
-    }
+// ---------------------------------------------------------------------------
+// DNS response extraction from strace trace (requires strace -xx flag)
+// ---------------------------------------------------------------------------
 
-    let mut new_ip_domain_matches = Vec::new();
-    let mut new_ip_domain_context = Vec::new();
-
-    for ip in new_connections {
-        if let Some(domain) = resolver(ip) {
-            new_ip_domain_context.push(format!("{} -> {}", ip, domain));
-            if baseline_domains.contains(&domain) {
-                new_ip_domain_matches.push(format!("{} -> {}", ip, domain));
+/// Converts a strace hex-escaped string (`\xab\xcd...`) back into raw bytes.
+/// Works correctly with `-xx` (all bytes as `\xNN`) and also handles the mixed
+/// ASCII/escape format produced without it.
+fn unescape_strace_string(s: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() / 4);
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('x') => {
+                    let hi = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+                    let lo = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+                    out.push((hi as u8) << 4 | lo as u8);
+                }
+                Some(c2) => out.push(c2 as u8),
+                None => break,
             }
+        } else {
+            out.push(c as u8);
         }
     }
+    out
+}
 
-    (new_ip_domain_context, new_ip_domain_matches)
+/// Decodes a DNS wire-format name starting at `offset`.  Handles standard
+/// length-prefixed labels (1–63 bytes) and compression pointers (0xc0 prefix,
+/// pointing back into the packet).  Updates `offset` past the compressed or
+/// literal name.  Returns `None` on malformed input.
+fn decode_dns_name(raw: &[u8], offset: &mut usize) -> Option<String> {
+    let mut labels: Vec<String> = Vec::new();
+    let mut pos = *offset;
+    let mut jumped = false;
+    let mut resume_at = 0;
+
+    loop {
+        if pos >= raw.len() {
+            return None;
+        }
+        let len = raw[pos] as usize;
+        if len == 0 {
+            // Root label — end of name.
+            pos += 1;
+            break;
+        }
+        if len & 0xc0 == 0xc0 {
+            // Compression pointer: 2 bytes, offset in lower 14 bits.
+            if pos + 2 > raw.len() {
+                return None;
+            }
+            let ptr = ((len & 0x3f) << 8) | raw[pos + 1] as usize;
+            if !jumped {
+                resume_at = pos + 2;
+                jumped = true;
+            }
+            pos = ptr;
+            continue;
+        }
+        // Normal label: 1-byte length + label bytes.
+        pos += 1;
+        if pos + len > raw.len() {
+            return None;
+        }
+        let label = std::str::from_utf8(&raw[pos..pos + len]).ok()?;
+        labels.push(label.to_string());
+        pos += len;
+    }
+
+    *offset = if jumped { resume_at } else { pos };
+    Some(labels.join("."))
+}
+
+/// Parses a single DNS response payload, extracting the query name and all
+/// A / AAAA record addresses from the answer section.  Ignores CNAME, NS,
+/// and other record types.  Returns `None` if the payload is not a DNS
+/// response (QR flag not set) or is too short to parse.
+fn parse_dns_response(raw: &[u8]) -> Option<(String, Vec<IpAddr>)> {
+    if raw.len() < 12 {
+        return None;
+    }
+    // Byte 2, bit 15 = QR (response flag).
+    if raw[2] & 0x80 == 0 {
+        return None;
+    }
+    let ancount = u16::from_be_bytes([raw[6], raw[7]]) as usize;
+    if ancount == 0 {
+        return None;
+    }
+
+    let mut offset: usize = 12;
+    let qname = decode_dns_name(raw, &mut offset)?;
+    // Skip qtype (2) + qclass (2).
+    offset += 4;
+
+    let mut answers: Vec<IpAddr> = Vec::new();
+    for _ in 0..ancount {
+        if offset + 10 > raw.len() {
+            break;
+        }
+        // Skip NAME (usually a 2-byte pointer 0xc00c).
+        offset += 2;
+        if offset + 10 > raw.len() {
+            break;
+        }
+        let rtype = u16::from_be_bytes([raw[offset], raw[offset + 1]]);
+        let rdlen = u16::from_be_bytes([raw[offset + 8], raw[offset + 9]]);
+        offset += 10; // past TYPE + CLASS + TTL + RDLENGTH
+        let rdlen = rdlen as usize;
+        if offset + rdlen > raw.len() {
+            break;
+        }
+        match (rtype, rdlen) {
+            (1, 4) => {
+                answers.push(IpAddr::V4(Ipv4Addr::new(
+                    raw[offset],
+                    raw[offset + 1],
+                    raw[offset + 2],
+                    raw[offset + 3],
+                )));
+            }
+            (28, 16) => {
+                let mut octets = [0u8; 16];
+                octets.copy_from_slice(&raw[offset..offset + 16]);
+                answers.push(IpAddr::V6(Ipv6Addr::from(octets)));
+            }
+            _ => {}
+        }
+        offset += rdlen;
+    }
+
+    if answers.is_empty() {
+        None
+    } else {
+        Some((qname, answers))
+    }
+}
+
+/// Extracts a domain → IP map from DNS response packets visible in the strace
+/// trace.  Requires strace `-xx` so all bytes appear as `\xNN` for reliable
+/// wire-format parsing.
+fn extract_dns_map(trace: &str) -> HashMap<String, Vec<IpAddr>> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // Match `recvfrom(N, "payload", ...)` where the sockaddr includes
+    // `sin_port=htons(53)` — responses from the DNS resolver.
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r#"recvfrom\(\d+,\s*"((?:\\x[0-9a-fA-F]{2}|[^"\\])*)",\s*\d+,\s*\d+,\s*\{[^}]*\bsin_port=htons\(53\)"#
+        ).unwrap()
+    });
+
+    let mut map: HashMap<String, Vec<IpAddr>> = HashMap::new();
+    for caps in re.captures_iter(trace) {
+        let raw = unescape_strace_string(&caps[1]);
+        if let Some((qname, ips)) = parse_dns_response(&raw) {
+            map.entry(qname).or_default().extend(ips);
+        }
+    }
+    map
 }
 
 pub(crate) async fn fetch_history_with_baselines(
@@ -600,6 +790,7 @@ fn trace_sandbox_install_matrix(
             git_clone_signatures: extract_git_clone_signatures(trace),
             process_exec_signatures: extract_process_exec_signatures(trace),
             artifact_findings,
+            dns_map: extract_dns_map(trace),
         };
         by_probe.insert((package, version), signals);
     }
@@ -781,14 +972,20 @@ fn is_harness_command(exe: &str, args: &[String]) -> bool {
 fn extract_process_exec_signatures(trace: &str) -> HashSet<String> {
     let mut signatures = HashSet::new();
     for args in parse_execve_argvs(trace) {
-        let exe = executable_basename(&args[0]);
-        if is_harness_command(&exe, &args[1..]) {
+        // With strace -xx the argv is hex-escaped; unescape so
+        // executable_basename / is_harness_command match correctly.
+        let unescaped: Vec<String> = args
+            .iter()
+            .map(|a| String::from_utf8_lossy(&unescape_strace_string(a)).to_string())
+            .collect();
+        let exe = executable_basename(&unescaped[0]);
+        if is_harness_command(&exe, &unescaped[1..]) {
             continue;
         }
         // Signature = basename + remaining argv, so changed/extra args produce a
         // distinct signature that won't match the baseline set.
         let mut parts = vec![exe];
-        parts.extend(args[1..].iter().cloned());
+        parts.extend(unescaped[1..].iter().cloned());
         signatures.insert(parts.join("|"));
     }
     signatures
@@ -1257,11 +1454,13 @@ pub(crate) async fn scan_packages_versions(
         let git_curr = current_signals.git_clone_signatures;
         let proc_curr = current_signals.process_exec_signatures;
         let artifact_curr = current_signals.artifact_findings.clone();
+        let dns_curr = current_signals.dns_map.clone();
 
         let mut baseline_ips = HashSet::new();
         let mut baseline_git_clone_signatures = HashSet::new();
         let mut baseline_process_exec_signatures = HashSet::new();
         let mut baseline_artifact_findings = HashSet::new();
+        let mut baseline_dns_domains = HashSet::new();
         let mut missing = false;
 
         for v in &plan.baselines {
@@ -1274,6 +1473,7 @@ pub(crate) async fn scan_packages_versions(
                     baseline_process_exec_signatures
                         .extend(found.process_exec_signatures.iter().cloned());
                     baseline_artifact_findings.extend(found.artifact_findings.iter().cloned());
+                    baseline_dns_domains.extend(found.dns_map.keys().cloned());
                 }
                 None => {
                     println!(
@@ -1414,7 +1614,14 @@ pub(crate) async fn scan_packages_versions(
             continue;
         }
 
-        let new_connections = find_new_connections(&ips_curr, &baseline_ips);
+        let new_connections = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            reverse_dns_domain,
+            &dns_curr,
+            &baseline_dns_domains,
+            |d| lookup_host(d).ok(),
+        );
         let (new_connections, allowlisted_connections) =
             filter_allowlisted_new_connections(new_connections, &policy.ip_allowlist);
         let (new_connections, allowlisted_domain_connections) =
@@ -1444,29 +1651,19 @@ pub(crate) async fn scan_packages_versions(
                 plan.baselines.join(", ")
             };
 
-            let (new_ip_domain_context, new_ip_domain_matches) = enrich_new_connection_domains_with(
-                &new_connections,
-                &baseline_ips,
-                reverse_dns_domain,
-            );
+            let enriched: Vec<String> = new_connections
+                .iter()
+                .map(|ip| match reverse_dns_domain(ip) {
+                    Some(d) => format!("{} -> {}", ip, d),
+                    None => ip.clone(),
+                })
+                .collect();
 
             println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
             println!(
                 "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({}): {:?}",
-                plan.package, plan.current, baseline_label, new_connections
+                plan.package, plan.current, baseline_label, enriched
             );
-            if !new_ip_domain_context.is_empty() {
-                println!(
-                    "ℹ️ [gyrseek] Reverse DNS context for new IPs (informational only): {:?}",
-                    new_ip_domain_context
-                );
-            }
-            if !new_ip_domain_matches.is_empty() {
-                println!(
-                    "ℹ️ [gyrseek] Some new IPs map to domains seen in baseline traffic: {:?}",
-                    new_ip_domain_matches
-                );
-            }
             println!("Aborting host operation securely.");
             blocked(&mut results, key);
             continue;
@@ -1510,20 +1707,21 @@ mod tests {
 
     use super::{
         PolicyConfig, burst_policy_warning, burst_triggered, classify_inventory_lines,
-        compare_version_strings, count_releases_in_window, enrich_new_connection_domains_with,
-        exemption_behavior, extract_artifact_findings, extract_connection_ips,
+        compare_version_strings, count_releases_in_window, decode_dns_name, exemption_behavior,
+        extract_artifact_findings, extract_connection_ips, extract_dns_map,
         extract_process_exec_signatures, filter_allowlisted_artifact_findings,
         filter_allowlisted_git_clone_signatures, filter_allowlisted_new_connections,
         filter_allowlisted_process_exec_signatures, filter_domain_allowlisted_new_connections_with,
-        find_new_connections, find_new_process_exec_signatures, forward_confirmed_hostname,
-        is_sandbox_local_ip, minimum_release_age_policy_warning, normalize_ip_string,
-        npm_published_times, scan_packages_versions, select_age_eligible_baselines,
-        select_effective_baselines, sort_versions_ascending, strip_artifact_section,
+        find_new_connections_domain_aware, find_new_process_exec_signatures,
+        forward_confirmed_hostname, is_sandbox_local_ip, minimum_release_age_policy_warning,
+        normalize_ip_string, npm_published_times, parse_dns_response, reverse_dns_domain,
+        scan_packages_versions, select_age_eligible_baselines, select_effective_baselines,
+        sort_versions_ascending, strip_artifact_section, unescape_strace_string,
     };
     use chrono::Duration;
     use std::cmp::Ordering;
     use std::collections::HashSet;
-    use std::net::IpAddr;
+    use std::net::{IpAddr, Ipv6Addr};
 
     // --- #1 semantic version ordering ---
 
@@ -2284,7 +2482,14 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             .map(String::from)
             .collect();
         let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
-        let mut new = find_new_connections(&ips_curr, &baseline_ips);
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            |_| None,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
         new.sort();
         assert_eq!(new, vec!["8.8.8.8".to_string()]);
     }
@@ -2296,45 +2501,17 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             .into_iter()
             .map(String::from)
             .collect();
-        assert!(find_new_connections(&ips_curr, &baseline_ips).is_empty());
-    }
-
-    #[test]
-    fn dns_enrichment_reports_context_and_domain_overlap_matches() {
-        let baseline_ips: HashSet<String> = ["1.1.1.1", "9.9.9.9"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-        let new_connections = vec!["8.8.8.8".to_string(), "5.5.5.5".to_string()];
-        let resolver = |ip: &str| match ip {
-            "1.1.1.1" => Some("example.net".to_string()),
-            "9.9.9.9" => Some("baseline-only.net".to_string()),
-            "8.8.8.8" => Some("example.net".to_string()),
-            "5.5.5.5" => Some("new.net".to_string()),
-            _ => None,
-        };
-        let (mut context, mut matches) =
-            enrich_new_connection_domains_with(&new_connections, &baseline_ips, resolver);
-        context.sort();
-        matches.sort();
-        assert_eq!(
-            context,
-            vec![
-                "5.5.5.5 -> new.net".to_string(),
-                "8.8.8.8 -> example.net".to_string()
-            ]
+        assert!(
+            find_new_connections_domain_aware(
+                &ips_curr,
+                &baseline_ips,
+                |_| None,
+                &HashMap::new(),
+                &HashSet::new(),
+                |_| None
+            )
+            .is_empty()
         );
-        assert_eq!(matches, vec!["8.8.8.8 -> example.net".to_string()]);
-    }
-
-    #[test]
-    fn dns_enrichment_ignores_unresolved_ips_without_failing() {
-        let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
-        let new_connections = vec!["8.8.8.8".to_string()];
-        let (context, matches) =
-            enrich_new_connection_domains_with(&new_connections, &baseline_ips, |_| None);
-        assert!(context.is_empty());
-        assert!(matches.is_empty());
     }
 
     #[test]
@@ -2400,6 +2577,475 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     }
 
     #[test]
+    fn domain_aware_diff_discards_ip_when_domain_seen_in_baseline() {
+        let ips_curr: HashSet<String> = ["151.101.1.54", "5.5.5.5"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let baseline_ips: HashSet<String> = ["151.101.0.1"].into_iter().map(String::from).collect();
+        let resolver = |ip: &str| match ip {
+            "151.101.0.1" => Some("files.pythonhosted.org".to_string()),
+            "151.101.1.54" => Some("files.pythonhosted.org".to_string()),
+            "5.5.5.5" => Some("evil.example.com".to_string()),
+            _ => None,
+        };
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        new.sort();
+        assert_eq!(new, vec!["5.5.5.5".to_string()]);
+    }
+
+    #[test]
+    fn domain_aware_diff_keeps_ip_when_domain_is_new() {
+        let ips_curr: HashSet<String> = ["8.8.8.8"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["151.101.0.1"].into_iter().map(String::from).collect();
+        let resolver = |ip: &str| match ip {
+            "151.101.0.1" => Some("files.pythonhosted.org".to_string()),
+            "8.8.8.8" => Some("google.com".to_string()),
+            _ => None,
+        };
+        let new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        assert_eq!(new, vec!["8.8.8.8".to_string()]);
+    }
+
+    #[test]
+    fn domain_aware_diff_falls_back_to_ip_when_neither_resolves() {
+        let ips_curr: HashSet<String> = ["8.8.8.8"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            |_| None,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        assert_eq!(new, vec!["8.8.8.8".to_string()]);
+    }
+
+    #[test]
+    fn domain_aware_diff_not_new_when_ip_in_baseline_and_no_resolution() {
+        let ips_curr: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1", "9.9.9.9"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            |_| None,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        assert!(new.is_empty());
+    }
+
+    #[test]
+    fn domain_aware_diff_multiple_ips_same_domain_all_discarded() {
+        let ips_curr: HashSet<String> = vec![
+            "151.101.1.1".to_string(),
+            "151.101.2.2".to_string(),
+            "151.101.3.3".to_string(),
+            "1.2.3.4".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        let baseline_ips: HashSet<String> = ["151.101.0.1"].into_iter().map(String::from).collect();
+        let resolver = |ip: &str| match ip {
+            "151.101.0.1" | "151.101.1.1" | "151.101.2.2" | "151.101.3.3" => {
+                Some("files.pythonhosted.org".to_string())
+            }
+            _ => None,
+        };
+        let new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        assert_eq!(new, vec!["1.2.3.4".to_string()]);
+    }
+
+    #[test]
+    fn domain_aware_diff_mixed_resolved_and_unresolved() {
+        let ips_curr: HashSet<String> = vec![
+            "151.101.1.54".to_string(),
+            "10.0.0.1".to_string(),
+            "1.2.3.4".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        let baseline_ips: HashSet<String> = ["151.101.0.1"].into_iter().map(String::from).collect();
+        let resolver = |ip: &str| match ip {
+            "151.101.0.1" | "151.101.1.54" => Some("files.pythonhosted.org".to_string()),
+            "10.0.0.1" => Some("unknown.internal".to_string()),
+            _ => None,
+        };
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        new.sort();
+        assert_eq!(new, vec!["1.2.3.4".to_string(), "10.0.0.1".to_string()]);
+    }
+
+    #[test]
+    fn domain_aware_diff_empty_current_returns_nothing() {
+        let ips_curr: HashSet<String> = HashSet::new();
+        let baseline_ips: HashSet<String> = ["151.101.0.1"].into_iter().map(String::from).collect();
+        let resolver = |_ip: &str| Some("files.pythonhosted.org".to_string());
+        let new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        assert!(new.is_empty());
+    }
+
+    #[test]
+    fn domain_aware_diff_empty_baseline_flags_all_current() {
+        let ips_curr: HashSet<String> = ["151.101.1.54", "8.8.8.8"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let baseline_ips: HashSet<String> = HashSet::new();
+        let resolver = |ip: &str| match ip {
+            "151.101.1.54" => Some("files.pythonhosted.org".to_string()),
+            _ => None,
+        };
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        new.sort();
+        assert_eq!(new, vec!["151.101.1.54".to_string(), "8.8.8.8".to_string()]);
+    }
+
+    #[test]
+    fn domain_aware_diff_same_ip_same_domain_not_flagged() {
+        let ips_curr: HashSet<String> = ["151.101.1.54"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> =
+            ["151.101.1.54"].into_iter().map(String::from).collect();
+        let resolver = |ip: &str| match ip {
+            "151.101.1.54" => Some("files.pythonhosted.org".to_string()),
+            _ => None,
+        };
+        let new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        assert!(new.is_empty());
+    }
+
+    #[test]
+    fn domain_aware_diff_current_unresolved_ip_in_baseline_not_flagged() {
+        let ips_curr: HashSet<String> = ["8.8.8.8"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["8.8.8.8"].into_iter().map(String::from).collect();
+        let resolver = |_ip: &str| match _ip {
+            "8.8.8.8" => None,
+            _ => None,
+        };
+        let new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        assert!(new.is_empty());
+    }
+
+    #[test]
+    fn domain_aware_diff_current_resolves_baseline_ip_unresolvable() {
+        // Baseline has IPs but none resolve — baseline_domains is empty,
+        // so any current domain is treated as new.
+        let ips_curr: HashSet<String> = ["151.101.1.54"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let resolver = |ip: &str| match ip {
+            "151.101.1.54" => Some("files.pythonhosted.org".to_string()),
+            _ => None,
+        };
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        new.sort();
+        assert_eq!(new, vec!["151.101.1.54".to_string()]);
+    }
+
+    #[test]
+    fn domain_aware_diff_same_ip_changed_domain() {
+        // Same IP in baseline and current, but the resolver returns a
+        // *different* domain for the current call. This exercises the
+        // A2 path (domain not in baseline_domains) even though the IP
+        // itself is in baseline_ips.
+        use std::cell::Cell;
+        let call_count = Cell::new(0u8);
+        let resolver = |ip: &str| {
+            if ip == "1.1.1.1" {
+                let n = call_count.get();
+                call_count.set(n + 1);
+                if n == 0 {
+                    // Called during baseline_domains collection
+                    Some("old.domain.com".to_string())
+                } else {
+                    // Called during current IP iteration
+                    Some("new.domain.com".to_string())
+                }
+            } else {
+                None
+            }
+        };
+        let ips_curr: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        new.sort();
+        assert_eq!(new, vec!["1.1.1.1".to_string()]);
+    }
+
+    #[test]
+    fn domain_aware_diff_same_ip_baseline_resolves_current_not() {
+        // Same IP — baseline resolves to a domain, current does not.
+        // IP itself is in baseline_ips, so IP-membership fallback neutralizes it.
+        use std::cell::Cell;
+        let call_count = Cell::new(0u8);
+        let resolver = |ip: &str| {
+            if ip == "1.1.1.1" {
+                let n = call_count.get();
+                call_count.set(n + 1);
+                if n == 0 {
+                    Some("known.cdn.com".to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        let ips_curr: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        assert!(new.is_empty());
+    }
+
+    #[test]
+    fn domain_aware_diff_same_ip_baseline_not_resolves_current_resolves() {
+        // Same IP — baseline did not resolve, but current does.
+        // Since baseline_domains is empty the domain appears new, so the IP is flagged.
+        use std::cell::Cell;
+        let call_count = Cell::new(0u8);
+        let resolver = |ip: &str| {
+            if ip == "1.1.1.1" {
+                let n = call_count.get();
+                call_count.set(n + 1);
+                if n == 0 {
+                    None
+                } else {
+                    Some("newly.seen.com".to_string())
+                }
+            } else {
+                None
+            }
+        };
+        let ips_curr: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        new.sort();
+        assert_eq!(new, vec!["1.1.1.1".to_string()]);
+    }
+
+    #[test]
+    fn reverse_dns_domain_invalid_ip_returns_none() {
+        assert!(reverse_dns_domain("not_an_ip").is_none());
+    }
+
+    #[test]
+    fn pipeline_chains_domain_aware_diff_with_allowlists() {
+        // Full 3-stage pipeline matching production (lines 1406–1453):
+        //   1. find_new_connections_domain_aware  (domain-aware IP diff)
+        //   2. filter_allowlisted_new_connections  (IP allowlist)
+        //   3. filter_domain_allowlisted_new_connections_with (domain allowlist)
+
+        let ips_curr: HashSet<String> = ["151.101.1.54", "8.8.8.8", "5.5.5.5"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let baseline_ips: HashSet<String> = ["151.101.0.1"].into_iter().map(String::from).collect();
+        let resolver = |ip: &str| match ip {
+            "151.101.0.1" | "151.101.1.54" => Some("files.pythonhosted.org".to_string()),
+            "5.5.5.5" => Some("evil.example.com".to_string()),
+            _ => None,
+        };
+
+        // Stage 1: 151.101.1.54 filtered (same domain), 8.8.8.8 flagged (unresolvable),
+        //          5.5.5.5 flagged (new domain)
+        let new_connections = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
+        let mut sorted: Vec<_> = new_connections.into_iter().collect();
+        sorted.sort();
+        assert_eq!(sorted, vec!["5.5.5.5".to_string(), "8.8.8.8".to_string()]);
+
+        // Stage 2: IP allowlist removes 8.8.8.8
+        let ip_allowlist: HashSet<String> = ["8.8.8.8"].into_iter().map(String::from).collect();
+        let (new_connections, allowlisted_ips) =
+            filter_allowlisted_new_connections(sorted, &ip_allowlist);
+        assert_eq!(allowlisted_ips, vec!["8.8.8.8".to_string()]);
+        assert_eq!(new_connections, vec!["5.5.5.5".to_string()]);
+
+        // Stage 3: Domain allowlist catches 5.5.5.5 -> evil.example.com
+        let domain_allowlist: HashSet<String> =
+            ["evil.example.com"].into_iter().map(String::from).collect();
+        let resolver2 = |ip: &str| match ip {
+            "5.5.5.5" => Some("evil.example.com".to_string()),
+            _ => None,
+        };
+        let (new_connections, allowlisted_domains) = filter_domain_allowlisted_new_connections_with(
+            new_connections,
+            &domain_allowlist,
+            resolver2,
+        );
+        assert_eq!(
+            allowlisted_domains,
+            vec!["5.5.5.5 -> evil.example.com".to_string()]
+        );
+        assert!(new_connections.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // CDN rotation without PTR records — handled by DNS interceptor fallback.
+    //
+    // When both baseline and current IPs belong to the same CDN (Fastly, Cloudflare,
+    // etc.) but the IPs themselves have no PTR records, the domain-aware diff
+    // cannot use FCrDNS.  Instead it falls back to the strace-parsed DNS map:
+    // if the current IPs were resolved under a domain that baseline traffic also
+    // resolved, and host-side forward confirmation verifies the binding, the
+    // rotation is discarded as benign.
+    //
+    // This test reproduces the real-world scenario from iniconfig 2.3.0:
+    //
+    //   baseline IPs (2.2.0 / 2.1.0):  140.248.144.220, 2a04:4e42:94::200
+    //   current IPs  (2.3.0):           140.248.144.223, 2a04:4e42:94::223
+    //
+    // Both sets of Fastly IPs lack PTR records.  Baseline DNS traces captured
+    // the domain `objects.fastly.com`; current DNS traces show the same domain
+    // resolving to the new IPs.  Host-side forward_resolver confirms the binding.
+    #[test]
+    fn domain_aware_diff_cdn_rotation_without_ptr_handled_by_dns_interceptor() {
+        let ips_curr: HashSet<String> = ["2a04:4e42:94::223", "140.248.144.223"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let baseline_ips: HashSet<String> = ["140.248.144.220", "2a04:4e42:94::200"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        // Fastly edge IPs — no PTR records
+        let resolver = |_ip: &str| None;
+
+        // DNS interceptor data: current DNS trace maps a domain to the new IPs
+        let mut dns_map: HashMap<String, Vec<IpAddr>> = HashMap::new();
+        dns_map.insert(
+            "objects.fastly.com".to_string(),
+            vec![
+                "140.248.144.223".parse::<IpAddr>().unwrap(),
+                "2a04:4e42:94::223".parse::<IpAddr>().unwrap(),
+            ],
+        );
+        // Baseline DNS trace logged the same domain
+        let baseline_dns_domains: HashSet<String> =
+            ["objects.fastly.com".to_string()].into_iter().collect();
+        // Host-side forward resolution confirms the binding
+        let forward_resolver = |d: &str| {
+            if d == "objects.fastly.com" {
+                Some(vec![
+                    "140.248.144.223".parse::<IpAddr>().unwrap(),
+                    "2a04:4e42:94::223".parse::<IpAddr>().unwrap(),
+                ])
+            } else {
+                None
+            }
+        };
+
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &dns_map,
+            &baseline_dns_domains,
+            forward_resolver,
+        );
+        new.sort();
+        assert!(
+            new.is_empty(),
+            "CDN rotation with no PTR should not be flagged, but got: {:?}",
+            new
+        );
+    }
+
+    #[test]
     fn ip_allowlist_matches_equivalent_ipv6_representations() {
         let new_connections = vec!["2001:0db8:0000:0000:0000:ff00:0042:8329".to_string()];
         let ip_allowlist: HashSet<String> = ["2001:db8::ff00:42:8329"]
@@ -2446,7 +3092,14 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             .collect();
         let baseline_ips: HashSet<String> =
             ["140.82.112.3"].into_iter().map(String::from).collect();
-        let mut new = find_new_connections(&clone_ips, &baseline_ips);
+        let mut new = find_new_connections_domain_aware(
+            &clone_ips,
+            &baseline_ips,
+            |_| None,
+            &HashMap::new(),
+            &HashSet::new(),
+            |_| None,
+        );
         new.sort();
         assert_eq!(new, vec!["185.199.108.133".to_string()]);
     }
@@ -2458,7 +3111,338 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             .into_iter()
             .map(String::from)
             .collect();
-        assert!(find_new_connections(&clone_ips, &baseline_ips).is_empty());
+        assert!(
+            find_new_connections_domain_aware(
+                &clone_ips,
+                &baseline_ips,
+                |_| None,
+                &HashMap::new(),
+                &HashSet::new(),
+                |_| None
+            )
+            .is_empty()
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // DNS interceptor parser tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn unescape_bare_ascii_passthrough() {
+        assert_eq!(unescape_strace_string("hello"), b"hello");
+    }
+
+    #[test]
+    fn unescape_hex_escape_decode() {
+        assert_eq!(unescape_strace_string("\\x41\\x42\\x43"), b"ABC");
+    }
+
+    #[test]
+    fn unescape_mixed_ascii_and_hex() {
+        assert_eq!(unescape_strace_string("ab\\x63\\x64ef"), b"abcdef");
+    }
+
+    #[test]
+    fn unescape_empty_string() {
+        assert!(unescape_strace_string("").is_empty());
+    }
+
+    #[test]
+    fn unescape_trailing_backslash() {
+        assert_eq!(unescape_strace_string("ab\\"), b"ab");
+    }
+
+    #[test]
+    fn unescape_backslash_escape_non_hex() {
+        assert_eq!(unescape_strace_string("a\\nb"), b"anb");
+    }
+
+    #[test]
+    fn decode_dns_name_simple_two_label() {
+        let raw = b"\x03foo\x03com\x00";
+        let mut offset = 0usize;
+        let got = decode_dns_name(raw, &mut offset);
+        assert_eq!(got, Some("foo.com".to_string()));
+        assert_eq!(offset, 9);
+    }
+
+    #[test]
+    fn decode_dns_name_root_label_only() {
+        let raw = b"\x00";
+        let mut offset = 0usize;
+        let got = decode_dns_name(raw, &mut offset);
+        assert_eq!(got, Some(String::new()));
+        assert_eq!(offset, 1);
+    }
+
+    #[test]
+    fn decode_dns_name_single_byte_pointer() {
+        // Label "foo" at offset 0, then pointer 0xc000 at offset 5
+        // (points back to offset 0).
+        let raw = b"\x03foo\x00\xc0\x00";
+        let mut offset = 5usize;
+        let got = decode_dns_name(raw, &mut offset);
+        assert_eq!(got, Some("foo".to_string()));
+        // After a pointer, offset advances past the 2-byte pointer.
+        assert_eq!(offset, 7);
+    }
+
+    #[test]
+    fn decode_dns_name_recursive_pointer_chain() {
+        // Two compression pointers chained:
+        //   offset 0: \x03foo\x00  → "foo"
+        //   offset 5: \xc0\x00      → points to offset 0
+        //   offset 7: \xc0\x05      → points to offset 5 (which itself is a pointer)
+        // Starting at offset 7, the chain resolves through two hops to "foo".
+        let raw = b"\x03foo\x00\xc0\x00\xc0\x05";
+        let mut offset = 7usize;
+        let got = decode_dns_name(raw, &mut offset);
+        assert_eq!(got, Some("foo".to_string()));
+        assert_eq!(offset, 9);
+    }
+
+    #[test]
+    fn decode_dns_name_out_of_bounds_returns_none() {
+        let raw = b"\x10\x01\x02"; // label length 16 but only 2 bytes available
+        let mut offset = 0usize;
+        assert!(decode_dns_name(raw, &mut offset).is_none());
+    }
+
+    #[test]
+    fn parse_dns_response_a_record() {
+        // Craft a minimal DNS response with one A record.
+        let mut raw = vec![
+            0x00, 0x00, // TXID (ignored)
+            0x81, 0x80, // Flags: response + standard query
+            0x00, 0x01, // QDCOUNT = 1
+            0x00, 0x01, // ANCOUNT = 1
+            0x00, 0x00, 0x00, 0x00, // NSCOUNT, ARCOUNT
+        ];
+        // QNAME: \x03foo\x03com\x00
+        raw.extend_from_slice(b"\x03foo\x03com\x00");
+        // QTYPE=1 (A), QCLASS=1 (IN)
+        raw.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        // ANSWER: NAME=0xc00c (compression pointer to QNAME)
+        raw.extend_from_slice(&[0xc0, 0x0c]);
+        // TYPE=1 (A), CLASS=1, TTL=300, RDLENGTH=4
+        raw.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x04]);
+        // RDATA: 93.184.216.34
+        raw.extend_from_slice(&[0x5d, 0xb8, 0xd8, 0x22]);
+
+        let (qname, ips) = parse_dns_response(&raw).unwrap();
+        assert_eq!(qname, "foo.com");
+        assert_eq!(ips, vec!["93.184.216.34".parse::<IpAddr>().unwrap()]);
+    }
+
+    #[test]
+    fn parse_dns_response_aaaa_record() {
+        let mut raw = vec![
+            0x00, 0x00, // TXID
+            0x81, 0x80, // response + standard query
+            0x00, 0x01, // QDCOUNT = 1
+            0x00, 0x01, // ANCOUNT = 1
+            0x00, 0x00, 0x00, 0x00,
+        ];
+        let ipv6_addr = "2001:db8::1".parse::<Ipv6Addr>().unwrap();
+        raw.extend_from_slice(b"\x03foo\x00");
+        raw.extend_from_slice(&[0x00, 0x1c, 0x00, 0x01]); // QTYPE=28 (AAAA)
+        raw.extend_from_slice(&[0xc0, 0x0c]);
+        raw.extend_from_slice(&[0x00, 0x1c, 0x00, 0x01, 0x00, 0x00, 0x01, 0x2c, 0x00, 0x10]);
+        raw.extend_from_slice(&ipv6_addr.octets());
+
+        let (qname, ips) = parse_dns_response(&raw).unwrap();
+        assert_eq!(qname, "foo");
+        assert_eq!(ips, vec![IpAddr::V6(ipv6_addr)]);
+    }
+
+    #[test]
+    fn parse_dns_response_non_response_returns_none() {
+        // QR flag not set (byte 2 is 0x00 instead of 0x80)
+        let raw = vec![
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ];
+        assert!(parse_dns_response(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_dns_response_too_short_returns_none() {
+        assert!(parse_dns_response(b"\x00\x01\x02").is_none());
+    }
+
+    #[test]
+    fn extract_dns_map_empty_trace() {
+        let map = extract_dns_map("no dns traffic here");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn extract_dns_map_malformed_payload_skipped() {
+        let trace = r#"recvfrom(5, "\x00\x01\x00\x01", 1024, 0, {sa_family=AF_INET, sin_port=htons(53)}, [16]) = 200"#;
+        let map = extract_dns_map(trace);
+        assert!(map.is_empty(), "malformed DNS payload should be skipped");
+    }
+
+    // ---------------------------------------------------------------------------
+    // DNS interceptor fallback edge-case tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn dns_interceptor_skips_when_domain_not_in_baseline() {
+        let ips_curr: HashSet<String> = ["140.248.144.223"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> =
+            ["140.248.144.220"].into_iter().map(String::from).collect();
+        let resolver = |_ip: &str| None;
+        let mut dns_map: HashMap<String, Vec<IpAddr>> = HashMap::new();
+        dns_map.insert(
+            "new-cdn.example.com".to_string(),
+            vec!["140.248.144.223".parse::<IpAddr>().unwrap()],
+        );
+        // Baseline DNS traces don't include this domain
+        let baseline_dns_domains: HashSet<String> = HashSet::new();
+        let forward_resolver = |d: &str| {
+            if d == "new-cdn.example.com" {
+                Some(vec!["140.248.144.223".parse::<IpAddr>().unwrap()])
+            } else {
+                None
+            }
+        };
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &dns_map,
+            &baseline_dns_domains,
+            forward_resolver,
+        );
+        new.sort();
+        assert_eq!(
+            new,
+            vec!["140.248.144.223".to_string()],
+            "IP should be flagged because its domain is not in baseline"
+        );
+    }
+
+    #[test]
+    fn dns_interceptor_skips_when_forward_resolver_does_not_confirm() {
+        let ips_curr: HashSet<String> = ["140.248.144.223"].into_iter().map(String::from).collect();
+        let baseline_ips: HashSet<String> =
+            ["140.248.144.220"].into_iter().map(String::from).collect();
+        let resolver = |_ip: &str| None;
+        let mut dns_map: HashMap<String, Vec<IpAddr>> = HashMap::new();
+        dns_map.insert(
+            "objects.fastly.com".to_string(),
+            vec!["140.248.144.223".parse::<IpAddr>().unwrap()],
+        );
+        let baseline_dns_domains: HashSet<String> =
+            ["objects.fastly.com".to_string()].into_iter().collect();
+        // Forward resolver does NOT confirm the binding (spoofed DNS)
+        let forward_resolver = |_d: &str| None;
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &dns_map,
+            &baseline_dns_domains,
+            forward_resolver,
+        );
+        new.sort();
+        assert_eq!(
+            new,
+            vec!["140.248.144.223".to_string()],
+            "IP should be flagged when forward resolver doesn't confirm"
+        );
+    }
+
+    #[test]
+    fn dns_interceptor_end_to_end_with_realistic_strace_trace() {
+        // Build a realistic strace -xx trace: connect calls to Fastly CDN
+        // (no PTR) + recvfrom from port 53 with DNS A + AAAA responses.
+        //
+        // The hex-escaped DNS response packet contains:
+        //   QNAME: foo.com
+        //   Answer 1: A      140.248.144.223
+        //   Answer 2: AAAA   2a04:4e42:94::223
+        let dns_payload = "\
+            \\x00\\x00\\x81\\x80\\x00\\x01\\x00\\x02\\x00\\x00\\x00\\x00\
+            \\x03\\x66\\x6f\\x6f\\x03\\x63\\x6f\\x6d\\x00\
+            \\x00\\x01\\x00\\x01\
+            \\xc0\\x0c\\x00\\x01\\x00\\x01\\x00\\x00\\x01\\x2c\\x00\\x04\
+            \\x8c\\xf8\\x90\\xdf\
+            \\xc0\\x0c\\x00\\x1c\\x00\\x01\\x00\\x00\\x01\\x2c\\x00\\x10\
+            \\x2a\\x04\\x4e\\x42\\x00\\x94\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x23";
+
+        let trace = format!(
+            "[pid 123] connect(5, {{sa_family=AF_INET, sin_port=htons(443), \
+             sin_addr=inet_addr(\"140.248.144.223\")}}, 16) = 0\n\
+             [pid 123] connect(5, {{sa_family=AF_INET6, sin6_port=htons(443), \
+             sin6_addr=inet_pton(AF_INET6, \"2a04:4e42:94::223\")}}, 28) = 0\n\
+             [pid 123] recvfrom(5, \"{}\", 1024, 0, \
+             {{sa_family=AF_INET, sin_port=htons(53)}}, [16]) = 70\n\
+             [pid 123] connect(5, {{sa_family=AF_INET, sin_port=htons(443), \
+             sin_addr=inet_addr(\"151.101.1.54\")}}, 16) = 0",
+            dns_payload
+        );
+
+        // Stage 1: extract_dns_map parses the wire-format DNS response
+        // from the strace trace — same code path as production.
+        let dns_curr = extract_dns_map(&trace);
+
+        // Verify the parser correctly extracted the domain and IPs
+        assert_eq!(dns_curr.len(), 1, "should have 1 domain entry");
+        let (domain, ips) = dns_curr.iter().next().unwrap();
+        assert_eq!(domain, "foo.com");
+
+        let ip_strs: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+        assert!(
+            ip_strs.contains(&"140.248.144.223".to_string()),
+            "dns_map should contain the A record IP"
+        );
+        assert!(
+            ip_strs.contains(&"2a04:4e42:94::223".to_string()),
+            "dns_map should contain the AAAA record IP"
+        );
+
+        // Stage 2: feed the parsed dns_map into the domain-aware diff.
+        // Current Fastly IPs (no PTR), baseline from same CDN.
+        let ips_curr: HashSet<String> = ["140.248.144.223", "2a04:4e42:94::223"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let baseline_ips: HashSet<String> = ["140.248.144.220", "2a04:4e42:94::200"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        // Fastly edge IPs — no PTR records
+        let resolver = |_ip: &str| None;
+        // Baseline DNS traces from previous runs also resolved foo.com
+        let baseline_dns_domains: HashSet<String> = ["foo.com".to_string()].into_iter().collect();
+        // Host-side forward resolution confirms the binding
+        let forward_resolver = |d: &str| {
+            if d == "foo.com" {
+                Some(vec![
+                    "140.248.144.223".parse::<IpAddr>().unwrap(),
+                    "2a04:4e42:94::223".parse::<IpAddr>().unwrap(),
+                ])
+            } else {
+                None
+            }
+        };
+
+        let mut new = find_new_connections_domain_aware(
+            &ips_curr,
+            &baseline_ips,
+            resolver,
+            &dns_curr,
+            &baseline_dns_domains,
+            forward_resolver,
+        );
+        new.sort();
+        assert!(
+            new.is_empty(),
+            "CDN rotation should not be flagged via DNS interceptor, got: {:?}",
+            new
+        );
     }
 
     // ---------------------------------------------------------------------------

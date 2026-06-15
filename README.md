@@ -217,21 +217,20 @@ cargo run npm install lodash
 `gyrseek` uses syscall tracing (`strace`) during sandbox installs to observe outbound network connections.
 
 - It captures connection target IPs — **both IPv4 and IPv6**, normalized to canonical form — from the trace output.
-- It computes the difference between **current version endpoints** and **baseline endpoints** from previous versions.
-- Any endpoint that appears _only_ in the current version is treated as a behavioral anomaly.
+- It computes the difference between **current version** and **baseline versions** using domain-aware FCrDNS diffing.
+- Any endpoint whose domain (or IP, when unresolvable) has not been seen in baseline traffic is treated as a behavioral anomaly.
 - Install-time `git clone` command signatures (e.g. clone target and recursive-clone usage) are also diffed across versions.
 - Install-time execution of all programs is captured and diffed across versions to catch download-and-run payloads — see [Process-Execution Detection](#process-execution-detection).
 - Post-install file inventory (binary executables, suspicious `.pth` files, unexpected runtimes, files >10 MB) is recorded and diffed across versions — see [Post-Install Artifact Detection](#post-install-artifact-detection).
-- New IPs are **always** treated as anomalies (fail-closed), even if reverse DNS suggests domain overlap.
-- Reverse DNS context is included in warnings as informational enrichment to help triage IP-rotation cases.
+- New IPs are **always** treated as anomalies (fail-closed), unless the IP's FCrDNS resolves to a domain already seen in baseline traffic — in which case it is silently discarded as a benign CDN edge rotation.
+- Domain-aware IP diff resolves each IP via FCrDNS and compares at the domain level, not the IP level. If a current IP resolves to a domain already seen in baseline traffic (e.g. a rotated Fastly edge IP for `files.pythonhosted.org`), it is silently discarded — no hardcoded domain list needed. This handles benign CDN edge rotations for any infrastructure automatically. Unresolvable IPs fall back to plain IP membership so the diff stays fail-closed for genuinely new or spoofed endpoints.
 - The `domain_allowlist` uses **forward-confirmed reverse DNS (FCrDNS)**: a PTR hostname is only trusted if it resolves _forward_ back to the original IP. An attacker who sets their C2 server's PTR record to an allowlisted domain cannot bypass the allowlist, because the allowlisted domain's real A/AAAA record does not point back at the C2 IP.
 
 Example — abnormal network behavior detected:
 
 ```text
 ❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
-Package 'left-pad', version '1.3.0' contacted new endpoints not seen in baseline versions (1.2.0, 1.1.3): ["203.0.113.42"]
-ℹ️ [gyrseek] Reverse DNS context for new IPs (informational only): ["203.0.113.42 -> suspicious-c2.example"]
+Package 'left-pad', version '1.3.0' contacted new endpoints not seen in baseline versions (1.2.0, 1.1.3): ["203.0.113.42 -> suspicious-c2.example"]
 Aborting host operation securely.
 ```
 

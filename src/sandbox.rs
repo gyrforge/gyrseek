@@ -499,11 +499,13 @@ fn install_invocation(manager: &str, pkg_spec: &str) -> String {
 
 /// A single strace-wrapped install. `-s 4096 -v` stop strace truncating argv
 /// strings (e.g. long git-clone URLs) and addresses to the 32-byte default;
-/// `-u` runs the payload unprivileged for trace integrity. When `out_log` is
-/// set the trace is written there, otherwise it goes to stderr.
+/// `-xx` forces all bytes to hex-escape format (`\xNN`) for deterministic DNS
+/// payload parsing; `-u` runs the payload unprivileged for trace integrity.
+/// When `out_log` is set the trace is written there, otherwise it goes to
+/// stderr.
 fn strace_install_command(manager: &str, pkg_spec: &str, out_log: Option<&str>) -> String {
     let mut cmd = format!(
-        "strace -f -s 4096 -v -u {u} -e trace=network,execve",
+        "strace -f -s 4096 -v -xx -u {u} -e trace=network,execve",
         u = SCANNER_USER
     );
     if let Some(path) = out_log {
@@ -943,9 +945,11 @@ mod tests {
     #[test]
     fn strace_command_disables_string_truncation() {
         let cmd = strace_install_command("npm", "left-pad@1.3.0", Some("/out/gyrseek_trace_0.log"));
-        // -s 4096 lifts the 32-byte argv string cap; -v expands addresses.
+        // -s 4096 lifts the 32-byte argv string cap; -v expands addresses;
+        // -xx forces all bytes to \xNN hex-escape for deterministic parsing.
         assert!(cmd.contains("-s 4096"), "missing -s flag: {cmd}");
         assert!(cmd.contains(" -v "), "missing -v flag: {cmd}");
+        assert!(cmd.contains(" -xx "), "missing -xx flag: {cmd}");
         assert!(cmd.contains("trace=network,execve"));
     }
 
@@ -958,10 +962,12 @@ mod tests {
         );
         assert!(matrix.contains("-s 4096"));
         assert!(matrix.contains(" -v "));
+        assert!(matrix.contains(" -xx "));
 
         let single = build_single_script("pip", "requests", "2.31.0", true);
         assert!(single.contains("-s 4096"));
         assert!(single.contains(" -v "));
+        assert!(single.contains(" -xx "));
     }
 
     // --- #5 the traced payload runs unprivileged so it can't rewrite its trace ---
