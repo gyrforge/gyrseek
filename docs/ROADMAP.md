@@ -18,6 +18,9 @@
 - Prebuilt scanner image support and documented digest-pinning workflow for faster, more reproducible scans.
 - In-run scan-result caching and Docker matrix batching for multiple package/version probes in one container session.
 - Integration coverage for CLI exit-code behavior, lockfile routing, pnpm routing, version flags, artifact allowlisting, and fail-closed forwarding; inline tests cover parsing, scanning, and sandbox internals.
+- Domain-aware IP diff using FCrDNS — resolves each IP at the domain level rather than the IP level, silently discarding CDN edge IPs whose domain was already seen in baseline traffic. No hardcoded registry domain list needed.
+- Strace-based DNS interceptor fallback: `extract_dns_map` / `parse_dns_response` / `decode_dns_name` parse raw DNS wire-format from strace `recvfrom` output (requires strace `-xx` flag). When FCrDNS fails for a PTR-less IP (e.g. Fastly, Cloudflare), the container's own DNS responses are consulted; host-side `lookup_host` verifies the binding before trusting it. Circular pointer protection (5-hop limit) prevents crafted DNS packets from hanging the scanner.
+- `-xx` strace flag added for deterministic hex-escape output; `extract_process_exec_signatures` unescapes hex-escaped argv so `is_harness_command` filtering continues to work correctly.
 
 ## Near Term
 - Add richer requirements and constraints parsing coverage, especially environment markers and line continuations.

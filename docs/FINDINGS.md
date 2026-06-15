@@ -48,12 +48,13 @@ Two categories of findings are tracked:
 | 16 | `scanning.rs`  | 509  | Medium   | `extract_dns_map` regex missing `\s*` — never matches real strace output | ✅ Fixed  |
 | 17 | `scanning.rs`  | 972  | High     | `-xx` strace flag hex-escapes execve argv → `is_harness_command` false positives | ✅ Fixed  |
 | 18 | `scanning.rs`  | 467  | Medium   | `parse_dns_response` RDLEN offset reads TTL bytes instead of RDLENGTH  | ✅ Fixed  |
+| 19 | `scanning.rs`  | 392  | High     | `decode_dns_name` no cycle detection → infinite loop on circular pointer | ✅ Fixed  |
 
 **Chains:**
 - **#4 → #1:** strace errors suppressed → empty log → empty trace → package allowed
 - **#6 → #7:** extras break PyPI lookup AND break version pinning for the same package
 - **#11 → #12:** the `is_non_registry_npm_spec` fix introduced both as side-effects — the filter correctly stops local specs from reaching the registry, but causes the package.json fallback to fire when it shouldn't
-- **#17 → #16→ #18:** strace `-xx` added for DNS wire-format capture (#16's parser, #18's RDLEN bug) but inadvertently hex-escaped execve argv, breaking harness filtering (#17)
+- **#17 → #16 → #18:** strace `-xx` added for DNS wire-format capture (#16's parser, #18's RDLEN bug) but inadvertently hex-escaped execve argv, breaking harness filtering (#17)
 
 ---
 
@@ -334,6 +335,20 @@ The code read `rdlen` from `raw[offset + 6]` and `raw[offset + 7]` — which are
 
 ---
 
+### Finding 19 — High | `scanning.rs:392` | ✅ Fixed
+
+**Summary:** `decode_dns_name` has no cycle detection for DNS compression pointers. A crafted DNS response with a self-referencing or circular pointer chain causes an infinite loop, hanging the scanner.
+
+**Root cause:** The function uses a `loop { ... }` with only an OOB guard. Each iteration either advances through a normal label, terminates at root (`\x00`), or follows a compression pointer (`0xc0` prefix). There is no count limiting how many pointers can be followed, so a self-referencing pointer (e.g. `\xc0\x00` at offset 0 targeting offset 0) or a short cycle (e.g. offset 0→2→0) spins forever.
+
+**Attack scenario:** An attacker who controls a domain whose DNS response, when rendered through strace `-xx` hex-escape format, produces bytes forming a circular compression pointer, can cause gyrseek to hang indefinitely when `extract_dns_map` calls `parse_dns_response` → `decode_dns_name`. This is a denial-of-service vector against the scanning pipeline.
+
+**Fix direction:** Track the number of compression pointer hops and return `None` once a reasonable limit is exceeded. RFC 1035 permits at most 255 total bytes in a name; each compression pointer saves at least 1 byte, so 5 hops is more than enough for any legitimate name.
+
+**✅ Fix status — FIXED.** Added `pointer_count` that increments on each pointer hop. Returns `None` when `pointer_count > 5`. (`scanning.rs:402–407`; tests `decode_dns_name_circular_pointer_returns_none`, `decode_dns_name_long_but_not_circular_pointer_chain`, `decode_dns_name_excessive_pointer_hops_returns_none`.)
+
+---
+
 ## Review history
 
 ### Round 1 — 2026-06-09
@@ -413,6 +428,7 @@ All 234 unit/integration tests pass; `just test-uv` and `just test-pip` pass end
 - **Finding 17 — `-xx` breaks process-exec harness filtering.** The `-xx` flag hex-escapes all strace output including execve argv. `is_harness_command` matched literal names (`uv`, `npm`, `python`, `env`) which don't appear in `\x2f\x75...` form. Every scan produced Shai-Hulud false positives. Fixed: unescape argv via `unescape_strace_string` before signature construction and harness filtering. See Finding 17 above.
 - **Finding 18 — `parse_dns_response` RDLEN offset off by 2 bytes.** Read last 2 bytes of TTL field (offset+6/+7) instead of RDLENGTH (offset+8/+9). Multi-answer DNS responses always corrupted. Fixed: correct offsets and advance. See Finding 18 above.
 - Three DNS interceptor edge-case tests added (domain not in baseline, forward resolver fails, end-to-end with realistic strace trace).
+- **Finding 19 — `decode_dns_name` circular pointer infinite loop.** No cycle detection in compression pointer traversal. A self-referencing `\xc0\x00` at offset 0 causes an infinite `loop {}`. Fixed: `pointer_count` limit of 5 hops. See Finding 19 above.
 - `docs/TESTS.md` updated to 50 tests documented.
 - `AGENTS.md` and `README.md` updated with DNS interceptor/`-xx`/exec-unescape details.
 

@@ -124,7 +124,7 @@ Functions: `unescape_strace_string`, `decode_dns_name`, `parse_dns_response`, `e
 | 37 | `unescape_trailing_backslash` | `"ab\\"` | `b"ab"` |
 | 38 | `unescape_backslash_escape_non_hex` | `"a\\nb"` | `b"anb"` (strace `\n` is literal) |
 
-### `decode_dns_name` (4 tests)
+### `decode_dns_name` (8 tests)
 
 | # | Test | Input | Expected |
 |---|------|-------|----------|
@@ -133,27 +133,30 @@ Functions: `unescape_strace_string`, `decode_dns_name`, `parse_dns_response`, `e
 | 41 | `decode_dns_name_single_byte_pointer` | `\x03foo\x00\xc0\x00` (ptr to 0) | `"foo"`, offset=7 |
 | 42 | `decode_dns_name_recursive_pointer_chain` | `\x03foo\x00\xc0\x00\xc0\x05` (2-hop) | `"foo"`, offset=9 |
 | 43 | `decode_dns_name_out_of_bounds_returns_none` | Label length 16, only 2 bytes | `None` |
+| 44 | `decode_dns_name_circular_pointer_returns_none` | `\xc0\x00` (self-ref ptr) | `None`, offset=0 |
+| 45 | `decode_dns_name_long_but_not_circular_pointer_chain` | 3-hop chain → `\x03foo\x00` | `"foo"`, offset=2 |
+| 46 | `decode_dns_name_excessive_pointer_hops_returns_none` | 6 pointers (limit 5) | `None` |
 
 ### `parse_dns_response` (4 tests)
 
 | # | Test | Scenario | Expected |
 |---|------|----------|----------|
-| 44 | `parse_dns_response_a_record` | 1 A record for `foo.com` → 93.184.216.34 | `Some(("foo.com", [93.184.216.34]))` |
-| 45 | `parse_dns_response_aaaa_record` | 1 AAAA record for `foo` → `2001:db8::1` | `Some(("foo", [2001:db8::1]))` |
-| 46 | `parse_dns_response_non_response_returns_none` | QR flag not set | `None` |
-| 47 | `parse_dns_response_too_short_returns_none` | 3 bytes only | `None` |
+| 47 | `parse_dns_response_a_record` | 1 A record for `foo.com` → 93.184.216.34 | `Some(("foo.com", [93.184.216.34]))` |
+| 48 | `parse_dns_response_aaaa_record` | 1 AAAA record for `foo` → `2001:db8::1` | `Some(("foo", [2001:db8::1]))` |
+| 49 | `parse_dns_response_non_response_returns_none` | QR flag not set | `None` |
+| 50 | `parse_dns_response_too_short_returns_none` | 3 bytes only | `None` |
 
 ### `extract_dns_map` (3 tests)
 
 | # | Test | Scenario | Expected |
 |---|------|----------|----------|
-| 48 | `extract_dns_map_empty_trace` | No DNS recvfrom in trace | Empty map |
-| 49 | `extract_dns_map_malformed_payload_skipped` | recvfrom from port 53 with invalid payload | Empty map |
-| 50 | `dns_interceptor_end_to_end_with_realistic_strace_trace` | Realistic strace -xx trace: connect calls + recvfrom with A+AAAA DNS response → parsed dns_map fed into find_new_connections_domain_aware | 1 domain extracted, CDN IPs not flagged |
+| 51 | `extract_dns_map_empty_trace` | No DNS recvfrom in trace | Empty map |
+| 52 | `extract_dns_map_malformed_payload_skipped` | recvfrom from port 53 with invalid payload | Empty map |
+| 53 | `dns_interceptor_end_to_end_with_realistic_strace_trace` | Realistic strace -xx trace: connect calls + recvfrom with A+AAAA DNS response → parsed dns_map fed into find_new_connections_domain_aware | 1 domain extracted, CDN IPs not flagged |
 
 ## 10. Full pipeline integration: strace → dns_map → domain-aware diff (1 test)
 
-Test 50 above covers the full wire: a realistic strace trace is fed through `extract_dns_map`, the parsed result is verified, and then the dns_map is wired into `find_new_connections_domain_aware` alongside baseline data and forward_resolver.
+Test 53 above covers the full wire: a realistic strace trace is fed through `extract_dns_map`, the parsed result is verified, and then the dns_map is wired into `find_new_connections_domain_aware` alongside baseline data and forward_resolver.
 
 This validates:
 - strace recvfrom+regex matching with spaces (`-xx` hex format)
@@ -161,7 +164,7 @@ This validates:
 - dns_map threading into the domain-aware diff
 - CDN rotation silent discard via DNS interceptor
 
-**Total: 50 tests documented; 50 pass, 0 fail.**
+**Total: 53 tests documented; 53 pass, 0 fail.**
 
 ## Coverage summary
 
@@ -173,5 +176,5 @@ This validates:
 - Legacy routing: 2 tests — backward compatibility
 - Pipeline integration: 1 test — end-to-end 3-stage chain
 - DNS interceptor fallback: 3 tests — CDN rotation, unknown domain, failed host verification
-- DNS wire-format parser: 15 tests — unescape, decode, parse, extract
-- **Total: 49 tests, all passing**
+- DNS wire-format parser: 21 tests — unescape, decode, parse, extract
+- **Total: 53 tests, all passing**
