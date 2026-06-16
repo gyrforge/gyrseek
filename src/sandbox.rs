@@ -549,14 +549,17 @@ fn build_artifact_scan_steps(idx: usize) -> Vec<String> {
         // Initialize/clear the artifact log for this probe.
         format!("true > {}", out),
         // Single inventory pipeline: record path, size (bytes), file type, and
-        // first 300 bytes of content for every installed file. Pipe characters
-        // in content are replaced with spaces to preserve the | delimiter.
+        // first 300 bytes of content for every installed file. Null byte (\0)
+        // is used as the field delimiter because it cannot appear in POSIX
+        // file paths, making delimiter-injection attacks impossible. Pipe
+        // characters in content are still replaced with spaces as a defence-
+        // in-depth measure.
         format!(
             "find /work -type f 2>/dev/null | while IFS= read -r f; do \
              size=$(stat -c%s \"$f\" 2>/dev/null || wc -c < \"$f\" 2>/dev/null); \
              type=$(file -b \"$f\" 2>/dev/null | head -c 100); \
              content=$(head -c 300 \"$f\" 2>/dev/null | tr '|' ' '); \
-             echo \"$f|$size|$type|$content\" >> {}; done || true",
+             printf '%s\\0%s\\0%s\\0%s\\n' \"$f\" \"$size\" \"$type\" \"$content\" >> {}; done || true",
             out
         ),
     ]
@@ -1329,6 +1332,27 @@ mod tests {
         assert!(
             combined.contains("tr '|' ' '"),
             "should replace pipe in content to preserve delimiter: {combined}"
+        );
+    }
+
+    #[test]
+    fn artifact_scan_steps_uses_null_byte_delimiter() {
+        // Finding 20 fix: the shell script must use printf with \0 delimiter
+        // to prevent pipe-in-filename injection attacks.
+        let steps = build_artifact_scan_steps(0);
+        let cmd = &steps[1];
+        assert!(
+            cmd.contains("printf "),
+            "must use printf for null-byte delimiters: {cmd}"
+        );
+        assert!(
+            cmd.contains("\\0"),
+            "must use \\0 null-byte field delimiter: {cmd}"
+        );
+        // Ensure the old echo-based pipe-delimiter approach is gone.
+        assert!(
+            !cmd.contains("echo \"$f|"),
+            "must not use echo with pipe delimiter: {cmd}"
         );
     }
 

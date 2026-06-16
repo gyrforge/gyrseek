@@ -1,16 +1,16 @@
-# Graph Report - gyrseek  (2026-06-16)
+# Graph Report - gyrseek  (2026-06-17)
 
 ## Corpus Check
-- 79 files · ~111,417 words
+- 79 files · ~113,897 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1360 nodes · 2049 edges · 112 communities (74 shown, 38 thin omitted)
+- 1371 nodes · 2061 edges · 112 communities (74 shown, 38 thin omitted)
 - Extraction: 98% EXTRACTED · 2% INFERRED · 0% AMBIGUOUS · INFERRED: 34 edges (avg confidence: 0.82)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `4c9d0c9a`
+- Built from commit: `e9526b6c`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -172,7 +172,7 @@ Nodes (75): PEP 508 Extras Stripping, Forwarded-Command Version Pinning, Finding
 
 ### Community 1 - "Community 1"
 Cohesion: 0.06
-Nodes (70): BaselineOverrideConfig, test: minimum_release_age_package not met exits 1, test: release_burst_threshold triggers exit 1, Fail-Closed Policy, In-Run Scan Cache, Runtime Entry Flow, Finding 9: Unrecognized Managers Forwarded Unscanned, Structured Logging Mode (planned) (+62 more)
+Nodes (71): BaselineOverrideConfig, test: minimum_release_age_package not met exits 1, test: release_burst_threshold triggers exit 1, Fail-Closed Policy, In-Run Scan Cache, Runtime Entry Flow, Finding 9: Unrecognized Managers Forwarded Unscanned, Structured Logging Mode (planned) (+63 more)
 
 ### Community 2 - "Community 2"
 Cohesion: 0.07
@@ -180,19 +180,19 @@ Nodes (63): Box, CAP_SYS_PTRACE for Cross-UID Tracing, Unprivileged-Payload Trac
 
 ### Community 3 - "Community 3"
 Cohesion: 0.04
-Nodes (55): Finding 10: Self-Referencing Baseline Override (Open), G, baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_returns_no_effective_baselines(), baseline_count_zero_with_override_equal_to_current_returns_empty(), both_override_slots_none_falls_through_to_fetched_baselines(), both_overrides_equal_to_current_skipped_and_filled_from_fetched(), classify_inventory_benign_pth() (+47 more)
+Nodes (56): Finding 10: Self-Referencing Baseline Override (Open), G, artifact_findings_empty_for_clean_install(), baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_returns_no_effective_baselines(), baseline_count_zero_with_override_equal_to_current_returns_empty(), both_override_slots_none_falls_through_to_fetched_baselines(), both_overrides_equal_to_current_skipped_and_filled_from_fetched() (+48 more)
 
 ### Community 4 - "Community 4"
 Cohesion: 0.10
-Nodes (33): Finding 3: Argv Regex Truncation at ], IpAddr, PyPiReleaseFile, artifact_allowlist_matches_exact_finding_and_prefix(), dns_interceptor_end_to_end_with_realistic_strace_trace(), domain_is_allowlisted(), extract_dns_map(), extract_dns_map_empty_trace() (+25 more)
+Nodes (37): Behavioral Diffing Across Versions, Finding 3: Argv Regex Truncation at ], Direct Git Clone Runtime Interception, IpAddr, PyPiReleaseFile, artifact_allowlist_matches_exact_finding_and_prefix(), domain_is_allowlisted(), extract_dns_map() (+29 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.10
-Nodes (39): Default, Behavioral Diffing Across Versions, Adding a New Supported Command, Direct Git Clone Runtime Interception, Behavioral Diffing, allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline() (+31 more)
+Cohesion: 0.14
+Nodes (28): Default, Adding a New Supported Command, Behavioral Diffing, allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline(), artifact_allowlist_unblocks_new_findings(), env_lock() (+20 more)
 
 ### Community 6 - "Community 6"
-Cohesion: 0.16
-Nodes (14): Forward-Confirmed Reverse DNS (FCrDNS), Finding 2: PTR-Record Allowlist Bypass, F, R, Forward-Confirmed Reverse DNS, domain_allowlist_does_not_filter_when_lookup_fails(), domain_allowlist_filters_resolved_domains_before_blocking(), domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot() (+6 more)
+Cohesion: 0.11
+Nodes (21): Forward-Confirmed Reverse DNS (FCrDNS), Finding 2: PTR-Record Allowlist Bypass, R, Forward-Confirmed Reverse DNS, burst_policy_emits_warning_when_triggered(), burst_policy_warning(), decode_dns_name(), decode_dns_name_long_but_not_circular_pointer_chain() (+13 more)
 
 ### Community 7 - "Community 7"
 Cohesion: 0.11
@@ -216,23 +216,23 @@ Nodes (34): Allowed operations, AppArmor, Backout plan, Capabilities and privile
 
 ### Community 12 - "Community 12"
 Cohesion: 0.10
-Nodes (18): Command, NamedTempFile, Output, exits_with_code_1_and_uses_configured_release_burst_window_hours(), exits_with_code_1_and_warning_when_release_burst_threshold_triggers(), exits_with_code_1_when_minimum_release_age_package_is_not_met(), minimum_release_age_package_runs_before_burst_threshold(), run_with_config() (+10 more)
+Nodes (17): Command, Output, exits_with_code_1_and_uses_configured_release_burst_window_hours(), exits_with_code_1_and_warning_when_release_burst_threshold_triggers(), exits_with_code_1_when_minimum_release_age_package_is_not_met(), minimum_release_age_package_runs_before_burst_threshold(), run_with_config(), run_with_config_and_env() (+9 more)
 
 ### Community 13 - "Community 13"
-Cohesion: 0.13
-Nodes (18): Cloud Metadata IP Exemption (169.254.169.254), Sandbox-Local IP Filtering, extract_connection_ips(), extract_connection_ips_captures_ipv4(), extract_connection_ips_captures_ipv6_inet_pton(), extract_connection_ips_collapses_ipv4_mapped_ipv6(), extract_connection_ips_drops_loopback_link_local_and_private(), extract_connection_ips_handles_mixed_v4_and_v6() (+10 more)
+Cohesion: 0.19
+Nodes (13): Cloud Metadata IP Exemption (169.254.169.254), Sandbox-Local IP Filtering, extract_connection_ips(), extract_connection_ips_captures_ipv4(), extract_connection_ips_captures_ipv6_inet_pton(), extract_connection_ips_collapses_ipv4_mapped_ipv6(), extract_connection_ips_drops_loopback_link_local_and_private(), extract_connection_ips_handles_mixed_v4_and_v6() (+5 more)
 
 ### Community 14 - "Community 14"
-Cohesion: 0.40
-Nodes (5): artifact_findings_empty_for_clean_install(), extract_artifact_findings(), extracts_artifact_findings_empty_when_no_delimiter(), extracts_artifact_findings_skips_blank_lines(), extracts_artifact_findings_when_delimiter_present()
+Cohesion: 0.20
+Nodes (10): F, domain_allowlist_does_not_filter_when_lookup_fails(), domain_allowlist_filters_resolved_domains_before_blocking(), domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot(), filter_allowlisted_new_connections(), filter_domain_allowlisted_new_connections_with(), ip_allowlist_filters_new_ips_before_blocking(), ip_allowlist_matches_across_ipv4_mapped_and_bare_forms() (+2 more)
 
 ### Community 15 - "Community 15"
 Cohesion: 0.33
 Nodes (4): MutexGuard, EnvVarGuard, Drop, Self
 
 ### Community 16 - "Community 16"
-Cohesion: 0.06
-Nodes (37): Empty-Trace Hard Error, Complexity & Over-Engineering Findings (Ponytail Review — 2026-06-14), Finding 10 — Critical | `scanning.rs:654` | ✅ Fixed, Finding 11 — High | `parsing.rs:468` | ⚠️ Open, Finding 12 — High | `lib.rs:1021` | ⚠️ Open, Finding 13 — Medium | `scanning.rs:1852` | ✅ Fixed, Finding 14 — Low | `parsing.rs:880` | ⚠️ Open, Finding 15 — Low | `sandbox.rs:511` | ✅ Fixed (+29 more)
+Cohesion: 0.04
+Nodes (47): Empty-Trace Hard Error, Complexity & Over-Engineering Findings (Ponytail Review — 2026-06-14), Finding 10 — Critical | `scanning.rs:654` | ✅ Fixed, Finding 11 — High | `parsing.rs:468` | ⚠️ Open, Finding 12 — High | `lib.rs:1021` | ⚠️ Open, Finding 13 — Medium | `scanning.rs:1852` | ✅ Fixed, Finding 14 — Low | `parsing.rs:880` | ⚠️ Open, Finding 15 — Low | `sandbox.rs:511` | ✅ Fixed (+39 more)
 
 ### Community 17 - "Community 17"
 Cohesion: 0.20
@@ -451,7 +451,7 @@ Cohesion: 0.33
 Nodes (5): Approach, Checklist, Goal, Understand Code, Verification
 
 ## Knowledge Gaps
-- **627 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Drop`, `ForwardMode` (+622 more)
+- **637 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Drop`, `ForwardMode` (+632 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **38 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -459,16 +459,16 @@ Nodes (5): Approach, Checklist, Goal, Understand Code, Verification
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `run()` connect `Community 1` to `Community 0`, `Community 10`, `Community 2`?**
-  _High betweenness centrality (0.062) - this node is a cross-community bridge._
-- **Why does `SandboxRunner` connect `Community 2` to `Community 1`, `Community 5`?**
-  _High betweenness centrality (0.035) - this node is a cross-community bridge._
-- **Why does `trace_sandbox_install_matrix()` connect `Community 5` to `Community 2`, `Community 3`, `Community 4`, `Community 9`, `Community 13`, `Community 14`?**
-  _High betweenness centrality (0.034) - this node is a cross-community bridge._
+  _High betweenness centrality (0.054) - this node is a cross-community bridge._
+- **Why does `trace_sandbox_install_matrix()` connect `Community 4` to `Community 2`, `Community 3`, `Community 5`, `Community 9`, `Community 13`?**
+  _High betweenness centrality (0.039) - this node is a cross-community bridge._
+- **Why does `SandboxRunner` connect `Community 2` to `Community 1`, `Community 4`?**
+  _High betweenness centrality (0.038) - this node is a cross-community bridge._
 - **Are the 7 inferred relationships involving `run()` (e.g. with `test: minimum_release_age_package not met exits 1` and `test: release_burst_threshold triggers exit 1`) actually correct?**
   _`run()` has 7 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `$schema`, `plugin`, `BaselineOverrideConfig` to the rest of the system?**
-  _629 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _639 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.061708860759493674 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.06073871409028728 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.05987703822507351 - nodes in this community are weakly interconnected._
