@@ -49,6 +49,14 @@ Two categories of findings are tracked:
 | 17 | `scanning.rs`  | 972  | High     | `-xx` strace flag hex-escapes execve argv → `is_harness_command` false positives | ✅ Fixed  |
 | 18 | `scanning.rs`  | 467  | Medium   | `parse_dns_response` RDLEN offset reads TTL bytes instead of RDLENGTH  | ✅ Fixed  |
 | 19 | `scanning.rs`  | 392  | High     | `decode_dns_name` no cycle detection → infinite loop on circular pointer | ✅ Fixed  |
+| 20 | `sandbox.rs` / `scanning.rs` | 559 / 730 | Critical | Pipe delimiter in artifact log — filename injection bypasses all artifact checks | ⚠️ Open  |
+| 21 | `sandbox.rs`  | 629  | High     | Hardcoded 512 MB container memory — npm/pnpm native builds routinely OOM-killed | ⚠️ Open  |
+| 22 | `scanning.rs` | 188  | Medium   | IPv6 ULA (`fc00::/7`) not filtered as local — internal container traffic flagged as exfiltration | ⚠️ Open  |
+| 23 | `sandbox.rs`  | 215  | Medium   | Host mode selected silently — no stderr warning that sandbox protection is disabled | ⚠️ Open  |
+| 24 | `sandbox.rs`  | 555  | Medium   | Artifact scan spawns 3 processes per file — O(N) subprocess overhead on large node_modules | ⚠️ Open  |
+| 25 | `README.md` / `sandbox.rs` | 363 / —  | High     | Import-time execution not captured — Telnyx T26 bypasses install-window sandbox entirely | ⚠️ Open  |
+| 26 | `lib.rs`      | 588  | Medium   | `Command::new` relies on PATH — relative-path hijacking in untrusted working dirs | ⚠️ Open  |
+| 27 | `lib.rs`      | 64   | Low      | `--config` value not validated — flag-like value silently swallowed as file path | ⚠️ Open  |
 
 **Chains:**
 - **#4 → #1:** strace errors suppressed → empty log → empty trace → package allowed
@@ -451,6 +459,204 @@ All 259 tests pass (244 lib + 15 integration); clippy and fmt clean. See Finding
 
 ---
 
+### Round 7 — 2026-06-16 — External audit
+
+External static review of `sandbox.rs` and `scanning.rs` for remaining sandbox-escaping, bypass, and performance gaps. Produced findings #20–24.
+
+- **Finding 20 (Critical)** — Pipe-delimiter injection in artifact scanner. File path not escaped; crafted filename can override `size` and `type` fields, bypassing all artifact checks.
+- **Finding 21 (High)** — Hardcoded 512 MB container memory limit. npm/pnpm native builds (node-gyp, esbuild) routinely OOM-killed.
+- **Finding 22 (Medium)** — Missing IPv6 ULA filter. `fc00::/7` not recognised as local address; internal container traffic flagged as exfiltration.
+- **Finding 23 (Medium)** — Host mode selected silently. No stderr warning when `GYRSEEK_SANDBOX=host` disables all container isolation.
+- **Finding 24 (Medium)** — Artifact scan O(N) subprocess overhead. 3 forks per file → 30k–40k processes on a 10k-file node_modules. Minutes of latency or timeout.
+
+### Round 8 — 2026-06-16 — Architectural & coverage audit
+
+Review of `lib.rs`, `README.md`, and the forwarding pipeline for deferred-execution coverage gaps, supply-chain hardening, and code quality. Produced findings #25–27 and C16.
+
+- **Finding 25 (High)** — Import-time execution (Telnyx T26) not captured. Module-scope code in installed `.py` files fires after sandbox exits. Mitigation: post-install `python -c "import <pkg>"` trigger.
+- **Finding 26 (Medium)** — `Command::new(&self.manager)` uses PATH lookup; `.` or writable dirs in PATH allow relative-path hijacking. Mitigation: resolve to absolute path and validate prefix.
+- **Finding 27 (Low)** — `--config`/`-c` value not validated. A flag-like argument (e.g. `--version`) is swallowed as the config path, producing confusing error or no-op.
+- **C16 (Complexity)** — `bulk_scan!` macro shared across uv/pip/npm/pnpm; a parsing regression in one ecosystem affects all. Mitigation: per-ecosystem typed functions.
+
+---
+
+### Finding 20 — Critical | `sandbox.rs:559` / `scanning.rs:730` | ⚠️ Open
+
+**Summary:** The artifact scan log uses `|` as a field delimiter, but the file path (`$f`) is not escaped for pipes or newlines. A crafted filename can inject fake fields into the parsed record, bypassing all artifact security checks (large_file, unexpected_runtime, suspicious_pth, binary).
+
+**Root cause:** The shell loop (`sandbox.rs:555–559`) writes each file as:
+```
+echo "$f|$size|$type|$content" >> {}
+```
+Only `$content` has pipes replaced (`tr '|' ' '`). The file path `$f` is raw. The Rust parser (`scanning.rs:730`) splits on `|`:
+```rust
+let parts: Vec<&str> = line.splitn(4, '|').collect();
+```
+A file named `payload.bin|0|ASCII text` produces `parts = ["payload.bin", "0", "ASCII text", "…"]` — the injected `0` becomes the parsed `size`, and `ASCII text` overrides the real `file -b` type. A large ELF binary hides as a small text file.
+
+**Failure scenario:** Attacker publishes a package containing `/bin/payload.bin|0|ASCII text` (30 MB ELF). The classifier sees `size=0` (no `large_file` hit), `file_type="ASCII text"` (no `binary`/`unexpected_runtime` hit). The artifact is not flagged. Post-install scan reports clean.
+
+**Fix direction:** Choose a delimiter that cannot appear in POSIX file paths (e.g. `\x00` via `printf`), or escape `|` and newlines in `$f` before writing the log line. The Rust parser must match whatever escaping scheme is chosen.
+
+---
+
+### Finding 21 — High | `sandbox.rs:629` | ⚠️ Open
+
+**Summary:** The container memory limit is hardcoded to 512 MB. Heavy npm/pnpm dependency trees with native compilation (node-gyp, esbuild, swc) routinely exceed this, causing OOM-killed probes and false-positive blocks.
+
+**Root cause:** `build_docker_run_args` appends `"--memory".to_string(), "512m".to_string()` (`sandbox.rs:629–630`) unconditionally. npm packages like `@parcel/watcher`, `esbuild`, `sharp`, or any Python package compiling C extensions can use 1–4 GB during install. A legitimate scan is OOM-killed, the trace is empty, and `scan_packages_versions` fails closed.
+
+**Failure scenario:** A CI pipeline scans `npm install @parcel/watcher`. The container is OOM-killed during native build. gyrseek sees an empty trace → blocks the install → engineer disables gyrseek entirely.
+
+**Fix direction:** Make the memory limit configurable via an env var (e.g. `GYRSEEK_MEM_LIMIT`, default `2g`), or remove the limit and let the container inherit the host Docker daemon limit. At minimum, a generous default like `2g` would cover 95% of packages.
+
+---
+
+### Finding 22 — Medium | `scanning.rs:188` | ⚠️ Open
+
+**Summary:** `is_sandbox_local_ip` filters IPv6 loopback and link-local (`fe80::/10`) but does not filter Unique Local Addresses (`fc00::/7`), the IPv6 equivalent of RFC 1918 private ranges. Internal container traffic over IPv6 ULAs is flagged as external exfiltration.
+
+**Root cause:** The IPv6 branch at `scanning.rs:188–192`:
+```rust
+IpAddr::V6(v6) => {
+    let is_link_local = (v6.segments()[0] & 0xffc0) == 0xfe80;
+    v6.is_loopback() || is_link_local
+}
+```
+`fc00::/7` (ULA) is not checked. An IPv6-capable Docker daemon on a ULA-enabled network assigns container addresses from the `fd00::/8` space. Connections to these peers pass through as "new endpoints".
+
+**Failure scenario:** A package install contacts a local registry or caching proxy at `fd12:3456::1`. This is sandbox-internal traffic. `is_sandbox_local_ip` returns `false` → `find_new_connections_domain_aware` flags it → `warn_and_block` fires → install blocked. The operator sees an exfiltration alarm for a local proxy.
+
+**Fix direction:** Add `v6.is_unicast_link_local()` (stabilised in Rust 1.80) or manually check `(v6.segments()[0] & 0xfe00) == 0xfc00` for ULA. The IPv6 branch becomes:
+```rust
+let is_ula = (v6.segments()[0] & 0xfe00) == 0xfc00;
+v6.is_loopback() || is_link_local || is_ula
+```
+
+---
+
+### Finding 23 — Medium | `sandbox.rs:215` | ⚠️ Open
+
+**Summary:** When `GYRSEEK_SANDBOX=host` is set, `build_runner_from_env` returns `Ok(Box::new(HostRunner))` with no warning to stderr. An operator who forgets to unset the env var runs subsequent installations unprotected.
+
+**Root cause:** The `"host"` match arm at `sandbox.rs:215` does not emit a prominent warning. The `HostRunner` executes the install directly on the host machine with no container isolation. The only indication that host mode is active is the absence of "Docker sandbox" log messages — easily missed in CI output.
+
+**Failure scenario:** A developer sets `export GYRSEEK_SANDBOX=host` to speed up local testing, then pushes CI config changes. The next scan runs unprotected against a malicious package. The attacker's postinstall script exfiltrates credentials from the host. gyrseek completes the scan (no anomalies reported, since the install happened on the real host) and exits 0.
+
+**Fix direction:** Emit a bold warning to stderr when host mode is selected:
+```rust
+"host" => {
+    eprintln!("\n⚠️  [gyrseek] WARNING: Host sandbox mode selected — installs run directly on this machine with NO container isolation. Set GYRSEEK_SANDBOX=docker for production use.\n");
+    Ok(Box::new(HostRunner))
+}
+```
+Consider adding a process- or file-system marker that persists across the session (e.g. a temp env var that `run()` checks at exit) so the warning is not buried in preceding log output.
+
+---
+
+### Finding 24 — Medium | `sandbox.rs:555` | ⚠️ Open
+
+**Summary:** The post-install artifact scan shell loop spawns 3 child processes (stat, file, head) per discovered file. On a standard `node_modules` tree with 10,000 files, this launches 30,000–40,000 processes, causing the scan phase to take minutes or time out.
+
+**Root cause:** The script at `sandbox.rs:555–559` iterates with a `while read` loop and calls `stat`, `file`, and `head` individually per file:
+```sh
+find /work -type f 2>/dev/null | while IFS= read -r f; do \
+  size=$(stat -c%s "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null); \
+  type=$(file -b "$f" 2>/dev/null | head -c 100); \
+  content=$(head -c 300 "$f" 2>/dev/null | tr '|' ' '); \
+  echo "$f|$size|$type|$content" >> {}; done || true
+```
+Each invocation forks a new process. On large projects (e.g. a Next.js app with 10k+ `node_modules` files), this creates prohibitive overhead.
+
+**Failure scenario:** `gyrseek npm install next` triggers a post-install artifact scan of 15,000 files. The container times out (default Docker `--stop-timeout` or CI job timeout) before the scan finishes. gyrseek fails closed on an incomplete/empty artifact log, blocking a legitimate install.
+
+**Fix direction:** Replace the per-file shell loop with bulk operations:
+```
+find /work -type f -exec stat -c '%s|%n' {} + > /tmp/sizes
+find /work -type f -exec file -b {} + > /tmp/types
+```
+Or, more robustly, compile a small Rust helper (`src/artifact_scanner.rs`) that walks the tree and writes the log directly — a single process, no shell overhead, and the delimiter-injection surface (Finding 20) is eliminated at the same time.
+
+---
+
+### Finding 25 — High | `README.md:363` / `sandbox.rs` | ⚠️ Open
+
+**Summary:** gyrseek's sandbox only monitors behavior during `pip install`. A Python package that places malicious code at module scope (e.g. Telnyx T26's `_client.py` with `FetchAudio()` / `setup()` calls) executes entirely on `import <pkg>` — after the sandbox exits — and is never observed.
+
+**Root cause:** The containerized scan pipeline (`sandbox.rs:build_matrix_script`) runs only the install command and the post-install artifact `find` pipeline. There is no post-install import trigger step that forces Python to load the installed package while strace is still attached. Module-scope code in `__init__.py` or deeply nested SDK files fires outside the sandbox window.
+
+**Failure scenario:** `gyrseek pip install telnyx==2.0.0` installs normally inside the sandbox. The malicious `_client.py` sits dormant during install. gyrseek reports a clear scan (no anomalous execve, no anomalous network, no artifact findings — the code is in a legitimate `.py` file, not a `.pth` or binary). The host command is forwarded. On the developer's machine, `import telnyx` triggers credential exfiltration via AES-256-CBC + RSA-4096 to `83.142.209.203:8080`.
+
+**Fix direction:** Add a post-install import trigger step for Python managers. After the install probe completes, run:
+```sh
+su -s /bin/sh gyrseek -c "python3 -c 'import $(basename $pkg)'"
+```
+inside the same container with strace still attached. Any execve or connect that fires during import is captured by the existing trace pipeline and diffed against baselines. The package name-to-top-level-module mapping (handling namespace packages, dashes-to-underscores, etc.) must be resolved accurately to avoid false negatives or false-positive import errors.
+
+---
+
+### Finding 26 — Medium | `lib.rs:588` | ⚠️ Open
+
+**Summary:** The forwarding code in `GyrSeek::forward_args` uses `Command::new(&self.manager)` with no PATH validation, making it vulnerable to relative-path hijacking when run inside an untrusted directory containing a malicious `./pip` or `./npm` script.
+
+**Root cause:** At `lib.rs:588`:
+```rust
+match Command::new(&self.manager).args(&args[1..]).spawn() {
+```
+`Command::new` resolves `self.manager` (e.g. `"pip"`) against the current `PATH`. If the working directory or a parent directory has a `./pip` script (placed there by a previous malicious package or a repo checkout), the spawned subprocess runs the attacker's binary instead of the system package manager.
+
+**Failure scenario:** A CI pipeline runs `gyrseek pip install requests` in a repository where a malicious contributor committed `./pip` as a shell script exfiltrating CI credentials. `Command::new("pip")` resolves to `./pip` before `/usr/bin/pip` (since `.` is typically first in CI $PATH or the file is in the cwd). The attacker's script runs with full CI access.
+
+**Fix direction:** Resolve the manager binary path to an absolute canonical path before spawning:
+```rust
+use std::process::Command;
+
+fn resolve_manager_path(manager: &str) -> Option<String> {
+    Command::new("which")
+        .arg(manager)
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+}
+```
+Then verify the resolved path starts with a trusted prefix (`/usr/bin/`, `/usr/local/bin/`) before passing to `Command::new`. Under host mode (`GYRSEEK_SANDBOX=host`), additionally validate that PATH contains no writable entries (`.` or world-writable dirs) before forwarding.
+
+---
+
+### Finding 27 — Low | `lib.rs:64` | ⚠️ Open
+
+**Summary:** `parse_global_options` accepts any string as the value for `--config`/`-c` without validation. If a user accidentally types a flag-like value (e.g. `--config --version`), the parser swallows `--version` as the config path and the intended flag is silently ignored.
+
+**Root cause:** At `lib.rs:72–77`:
+```rust
+if arg == "--config" || arg == "-c" {
+    let Some(next) = args.get(idx + 1) else {
+        return Err("Missing value for --config/-c".to_string());
+    };
+    cfg_path = next.clone();
+```
+There is no check that `next` is a plausible file path (not starting with `-`, not empty).
+
+**Failure scenario:** User types `gyrseek --config --version`. The parser sets `cfg_path = "--version"`, continues past the loop with no `break`. The remaining args are `["--version"]`. Since `--version` is handled as a leading top-level flag before config load, the user gets the version output — but `cfg_path` is `"--version"`, and subsequent `load_policy_config("--version")` is called. If `"--version"` happens to exist as a file, it is read as the YAML config (producing an empty/partial config). If it does not exist, `fs::read_to_string` errors and gyrseek exits with a confusing "Config file not found: --version" message.
+
+**Fix direction:** Add a simple guard:
+```rust
+let Some(next) = args.get(idx + 1) else {
+    return Err("Missing value for --config/-c".to_string());
+};
+if next.starts_with('-') {
+    return Err(format!("Invalid value for --config/-c: '{}' looks like a flag", next));
+}
+```
+
+---
+
 ## Complexity & Over-Engineering Findings (Ponytail Review — 2026-06-14)
 
 **Scope:** Full tree scan for unnecessary complexity, redundant abstraction, and stdlib-avoidable code.  
@@ -473,3 +679,4 @@ All 259 tests pass (244 lib + 15 integration); clippy and fmt clean. See Finding
 | C13 | `sandbox.rs:517-538` | shrink | `image_setup_steps` 4× `steps.push(...)` with `format!`.                                 | `match manager` replaces if/else if; inlined at both call sites.    | ❌ Won't fix |
 | C14 | `sandbox.rs:662-669` | yagni | `docker_seccomp_profile_arg` wraps one format call.                                      | Inline `format!("seccomp={}", path?)` at call site.                 | ✅ Fixed |
 | C15 | `scanning.rs:1383-1391` | shrink | 8-line loop+flatten over two `Option<String>` refs to print warning.                     | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. | ✅ Fixed |
+| C16 | `lib.rs:1092-1173` | yagni | `bulk_scan!` macro spans 3 packaging ecosystems — a regression in one leaks to all | Replace with typed per-ecosystem functions (`bulk_scan_pip`, `bulk_scan_npm`, etc.) | ⚠️ Open  |
