@@ -39,7 +39,7 @@ Two categories of findings are tracked:
 | 7  | `parsing.rs`  | 576  | Medium   | Extras key mismatch breaks version pinning in forwarded command       | ✅ Fixed  |
 | 8  | `lib.rs`      | 536  | Medium   | Child exit status discarded — failed installs appear successful       | ✅ Fixed  |
 | 9  | `lib.rs`      | —    | Medium   | Unrecognized managers silently forwarded unscanned                    | ✅ Fixed  |
-| 10 | `scanning.rs` | 654  | Critical | Self-referencing baseline override disables all anomaly detection     | ⚠️ Open  |
+| 10 | `scanning.rs` | 654  | Critical | Self-referencing baseline override disables all anomaly detection     | ✅ Fixed  |
 | 11 | `parsing.rs`  | 468  | High     | All-non-registry npm CLI args trigger package.json fallback           | ⚠️ Open  |
 | 12 | `lib.rs`      | 1021 | High     | All-non-registry npm CLI args + no package.json → valid install blocked | ⚠️ Open |
 | 13 | `scanning.rs` | 1852 | Medium   | Async tests set env var without drop-guard — panic leaves it set      | ✅ Fixed  |
@@ -197,7 +197,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 ---
 
-### Finding 10 — Critical | `scanning.rs:654` | ⚠️ Open
+### Finding 10 — Critical | `scanning.rs:654` | ✅ Fixed
 
 **Summary:** `select_effective_baselines` inserts baseline override versions without checking equality to `current`; a self-referencing override disables all anomaly detection for the affected package.
 
@@ -205,9 +205,11 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 **Failure scenario:** Config: `baseline_overrides: {evil-pkg: {baseline-1: "1.3.0"}}`. User installs `evil-pkg@1.3.0` (same version). `select_effective_baselines` returns `["1.3.0"]` as the baseline. Probe deduplication collapses to one trace run. All diffs are empty → `allowed: true`, regardless of what `1.3.0` actually does during install.
 
-**Note:** This is a configuration footgun, not a remote exploit. The test `override_equal_to_current_is_included_as_baseline_producing_empty_diff` documents the behavior but does not fix it.
+**Note:** This is a configuration footgun, not a remote exploit.
 
 **Fix direction:** Add a `v != current` guard to the override insertion block (lines 654–660), matching the guard already applied to `fetched_baselines` on line 666. Emit a `⚠️ [gyrseek]` warning when a configured override version equals the version being scanned.
+
+**✅ Fix status — FIXED.** Added `v != *current` guard to both override insertion paths in `select_effective_baselines` (`scanning.rs:1133–1140`). Added warning at the call site in `scan_packages_versions` (`scanning.rs:1384–1393`) that prints `⚠️ [gyrseek] Baseline override version 'X' for 'pkg' equals the version being scanned; ignoring (would disable all anomaly detection)`. Updated test from `override_equal_to_current_is_included_as_baseline_producing_empty_diff` to `override_equal_to_current_is_excluded_from_baselines` — the override is now excluded and the fetched baseline fills the slot.
 
 ---
 
@@ -432,6 +434,21 @@ All 234 unit/integration tests pass; `just test-uv` and `just test-pip` pass end
 - `docs/TESTS.md` updated to 50 tests documented.
 - `AGENTS.md` and `README.md` updated with DNS interceptor/`-xx`/exec-unescape details.
 
+### Round 6 — 2026-06-16 — Self-referencing baseline override fix
+
+**Finding 10 — Critical.** `select_effective_baselines` inserted override versions without checking equality to `current`. A self-referencing override (`baseline-1: "1.3.0"` while installing `1.3.0`) caused probe deduplication → empty diffs → no anomalies ever fire.
+
+**Fix:** Added `v != *current` guard to both override insertion paths. Warning emitted at the call site when a configured override equals the scanned version. Four new edge-case tests:
+- `override_m2_equal_to_current_is_excluded_from_baselines`
+- `both_overrides_equal_to_current_skipped_and_filled_from_fetched`
+- `override_equal_to_current_with_no_fetched_baselines_returns_empty`
+- `override_equal_to_current_with_baseline_count_one_is_skipped`
+- `only_m2_is_set_and_equals_current_is_excluded`
+- `baseline_count_zero_with_override_equal_to_current_returns_empty`
+- `both_override_slots_none_falls_through_to_fetched_baselines`
+
+All 259 tests pass (244 lib + 15 integration); clippy and fmt clean. See Finding 10 above for full details.
+
 ---
 
 ## Complexity & Over-Engineering Findings (Ponytail Review — 2026-06-14)
@@ -455,3 +472,4 @@ All 234 unit/integration tests pass; `just test-uv` and `just test-pip` pass end
 | C12 | `sandbox.rs:462-477` | shrink | `scanner_user_setup_steps` returns `vec!["..."]`, called once.                           | Inline at call site.                                                |
 | C13 | `sandbox.rs:517-538` | shrink | `image_setup_steps` 4× `steps.push(...)` with `format!`.                                 | `vec![if !prebuilt { ... }]` is half the lines.                    |
 | C14 | `sandbox.rs:662-669` | yagni | `docker_seccomp_profile_arg` wraps one format call.                                      | Inline `format!("seccomp={}", path?)`.                              |
+| C15 | `scanning.rs:1383-1391` | shrink | 8-line loop+flatten over two `Option<String>` refs to print warning.                     | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. |
