@@ -73,24 +73,20 @@ pub(crate) struct ScanReport {
 /// semver for npm, PEP 440 for the Python managers. Strings that fail to parse
 /// are treated as lower than any parseable version (so junk is never selected as
 /// "latest"), with two unparseable strings falling back to lexical order.
+fn parse_and_cmp<T: std::cmp::Ord + std::str::FromStr>(a: &str, b: &str) -> Ordering {
+    match (a.parse::<T>(), b.parse::<T>()) {
+        (Ok(x), Ok(y)) => x.cmp(&y),
+        (Ok(_), _) => Ordering::Greater,
+        (_, Ok(_)) => Ordering::Less,
+        _ => a.cmp(b),
+    }
+}
+
 fn compare_version_strings(manager: &str, a: &str, b: &str) -> Ordering {
     if is_npm_family_manager(manager) {
-        match (semver::Version::parse(a), semver::Version::parse(b)) {
-            (Ok(x), Ok(y)) => x.cmp(&y),
-            (Ok(_), Err(_)) => Ordering::Greater,
-            (Err(_), Ok(_)) => Ordering::Less,
-            (Err(_), Err(_)) => a.cmp(b),
-        }
+        parse_and_cmp::<semver::Version>(a, b)
     } else {
-        match (
-            a.parse::<pep440_rs::Version>(),
-            b.parse::<pep440_rs::Version>(),
-        ) {
-            (Ok(x), Ok(y)) => x.cmp(&y),
-            (Ok(_), Err(_)) => Ordering::Greater,
-            (Err(_), Ok(_)) => Ordering::Less,
-            (Err(_), Err(_)) => a.cmp(b),
-        }
+        parse_and_cmp::<pep440_rs::Version>(a, b)
     }
 }
 
@@ -1215,20 +1211,17 @@ fn count_releases_in_window(
         .count()
 }
 
-fn burst_triggered(releases_in_window: usize, release_burst_threshold: Option<usize>) -> bool {
-    match release_burst_threshold {
-        Some(threshold) if threshold > 0 => releases_in_window >= threshold,
-        _ => false,
-    }
-}
-
 fn burst_policy_warning(
     package: &str,
     releases_in_window: usize,
     release_burst_threshold: Option<usize>,
     release_burst_window_hours: usize,
 ) -> Option<String> {
-    if !burst_triggered(releases_in_window, release_burst_threshold) {
+    let triggered = match release_burst_threshold {
+        Some(threshold) if threshold > 0 => releases_in_window >= threshold,
+        _ => false,
+    };
+    if !triggered {
         return None;
     }
 
@@ -1273,6 +1266,29 @@ fn exemption_behavior(new_package_exempt: bool, eligible_baseline_versions: usiz
         return (true, false);
     }
     (false, true)
+}
+
+fn warn_and_block(
+    results: &mut HashMap<String, ScanReport>,
+    key: &str,
+    resolved_version: &str,
+    warning_type: &str,
+    detail_line: &str,
+    extra_help: Option<&str>,
+) {
+    println!("\n❌ [gyrseek] CRITICAL WARNING: {} flagged!", warning_type);
+    println!("{}", detail_line);
+    if let Some(help) = extra_help {
+        println!("{}", help);
+    }
+    println!("Aborting host operation securely.");
+    results.insert(
+        key.to_string(),
+        ScanReport {
+            allowed: false,
+            resolved_version: resolved_version.to_string(),
+        },
+    );
 }
 
 pub(crate) async fn scan_packages_versions(
@@ -1547,16 +1563,19 @@ pub(crate) async fn scan_packages_versions(
                 plan.baselines.join(", ")
             };
 
-            println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
-            println!(
-                "Package '{}', version '{}' introduced new process execution not seen in baseline versions ({}): {:?}",
-                plan.package, plan.current, baseline_label, new_process_exec_signatures
+            warn_and_block(
+                &mut results,
+                &key,
+                &resolved_version,
+                "Behavioral anomaly",
+                &format!(
+                    "Package '{}', version '{}' introduced new process execution not seen in baseline versions ({}): {:?}",
+                    plan.package, plan.current, baseline_label, new_process_exec_signatures
+                ),
+                Some(
+                    "This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload).",
+                ),
             );
-            println!(
-                "This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload)."
-            );
-            println!("Aborting host operation securely.");
-            blocked(&mut results, key);
             continue;
         }
 
@@ -1585,18 +1604,19 @@ pub(crate) async fn scan_packages_versions(
                 plan.baselines.join(", ")
             };
 
-            println!(
-                "\n❌ [gyrseek] CRITICAL WARNING: Suspicious artifact(s) discovered after install!"
+            warn_and_block(
+                &mut results,
+                &key,
+                &resolved_version,
+                "Suspicious artifact(s) discovered after install",
+                &format!(
+                    "Package '{}', version '{}' introduced new suspicious file artifact(s) not seen in baseline versions ({}): {:?}",
+                    plan.package, plan.current, baseline_label, new_artifact_findings
+                ),
+                Some(
+                    "This may indicate a .pth file with executable content or an unexpected runtime binary.",
+                ),
             );
-            println!(
-                "Package '{}', version '{}' introduced new suspicious file artifact(s) not seen in baseline versions ({}): {:?}",
-                plan.package, plan.current, baseline_label, new_artifact_findings
-            );
-            println!(
-                "This may indicate a .pth file with executable content or an unexpected runtime binary."
-            );
-            println!("Aborting host operation securely.");
-            blocked(&mut results, key);
             continue;
         }
 
@@ -1622,13 +1642,17 @@ pub(crate) async fn scan_packages_versions(
                 plan.baselines.join(", ")
             };
 
-            println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
-            println!(
-                "Package '{}', version '{}' introduced new git clone behavior not seen in baseline versions ({}): {:?}",
-                plan.package, plan.current, baseline_label, new_git_clone_signatures
+            warn_and_block(
+                &mut results,
+                &key,
+                &resolved_version,
+                "Behavioral anomaly",
+                &format!(
+                    "Package '{}', version '{}' introduced new git clone behavior not seen in baseline versions ({}): {:?}",
+                    plan.package, plan.current, baseline_label, new_git_clone_signatures
+                ),
+                None,
             );
-            println!("Aborting host operation securely.");
-            blocked(&mut results, key);
             continue;
         }
 
@@ -1677,13 +1701,17 @@ pub(crate) async fn scan_packages_versions(
                 })
                 .collect();
 
-            println!("\n❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!");
-            println!(
-                "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({}): {:?}",
-                plan.package, plan.current, baseline_label, enriched
+            warn_and_block(
+                &mut results,
+                &key,
+                &resolved_version,
+                "Behavioral anomaly",
+                &format!(
+                    "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({}): {:?}",
+                    plan.package, plan.current, baseline_label, enriched
+                ),
+                None,
             );
-            println!("Aborting host operation securely.");
-            blocked(&mut results, key);
             continue;
         }
 
@@ -1724,17 +1752,17 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{
-        PolicyConfig, burst_policy_warning, burst_triggered, classify_inventory_lines,
-        compare_version_strings, count_releases_in_window, decode_dns_name, exemption_behavior,
-        extract_artifact_findings, extract_connection_ips, extract_dns_map,
-        extract_process_exec_signatures, filter_allowlisted_artifact_findings,
-        filter_allowlisted_git_clone_signatures, filter_allowlisted_new_connections,
-        filter_allowlisted_process_exec_signatures, filter_domain_allowlisted_new_connections_with,
-        find_new_connections_domain_aware, find_new_process_exec_signatures,
-        forward_confirmed_hostname, is_sandbox_local_ip, minimum_release_age_policy_warning,
-        normalize_ip_string, npm_published_times, parse_dns_response, reverse_dns_domain,
-        scan_packages_versions, select_age_eligible_baselines, select_effective_baselines,
-        sort_versions_ascending, strip_artifact_section, unescape_strace_string,
+        PolicyConfig, burst_policy_warning, classify_inventory_lines, compare_version_strings,
+        count_releases_in_window, decode_dns_name, exemption_behavior, extract_artifact_findings,
+        extract_connection_ips, extract_dns_map, extract_process_exec_signatures,
+        filter_allowlisted_artifact_findings, filter_allowlisted_git_clone_signatures,
+        filter_allowlisted_new_connections, filter_allowlisted_process_exec_signatures,
+        filter_domain_allowlisted_new_connections_with, find_new_connections_domain_aware,
+        find_new_process_exec_signatures, forward_confirmed_hostname, is_sandbox_local_ip,
+        minimum_release_age_policy_warning, normalize_ip_string, npm_published_times,
+        parse_dns_response, reverse_dns_domain, scan_packages_versions,
+        select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
+        strip_artifact_section, unescape_strace_string,
     };
     use chrono::Duration;
     use std::cmp::Ordering;
@@ -2443,18 +2471,6 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     }
 
     #[test]
-    fn burst_threshold_disabled_by_default() {
-        assert!(!burst_triggered(100, None));
-    }
-
-    #[test]
-    fn burst_threshold_triggers_at_or_above_threshold() {
-        assert!(!burst_triggered(2, Some(3)));
-        assert!(burst_triggered(3, Some(3)));
-        assert!(burst_triggered(4, Some(3)));
-    }
-
-    #[test]
     fn burst_policy_emits_warning_when_triggered() {
         let warning = burst_policy_warning("requests", 3, Some(3), 12);
         assert!(warning.is_some());
@@ -2465,7 +2481,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     }
 
     #[test]
-    fn burst_policy_has_no_warning_when_not_triggered() {
+    fn burst_policy_no_warning_below_threshold_or_disabled() {
         assert!(burst_policy_warning("requests", 2, Some(3), 24).is_none());
         assert!(burst_policy_warning("requests", 100, None, 24).is_none());
     }

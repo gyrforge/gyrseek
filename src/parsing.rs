@@ -75,7 +75,6 @@ pub(crate) fn parse_uv_lock_packages_from_content(content: &str) -> Vec<(String,
 
     packages
 }
-
 pub(crate) fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, String)> {
     let mut packages = Vec::new();
     let mut in_package = false;
@@ -112,11 +111,6 @@ pub(crate) fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(Str
                     .map(is_local_location)
                     .unwrap_or(false));
 
-        // Exclude any local directory-source package regardless of the `develop`
-        // flag. `develop` only distinguishes editable from non-editable installs;
-        // both resolve to a local path at install time, so neither should be sent
-        // to the registry scanner (a public package of the same name would be
-        // scanned and approved while the local path is what actually installs).
         if !*local_source && !directory_local {
             if let (Some(n), Some(v)) = (name.take(), version.take()) {
                 packages.push((n, v));
@@ -646,68 +640,63 @@ pub(crate) fn parse_package_details(
     manager: &str,
     args: &[String],
 ) -> (Option<String>, Option<String>) {
-    if manager == "uv"
+    let is_recognized = manager == "uv"
         || manager == "pip"
         || manager == "pip3"
         || manager == "poetry"
-        || is_npm_family_manager(manager)
-    {
-        let pkg_arg_start = if manager == "uv" {
-            if args.get(1).map(String::as_str) == Some("add") {
-                Some(2)
-            } else if args.get(1).map(String::as_str) == Some("pip")
-                && args.get(2).map(String::as_str) == Some("install")
-            {
-                Some(3)
-            } else {
-                None
-            }
-        } else if manager == "poetry" {
-            if args.get(1).map(String::as_str) == Some("add")
-                || args.get(1).map(String::as_str) == Some("update")
-                || args.get(1).map(String::as_str) == Some("install")
-            {
-                Some(2)
-            } else {
-                None
-            }
-        } else if is_npm_family_manager(manager) {
-            if is_npm_family_package_command(manager, args.get(1).map(String::as_str)) {
-                Some(2)
-            } else {
-                None
-            }
-        } else if args.get(1).map(String::as_str) == Some("install") {
+        || is_npm_family_manager(manager);
+    if !is_recognized {
+        return (None, None);
+    }
+
+    let pkg_arg_start: Option<usize> = match manager {
+        "uv" if args.get(1).map(String::as_str) == Some("add") => Some(2),
+        "uv" if args.get(1).map(String::as_str) == Some("pip")
+            && args.get(2).map(String::as_str) == Some("install") =>
+        {
+            Some(3)
+        }
+        "poetry"
+            if matches!(
+                args.get(1).map(String::as_str),
+                Some("add" | "update" | "install")
+            ) =>
+        {
             Some(2)
-        } else {
-            None
-        };
+        }
+        _ if is_npm_family_manager(manager)
+            && is_npm_family_package_command(manager, args.get(1).map(String::as_str)) =>
+        {
+            Some(2)
+        }
+        _ if args.get(1).map(String::as_str) == Some("install") => Some(2),
+        _ => None,
+    };
 
-        if let Some(start) = pkg_arg_start {
-            for arg in args.iter().skip(start) {
-                if arg.starts_with('-') {
-                    continue;
-                }
-
-                if is_npm_family_manager(manager) {
-                    let (name, version) = parse_npm_spec(arg);
-                    return (Some(name), version);
-                }
-
-                if arg.contains("==") {
-                    let parts: Vec<&str> = arg.split("==").collect();
-                    if parts.len() == 2 {
-                        // Strip extras so the registry lookup / pins key use the
-                        // canonical name; the forwarded command keeps the spec.
-                        return (
-                            Some(strip_pep508_extras(parts[0]).to_string()),
-                            Some(parts[1].to_string()),
-                        );
-                    }
-                }
-
-                return (Some(strip_pep508_extras(arg).to_string()), None);
+    if let Some(start) = pkg_arg_start {
+        for arg in args.iter().skip(start) {
+            if arg.starts_with('-') {
+                continue;
             }
+
+            if is_npm_family_manager(manager) {
+                let (name, version) = parse_npm_spec(arg);
+                return (Some(name), version);
+            }
+
+            if arg.contains("==") {
+                let parts: Vec<&str> = arg.split("==").collect();
+                if parts.len() == 2 {
+                    // Strip extras so the registry lookup / pins key use the
+                    // canonical name; the forwarded command keeps the spec.
+                    return (
+                        Some(strip_pep508_extras(parts[0]).to_string()),
+                        Some(parts[1].to_string()),
+                    );
+                }
+            }
+
+            return (Some(strip_pep508_extras(arg).to_string()), None);
         }
     }
     (None, None)

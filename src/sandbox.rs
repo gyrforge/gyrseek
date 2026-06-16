@@ -637,9 +637,10 @@ fn build_docker_run_args(
         "--tmpfs".to_string(),
         "/work:rw,noexec,nosuid,size=512m".to_string(),
     ];
-    if let Some(seccomp_profile) = docker_seccomp_profile_arg()? {
+    if docker_seccomp_enabled_from_env() {
+        let profile_path = embedded_seccomp_profile_path()?;
         args.push("--security-opt".to_string());
-        args.push(seccomp_profile);
+        args.push(format!("seccomp={profile_path}"));
     }
     if let Some(apparmor_profile) = docker_apparmor_profile_name() {
         args.push("--security-opt".to_string());
@@ -660,14 +661,6 @@ fn build_docker_run_args(
     args.push("-lc".to_string());
     args.push(script.to_string());
     Ok(args)
-}
-
-fn docker_seccomp_profile_arg() -> Result<Option<String>, String> {
-    if !docker_seccomp_enabled_from_env() {
-        return Ok(None);
-    }
-    let profile_path = embedded_seccomp_profile_path()?;
-    Ok(Some(format!("seccomp={profile_path}")))
 }
 
 fn docker_seccomp_enabled_from_env() -> bool {
