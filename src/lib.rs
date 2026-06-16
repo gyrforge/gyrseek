@@ -87,11 +87,24 @@ fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool)
             idx += 1;
             continue;
         }
-
         break;
     }
 
     Ok((args[idx..].to_vec(), cfg_path, cfg_explicit))
+}
+
+fn parse_list(items: Vec<String>, lowercase: bool) -> HashSet<String> {
+    items
+        .into_iter()
+        .map(|e| {
+            if lowercase {
+                e.trim().to_ascii_lowercase()
+            } else {
+                e.trim().to_string()
+            }
+        })
+        .filter(|e| !e.is_empty())
+        .collect()
 }
 
 fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String> {
@@ -108,11 +121,11 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
     let cfg: GyrseekConfig = serde_yaml::from_str(&content)
         .map_err(|e| format!("Failed to parse YAML config '{}': {}", path, e))?;
 
-    let mut set = HashSet::new();
+    let mut ip_allowlist = HashSet::new();
     for entry in cfg.ip_allowlist {
         match entry.parse::<IpAddr>() {
             Ok(addr) => {
-                set.insert(addr.to_string());
+                ip_allowlist.insert(addr.to_string());
             }
             Err(_) => {
                 println!(
@@ -132,14 +145,7 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         domain_set.insert(normalized);
     }
 
-    let mut git_clone_allowlist = HashSet::new();
-    for entry in cfg.git_clone_allowlist {
-        let normalized = entry.trim().to_ascii_lowercase();
-        if normalized.is_empty() {
-            continue;
-        }
-        git_clone_allowlist.insert(normalized);
-    }
+    let git_clone_allowlist = parse_list(cfg.git_clone_allowlist, true);
 
     let mut baseline_overrides = HashMap::new();
     for (package, cfg) in cfg.baseline_overrides {
@@ -176,36 +182,20 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
     let mut min_baseline_age_hours = HashMap::new();
     for (package, hours) in cfg.min_baseline_age_hours {
         let package = package.trim().to_string();
-        if package.is_empty() {
-            continue;
-        }
-        if hours == 0 {
-            println!(
-                "⚠️ [gyrseek] Ignoring invalid min_baseline_age_hours for '{}': 0",
-                package
-            );
+        if package.is_empty() || hours == 0 {
+            if hours == 0 {
+                println!(
+                    "⚠️ [gyrseek] Ignoring invalid min_baseline_age_hours for '{}': 0",
+                    package
+                );
+            }
             continue;
         }
         min_baseline_age_hours.insert(package, hours);
     }
 
-    let mut new_package_exemptions = HashSet::new();
-    for package in cfg.new_package_exemptions {
-        let package = package.trim().to_string();
-        if package.is_empty() {
-            continue;
-        }
-        new_package_exemptions.insert(package);
-    }
-
-    let mut internal_package_exemptions = HashSet::new();
-    for package in cfg.internal_package_exemptions {
-        let package = package.trim().to_string();
-        if package.is_empty() {
-            continue;
-        }
-        internal_package_exemptions.insert(package);
-    }
+    let new_package_exemptions = parse_list(cfg.new_package_exemptions, false);
+    let internal_package_exemptions = parse_list(cfg.internal_package_exemptions, false);
 
     let release_burst_threshold = match cfg.release_burst_threshold {
         Some(0) => {
@@ -240,24 +230,11 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         None => None,
     };
 
-    let mut process_exec_allowlist = HashSet::new();
-    for entry in cfg.process_exec_allowlist {
-        let normalized = entry.trim().to_ascii_lowercase();
-        if !normalized.is_empty() {
-            process_exec_allowlist.insert(normalized);
-        }
-    }
-
-    let mut artifact_allowlist = HashSet::new();
-    for entry in cfg.artifact_allowlist {
-        let normalized = entry.trim().to_string();
-        if !normalized.is_empty() {
-            artifact_allowlist.insert(normalized);
-        }
-    }
+    let process_exec_allowlist = parse_list(cfg.process_exec_allowlist, true);
+    let artifact_allowlist = parse_list(cfg.artifact_allowlist, false);
 
     Ok(PolicyConfig {
-        ip_allowlist: set,
+        ip_allowlist,
         domain_allowlist: domain_set,
         git_clone_allowlist,
         baseline_overrides,
@@ -570,14 +547,8 @@ pub struct GyrSeek {
 }
 
 struct NoopRunner;
-
 impl SandboxRunner for NoopRunner {
-    fn trace_install(
-        &self,
-        _manager: &str,
-        _package: &str,
-        _version: &str,
-    ) -> Result<String, String> {
+    fn trace_install(&self, _: &str, _: &str, _: &str) -> Result<String, String> {
         Err("noop runner invoked".to_string())
     }
 }
@@ -794,11 +765,6 @@ async fn scan_many_with_cache(
     Some(pins)
 }
 
-enum ForwardMode {
-    Original,
-    Pinned,
-}
-
 async fn scan_targets(
     scan_cache: &mut HashMap<String, ScanReport>,
     runner: &dyn SandboxRunner,
@@ -807,6 +773,11 @@ async fn scan_targets(
     policy: &PolicyConfig,
 ) -> Option<HashMap<String, String>> {
     scan_many_with_cache(scan_cache, runner, manager, targets, policy).await
+}
+
+enum ForwardMode {
+    Original,
+    Pinned,
 }
 
 fn exit_with(msg: &str) -> ! {

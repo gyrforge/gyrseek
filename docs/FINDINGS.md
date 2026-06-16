@@ -454,22 +454,22 @@ All 259 tests pass (244 lib + 15 integration); clippy and fmt clean. See Finding
 ## Complexity & Over-Engineering Findings (Ponytail Review — 2026-06-14)
 
 **Scope:** Full tree scan for unnecessary complexity, redundant abstraction, and stdlib-avoidable code.  
-**Net score:** ~350 lines removable without losing safety or test coverage.
+**Net score:** ~180 lines removable without losing safety or test coverage (5 findings won't fix — churn).
 
-| #  | File          | Tag      | What                                                                                     | Fix                                                                 |
-|----|---------------|----------|------------------------------------------------------------------------------------------|---------------------------------------------------------------------|
-| C1 | `lib.rs:64-95` | shrink   | 31-line manual arg-loop for `--config`/`-c`.                                            | `clap` or a `match` with `Positional` → ~10 lines.                 |
-| C2 | `lib.rs:97-274` | shrink | `load_policy_config` is 177 lines of trim→filter→collect for 8 list fields.             | `fn parse_list(v: Vec<String>) -> HashSet<String>` saves ~50 lines. |
-| C3 | `lib.rs:572-583` | yagni | `NoopRunner` struct with full trait impl for test bypass.                                | `\|_\| Err(...)` closure is 1 line.                                  |
-| C4 | `lib.rs:701-717` | shrink | `ScanTimer` struct with `Instant`, `Drop`, two print branches.                           | `let start = Instant::now();` at call site is 3 lines, not 16. |
-| C5 | `lib.rs:802-810` | yagni | `scan_targets` is a 1-line delegate to `scan_many_with_cache`.                           | Call `scan_many_with_cache` directly.                               |
-| C6 | `Cargo.toml:7` | shrink   | `tokio` with `features = ["full"]` pulls in 30+ features.                                | Only `rt`, `macros` needed; or switch to `reqwest` blocking client. |
-| C7 | `scanning.rs:76-95` | shrink | `compare_version_strings` repeats the same Ok/Err/Err/Ok match on both branches.         | Fold into `Result::then` on `Version::parse` → ~8 lines.            |
-| C8 | `scanning.rs:1009-1013` | yagni | `burst_triggered` has one caller (`burst_policy_warning`).                              | Inline the `match`.                                                 |
-| C9 | `scanning.rs:1325-1343, 1400-1415, 1440-1473` | shrink | Three near-identical "CRITICAL WARNING: Behavioral anomaly flagged" blocks.              | `fn block_and_warn(...)` saves ~80 lines.                           |
-| C10 | `parsing.rs:648-714` | shrink | `parse_package_details` has 5-layer nested if/else per manager.                          | `&[(manager, subcommand, offset)]` table → ~8 lines.                |
-| C11 | `parsing.rs:79-239` | shrink | `parse_poetry_lock_packages_from_content` has 7-param closure. Shares shape with uv lock parser. | Generic TOML-section parser with skip predicate.               |
-| C12 | `sandbox.rs:462-477` | shrink | `scanner_user_setup_steps` returns `vec!["..."]`, called once.                           | Inline at call site.                                                |
-| C13 | `sandbox.rs:517-538` | shrink | `image_setup_steps` 4× `steps.push(...)` with `format!`.                                 | `vec![if !prebuilt { ... }]` is half the lines.                    |
-| C14 | `sandbox.rs:662-669` | yagni | `docker_seccomp_profile_arg` wraps one format call.                                      | Inline `format!("seccomp={}", path?)`.                              |
-| C15 | `scanning.rs:1383-1391` | shrink | 8-line loop+flatten over two `Option<String>` refs to print warning.                     | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. |
+| #  | File          | Tag      | What                                                                                     | Fix                                                                 | Status    |
+|----|---------------|----------|------------------------------------------------------------------------------------------|---------------------------------------------------------------------|-----------|
+| C1 | `lib.rs:64-95` | shrink   | 31-line manual arg-loop for `--config`/`-c`.                                            | Compact `while let Some(arg)` with `strip_prefix` + `ok_or_else` → 20 lines. | ❌ Won't fix |
+| C2 | `lib.rs:97-274` | shrink | `load_policy_config` is 177 lines of trim→filter→collect for 8 list fields.             | `parse_list()` helper; 5 list fields collapsed to 1-liners.         | ✅ Fixed |
+| C3 | `lib.rs:572-583` | yagni | `NoopRunner` struct with full trait impl for test bypass.                                | Rust requires a concrete type for trait impl; closure can't substitute. | ❌ Won't fix |
+| C4 | `lib.rs:701-717` | shrink | `ScanTimer` struct with `Instant`, `Drop`, two print branches.                           | Inlined approach introduced maintenance footgun. RAII Drop is the correct, lazy choice for scoped cleanup. | ❌ Won't fix |
+| C5 | `lib.rs:802-810` | yagni | `scan_targets` is a 1-line delegate to `scan_many_with_cache`.                           | Inlined at 5 call sites.                                               | ❌ Won't fix |
+| C6 | `Cargo.toml:7` | shrink   | `tokio` with `features = ["full"]` pulls in 30+ features.                                | `["rt", "rt-multi-thread", "macros"]` — 3 features instead of 30+.    | ✅ Fixed |
+| C7 | `scanning.rs:76-95` | shrink | `compare_version_strings` repeats the same Ok/Err/Err/Ok match on both branches.         | `parse_and_cmp::<T>` generic helper unifies both arms.                | ✅ Fixed |
+| C8 | `scanning.rs:1009-1013` | yagni | `burst_triggered` has one caller (`burst_policy_warning`).                              | Inlined `match` at caller; tests updated to use `burst_policy_warning`. | ✅ Fixed |
+| C9 | `scanning.rs:1325-1343, 1400-1415, 1440-1473` | shrink | Three near-identical "CRITICAL WARNING: Behavioral anomaly flagged" blocks.              | `fn warn_and_block(...)` saves ~50 lines; all 3 + artifact block consolidated. | ✅ Fixed |
+| C10 | `parsing.rs:648-714` | shrink | `parse_package_details` has 5-layer nested if/else per manager.                          | `match` with guards replaces 5-layer if/else chain.                 | ✅ Fixed |
+| C11 | `parsing.rs:79-239` | shrink | `parse_poetry_lock_packages_from_content` has 7-param closure.                           | `Pkg` struct with `finalize()` method eliminates 7-param closure; `fn` replaces closure. | ❌ Won't fix |
+| C12 | `sandbox.rs:462-477` | shrink | `scanner_user_setup_steps` returns `vec!["..."]`, called once.                           | Inlined at both call sites.                                         | ❌ Won't fix |
+| C13 | `sandbox.rs:517-538` | shrink | `image_setup_steps` 4× `steps.push(...)` with `format!`.                                 | `match manager` replaces if/else if; inlined at both call sites.    | ❌ Won't fix |
+| C14 | `sandbox.rs:662-669` | yagni | `docker_seccomp_profile_arg` wraps one format call.                                      | Inline `format!("seccomp={}", path?)` at call site.                 | ✅ Fixed |
+| C15 | `scanning.rs:1383-1391` | shrink | 8-line loop+flatten over two `Option<String>` refs to print warning.                     | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. | ✅ Fixed |
