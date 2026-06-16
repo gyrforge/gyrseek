@@ -314,7 +314,7 @@
       "source_location": "L283",
       "_origin": "ast",
       "id": "namedtempfile",
-      "community": 12,
+      "community": 1,
       "norm_label": "namedtempfile"
     },
     {
@@ -1901,7 +1901,7 @@
       "label": "build_matrix_script()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L568",
+      "source_location": "L571",
       "_origin": "ast",
       "id": "src_sandbox_build_matrix_script",
       "community": 2,
@@ -1911,7 +1911,7 @@
       "label": "build_single_script()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L594",
+      "source_location": "L597",
       "_origin": "ast",
       "id": "src_sandbox_build_single_script",
       "community": 2,
@@ -1921,7 +1921,7 @@
       "label": "build_docker_run_args()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L606",
+      "source_location": "L609",
       "_origin": "ast",
       "id": "src_sandbox_build_docker_run_args",
       "community": 2,
@@ -1931,7 +1931,7 @@
       "label": "docker_seccomp_enabled_from_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L666",
+      "source_location": "L669",
       "_origin": "ast",
       "id": "src_sandbox_docker_seccomp_enabled_from_env",
       "community": 2,
@@ -1941,7 +1941,7 @@
       "label": "docker_apparmor_enabled_from_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L673",
+      "source_location": "L676",
       "_origin": "ast",
       "id": "src_sandbox_docker_apparmor_enabled_from_env",
       "community": 2,
@@ -1951,7 +1951,7 @@
       "label": "try_load_apparmor()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L689",
+      "source_location": "L692",
       "_origin": "ast",
       "id": "src_sandbox_try_load_apparmor",
       "community": 2,
@@ -1961,7 +1961,7 @@
       "label": "Path",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L689",
+      "source_location": "L692",
       "_origin": "ast",
       "id": "src_sandbox_rs_path",
       "community": 2,
@@ -1971,7 +1971,7 @@
       "label": "docker_apparmor_profile_name()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L743",
+      "source_location": "L746",
       "_origin": "ast",
       "id": "src_sandbox_docker_apparmor_profile_name",
       "community": 2,
@@ -1981,7 +1981,7 @@
       "label": "embedded_seccomp_profile_path()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L768",
+      "source_location": "L771",
       "_origin": "ast",
       "id": "src_sandbox_embedded_seccomp_profile_path",
       "community": 2,
@@ -1991,7 +1991,7 @@
       "label": "announce_seccomp_status()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L791",
+      "source_location": "L794",
       "_origin": "ast",
       "id": "src_sandbox_announce_seccomp_status",
       "community": 2,
@@ -2001,7 +2001,7 @@
       "label": "announce_apparmor_status()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L804",
+      "source_location": "L807",
       "_origin": "ast",
       "id": "src_sandbox_announce_apparmor_status",
       "community": 2,
@@ -2011,7 +2011,7 @@
       "label": "docker_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L829",
+      "source_location": "L832",
       "_origin": "ast",
       "id": "src_sandbox_docker_available",
       "community": 2,
@@ -2021,7 +2021,7 @@
       "label": "docker_runtime_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L839",
+      "source_location": "L842",
       "_origin": "ast",
       "id": "src_sandbox_docker_runtime_available",
       "community": 2,
@@ -2031,7 +2031,7 @@
       "label": "scanner_image_config()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L845",
+      "source_location": "L848",
       "_origin": "ast",
       "id": "src_sandbox_scanner_image_config",
       "community": 2,
@@ -2041,7 +2041,7 @@
       "label": "parse_bool_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L882",
+      "source_location": "L885",
       "_origin": "ast",
       "id": "src_sandbox_parse_bool_env",
       "community": 2,
@@ -2051,7 +2051,7 @@
       "label": "list_docker_runtimes()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L889",
+      "source_location": "L892",
       "_origin": "ast",
       "id": "src_sandbox_list_docker_runtimes",
       "community": 2,
@@ -2061,7 +2061,7 @@
       "label": "shell_single_quoted()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L917",
+      "source_location": "L920",
       "_origin": "ast",
       "id": "src_sandbox_shell_single_quoted",
       "community": 2,
@@ -2071,7 +2071,7 @@
       "label": "env_lock()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L931",
+      "source_location": "L934",
       "_origin": "ast",
       "id": "src_sandbox_env_lock",
       "community": 2,
@@ -2081,7 +2081,7 @@
       "label": "Mutex",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L931",
+      "source_location": "L934",
       "_origin": "ast",
       "id": "src_sandbox_rs_mutex",
       "community": 2,
@@ -2091,7 +2091,7 @@
       "label": "strace_command_disables_string_truncation()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L939",
+      "source_location": "L942",
       "_origin": "ast",
       "id": "src_sandbox_strace_command_disables_string_truncation",
       "community": 2,
@@ -2101,7 +2101,7 @@
       "label": "matrix_and_single_scripts_disable_truncation()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L950",
+      "source_location": "L953",
       "_origin": "ast",
       "id": "src_sandbox_matrix_and_single_scripts_disable_truncation",
       "community": 2,
@@ -2111,7 +2111,7 @@
       "label": "strace_drops_payload_to_unprivileged_user()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L969",
+      "source_location": "L972",
       "_origin": "ast",
       "id": "src_sandbox_strace_drops_payload_to_unprivileged_user",
       "community": 2,
@@ -2121,7 +2121,7 @@
       "label": "matrix_script_creates_scanner_user_before_install()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L982",
+      "source_location": "L985",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_creates_scanner_user_before_install",
       "community": 2,
@@ -2131,7 +2131,7 @@
       "label": "pnpm_install_invocation_uses_pnpm_add()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1001",
+      "source_location": "L1004",
       "_origin": "ast",
       "id": "src_sandbox_pnpm_install_invocation_uses_pnpm_add",
       "community": 2,
@@ -2141,7 +2141,7 @@
       "label": "pnpm_non_prebuilt_image_enables_pnpm()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1008",
+      "source_location": "L1011",
       "_origin": "ast",
       "id": "src_sandbox_pnpm_non_prebuilt_image_enables_pnpm",
       "community": 2,
@@ -2151,7 +2151,7 @@
       "label": "docker_args_keep_out_mount_when_provided_and_omit_when_empty()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1019",
+      "source_location": "L1022",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_keep_out_mount_when_provided_and_omit_when_empty",
       "community": 2,
@@ -2161,7 +2161,7 @@
       "label": "docker_args_pass_runtime_when_set()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1042",
+      "source_location": "L1045",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_pass_runtime_when_set",
       "community": 2,
@@ -2171,7 +2171,7 @@
       "label": "docker_args_grant_sys_ptrace_capability()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1064",
+      "source_location": "L1067",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_grant_sys_ptrace_capability",
       "community": 2,
@@ -2181,7 +2181,7 @@
       "label": "docker_args_adds_seccomp_profile_by_default()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1089",
+      "source_location": "L1092",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_adds_seccomp_profile_by_default",
       "community": 2,
@@ -2191,7 +2191,7 @@
       "label": "docker_args_disables_seccomp_when_env_var_false()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1113",
+      "source_location": "L1116",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_disables_seccomp_when_env_var_false",
       "community": 2,
@@ -2201,7 +2201,7 @@
       "label": "docker_args_enables_seccomp_when_env_var_true()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1135",
+      "source_location": "L1138",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_enables_seccomp_when_env_var_true",
       "community": 2,
@@ -2211,7 +2211,7 @@
       "label": "embedded_seccomp_profile_keeps_networking_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1157",
+      "source_location": "L1160",
       "_origin": "ast",
       "id": "src_sandbox_embedded_seccomp_profile_keeps_networking_available",
       "community": 2,
@@ -2221,7 +2221,7 @@
       "label": "embedded_apparmor_profile_mentions_cap_sys_ptrace()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1184",
+      "source_location": "L1187",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_mentions_cap_sys_ptrace",
       "community": 2,
@@ -2231,7 +2231,7 @@
       "label": "embedded_apparmor_profile_allows_network()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1192",
+      "source_location": "L1195",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_allows_network",
       "community": 2,
@@ -2241,7 +2241,7 @@
       "label": "embedded_apparmor_profile_allows_ptrace()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1205",
+      "source_location": "L1208",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_allows_ptrace",
       "community": 2,
@@ -2251,7 +2251,7 @@
       "label": "embedded_apparmor_profile_allows_work_out_tmp_writes()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1213",
+      "source_location": "L1216",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_allows_work_out_tmp_writes",
       "community": 2,
@@ -2261,7 +2261,7 @@
       "label": "embedded_apparmor_profile_valid_profile_name()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1229",
+      "source_location": "L1232",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_valid_profile_name",
       "community": 2,
@@ -2271,7 +2271,7 @@
       "label": "apparmor_env_var_default_false()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1234",
+      "source_location": "L1237",
       "_origin": "ast",
       "id": "src_sandbox_apparmor_env_var_default_false",
       "community": 2,
@@ -2281,7 +2281,7 @@
       "label": "apparmor_disabled_wont_call_apparmor_parser()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1261",
+      "source_location": "L1264",
       "_origin": "ast",
       "id": "src_sandbox_apparmor_disabled_wont_call_apparmor_parser",
       "community": 2,
@@ -2291,7 +2291,7 @@
       "label": "matrix_script_captures_strace_stderr_not_devnull()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1278",
+      "source_location": "L1281",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_captures_strace_stderr_not_devnull",
       "community": 2,
@@ -2301,7 +2301,7 @@
       "label": "artifact_scan_steps_inventory_all_files()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1304",
+      "source_location": "L1307",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_inventory_all_files",
       "community": 2,
@@ -2311,7 +2311,7 @@
       "label": "artifact_scan_steps_pipe_char_in_content_replaced()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1326",
+      "source_location": "L1329",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_pipe_char_in_content_replaced",
       "community": 2,
@@ -2321,7 +2321,7 @@
       "label": "artifact_scan_steps_output_to_correct_log()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1336",
+      "source_location": "L1339",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_output_to_correct_log",
       "community": 2,
@@ -2331,7 +2331,7 @@
       "label": "matrix_script_includes_artifact_scan_after_each_probe()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1344",
+      "source_location": "L1347",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_includes_artifact_scan_after_each_probe",
       "community": 2,
@@ -2384,7 +2384,7 @@
       "source_location": "L20",
       "_origin": "ast",
       "id": "src_scanning_rs_hashmap",
-      "community": 5,
+      "community": 4,
       "norm_label": "hashmap"
     },
     {
@@ -2394,7 +2394,7 @@
       "source_location": "L20",
       "_origin": "ast",
       "id": "src_scanning_rs_option",
-      "community": 5,
+      "community": 6,
       "norm_label": "option"
     },
     {
@@ -2554,7 +2554,7 @@
       "source_location": "L132",
       "_origin": "ast",
       "id": "src_scanning_pypireleasefile",
-      "community": 4,
+      "community": 6,
       "norm_label": "pypireleasefile"
     },
     {
@@ -2614,7 +2614,7 @@
       "source_location": "L202",
       "_origin": "ast",
       "id": "f",
-      "community": 6,
+      "community": 14,
       "norm_label": "f"
     },
     {
@@ -2634,7 +2634,7 @@
       "source_location": "L257",
       "_origin": "ast",
       "id": "src_scanning_filter_allowlisted_new_connections",
-      "community": 13,
+      "community": 14,
       "norm_label": "filter_allowlisted_new_connections()"
     },
     {
@@ -2664,7 +2664,7 @@
       "source_location": "L304",
       "_origin": "ast",
       "id": "src_scanning_filter_domain_allowlisted_new_connections_with",
-      "community": 6,
+      "community": 14,
       "norm_label": "filter_domain_allowlisted_new_connections_with()"
     },
     {
@@ -2714,7 +2714,7 @@
       "source_location": "L388",
       "_origin": "ast",
       "id": "src_scanning_decode_dns_name",
-      "community": 3,
+      "community": 6,
       "norm_label": "decode_dns_name()"
     },
     {
@@ -2764,7 +2764,7 @@
       "source_location": "L705",
       "_origin": "ast",
       "id": "src_scanning_extract_artifact_findings",
-      "community": 14,
+      "community": 3,
       "norm_label": "extract_artifact_findings()"
     },
     {
@@ -2784,7 +2784,7 @@
       "source_location": "L781",
       "_origin": "ast",
       "id": "src_scanning_trace_sandbox_install_matrix",
-      "community": 5,
+      "community": 4,
       "norm_label": "trace_sandbox_install_matrix()"
     },
     {
@@ -2804,7 +2804,7 @@
       "source_location": "L781",
       "_origin": "ast",
       "id": "src_scanning_rs_result",
-      "community": 5,
+      "community": 4,
       "norm_label": "result"
     },
     {
@@ -2984,7 +2984,7 @@
       "source_location": "L1214",
       "_origin": "ast",
       "id": "src_scanning_burst_policy_warning",
-      "community": 5,
+      "community": 6,
       "norm_label": "burst_policy_warning()"
     },
     {
@@ -2994,7 +2994,7 @@
       "source_location": "L1237",
       "_origin": "ast",
       "id": "src_scanning_minimum_release_age_policy_warning",
-      "community": 5,
+      "community": 6,
       "norm_label": "minimum_release_age_policy_warning()"
     },
     {
@@ -3494,7 +3494,7 @@
       "source_location": "L2474",
       "_origin": "ast",
       "id": "src_scanning_burst_policy_emits_warning_when_triggered",
-      "community": 5,
+      "community": 6,
       "norm_label": "burst_policy_emits_warning_when_triggered()"
     },
     {
@@ -3514,7 +3514,7 @@
       "source_location": "L2490",
       "_origin": "ast",
       "id": "src_scanning_minimum_release_age_policy_warns_when_release_is_too_new",
-      "community": 5,
+      "community": 6,
       "norm_label": "minimum_release_age_policy_warns_when_release_is_too_new()"
     },
     {
@@ -3564,7 +3564,7 @@
       "source_location": "L2552",
       "_origin": "ast",
       "id": "src_scanning_ip_allowlist_filters_new_ips_before_blocking",
-      "community": 13,
+      "community": 14,
       "norm_label": "ip_allowlist_filters_new_ips_before_blocking()"
     },
     {
@@ -3574,7 +3574,7 @@
       "source_location": "L2564",
       "_origin": "ast",
       "id": "src_scanning_domain_allowlist_filters_resolved_domains_before_blocking",
-      "community": 6,
+      "community": 14,
       "norm_label": "domain_allowlist_filters_resolved_domains_before_blocking()"
     },
     {
@@ -3584,7 +3584,7 @@
       "source_location": "L2585",
       "_origin": "ast",
       "id": "src_scanning_domain_allowlist_does_not_filter_when_lookup_fails",
-      "community": 6,
+      "community": 14,
       "norm_label": "domain_allowlist_does_not_filter_when_lookup_fails()"
     },
     {
@@ -3594,7 +3594,7 @@
       "source_location": "L2599",
       "_origin": "ast",
       "id": "src_scanning_domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot",
-      "community": 6,
+      "community": 14,
       "norm_label": "domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot()"
     },
     {
@@ -3754,7 +3754,7 @@
       "source_location": "L2954",
       "_origin": "ast",
       "id": "src_scanning_pipeline_chains_domain_aware_diff_with_allowlists",
-      "community": 13,
+      "community": 14,
       "norm_label": "pipeline_chains_domain_aware_diff_with_allowlists()"
     },
     {
@@ -3774,7 +3774,7 @@
       "source_location": "L3083",
       "_origin": "ast",
       "id": "src_scanning_ip_allowlist_matches_equivalent_ipv6_representations",
-      "community": 13,
+      "community": 14,
       "norm_label": "ip_allowlist_matches_equivalent_ipv6_representations()"
     },
     {
@@ -3784,7 +3784,7 @@
       "source_location": "L3099",
       "_origin": "ast",
       "id": "src_scanning_ip_allowlist_matches_across_ipv4_mapped_and_bare_forms",
-      "community": 13,
+      "community": 14,
       "norm_label": "ip_allowlist_matches_across_ipv4_mapped_and_bare_forms()"
     },
     {
@@ -3874,7 +3874,7 @@
       "source_location": "L3196",
       "_origin": "ast",
       "id": "src_scanning_decode_dns_name_simple_two_label",
-      "community": 3,
+      "community": 6,
       "norm_label": "decode_dns_name_simple_two_label()"
     },
     {
@@ -3884,7 +3884,7 @@
       "source_location": "L3205",
       "_origin": "ast",
       "id": "src_scanning_decode_dns_name_root_label_only",
-      "community": 3,
+      "community": 6,
       "norm_label": "decode_dns_name_root_label_only()"
     },
     {
@@ -3894,7 +3894,7 @@
       "source_location": "L3214",
       "_origin": "ast",
       "id": "src_scanning_decode_dns_name_single_byte_pointer",
-      "community": 3,
+      "community": 6,
       "norm_label": "decode_dns_name_single_byte_pointer()"
     },
     {
@@ -3904,7 +3904,7 @@
       "source_location": "L3226",
       "_origin": "ast",
       "id": "src_scanning_decode_dns_name_recursive_pointer_chain",
-      "community": 3,
+      "community": 6,
       "norm_label": "decode_dns_name_recursive_pointer_chain()"
     },
     {
@@ -3934,7 +3934,7 @@
       "source_location": "L3259",
       "_origin": "ast",
       "id": "src_scanning_decode_dns_name_long_but_not_circular_pointer_chain",
-      "community": 3,
+      "community": 6,
       "norm_label": "decode_dns_name_long_but_not_circular_pointer_chain()"
     },
     {
@@ -4034,7 +4034,7 @@
       "source_location": "L3428",
       "_origin": "ast",
       "id": "src_scanning_dns_interceptor_end_to_end_with_realistic_strace_trace",
-      "community": 4,
+      "community": 3,
       "norm_label": "dns_interceptor_end_to_end_with_realistic_strace_trace()"
     },
     {
@@ -4044,7 +4044,7 @@
       "source_location": "L3524",
       "_origin": "ast",
       "id": "src_scanning_mockrunner",
-      "community": 5,
+      "community": 4,
       "norm_label": "mockrunner"
     },
     {
@@ -4054,7 +4054,7 @@
       "source_location": "L3529",
       "_origin": "ast",
       "id": "src_scanning_mockrunner_trace_install",
-      "community": 5,
+      "community": 4,
       "norm_label": ".trace_install()"
     },
     {
@@ -4374,7 +4374,7 @@
       "source_location": "L4107",
       "_origin": "ast",
       "id": "src_scanning_extracts_artifact_findings_when_delimiter_present",
-      "community": 14,
+      "community": 3,
       "norm_label": "extracts_artifact_findings_when_delimiter_present()"
     },
     {
@@ -4384,7 +4384,7 @@
       "source_location": "L4119",
       "_origin": "ast",
       "id": "src_scanning_extracts_artifact_findings_empty_when_no_delimiter",
-      "community": 14,
+      "community": 3,
       "norm_label": "extracts_artifact_findings_empty_when_no_delimiter()"
     },
     {
@@ -4414,7 +4414,7 @@
       "source_location": "L4144",
       "_origin": "ast",
       "id": "src_scanning_extracts_artifact_findings_skips_blank_lines",
-      "community": 14,
+      "community": 3,
       "norm_label": "extracts_artifact_findings_skips_blank_lines()"
     },
     {
@@ -4424,7 +4424,7 @@
       "source_location": "L4154",
       "_origin": "ast",
       "id": "src_scanning_artifact_findings_empty_for_clean_install",
-      "community": 14,
+      "community": 3,
       "norm_label": "artifact_findings_empty_for_clean_install()"
     },
     {
@@ -4441,7 +4441,7 @@
       "label": "classify_inventory_unexpected_runtime()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4174",
+      "source_location": "L4175",
       "_origin": "ast",
       "id": "src_scanning_classify_inventory_unexpected_runtime",
       "community": 3,
@@ -4451,7 +4451,7 @@
       "label": "classify_inventory_suspicious_pth()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4190",
+      "source_location": "L4191",
       "_origin": "ast",
       "id": "src_scanning_classify_inventory_suspicious_pth",
       "community": 3,
@@ -4461,7 +4461,7 @@
       "label": "classify_inventory_benign_pth()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4203",
+      "source_location": "L4204",
       "_origin": "ast",
       "id": "src_scanning_classify_inventory_benign_pth",
       "community": 3,
@@ -4471,7 +4471,7 @@
       "label": "classify_inventory_large_file()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4214",
+      "source_location": "L4215",
       "_origin": "ast",
       "id": "src_scanning_classify_inventory_large_file",
       "community": 3,
@@ -4481,7 +4481,7 @@
       "label": "classify_inventory_skips_malformed_lines()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4224",
+      "source_location": "L4225",
       "_origin": "ast",
       "id": "src_scanning_classify_inventory_skips_malformed_lines",
       "community": 3,
@@ -4491,7 +4491,7 @@
       "label": "classify_inventory_empty_input()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4234",
+      "source_location": "L4235",
       "_origin": "ast",
       "id": "src_scanning_classify_inventory_empty_input",
       "community": 3,
@@ -4501,17 +4501,27 @@
       "label": "classify_inventory_mixed_findings()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4241",
+      "source_location": "L4242",
       "_origin": "ast",
       "id": "src_scanning_classify_inventory_mixed_findings",
       "community": 3,
       "norm_label": "classify_inventory_mixed_findings()"
     },
     {
+      "label": "classify_inventory_pipe_in_filename_not_injected()",
+      "file_type": "code",
+      "source_file": "src/scanning.rs",
+      "source_location": "L4261",
+      "_origin": "ast",
+      "id": "src_scanning_classify_inventory_pipe_in_filename_not_injected",
+      "community": 3,
+      "norm_label": "classify_inventory_pipe_in_filename_not_injected()"
+    },
+    {
       "label": "flags_new_artifact_findings_across_versions()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4260",
+      "source_location": "L4285",
       "_origin": "ast",
       "id": "src_scanning_flags_new_artifact_findings_across_versions",
       "community": 5,
@@ -4521,7 +4531,7 @@
       "label": "artifact_allowlist_unblocks_new_findings()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4305",
+      "source_location": "L4330",
       "_origin": "ast",
       "id": "src_scanning_artifact_allowlist_unblocks_new_findings",
       "community": 5,
@@ -4531,7 +4541,7 @@
       "label": "allows_when_artifact_findings_match_baseline()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4354",
+      "source_location": "L4379",
       "_origin": "ast",
       "id": "src_scanning_allows_when_artifact_findings_match_baseline",
       "community": 5,
@@ -4541,7 +4551,7 @@
       "label": "new_package_exemption_skips_artifact_check()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4395",
+      "source_location": "L4420",
       "_origin": "ast",
       "id": "src_scanning_new_package_exemption_skips_artifact_check",
       "community": 5,
@@ -12571,7 +12581,7 @@
       "label": "Finding 1 \u2014 Critical | `sandbox.rs:188` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L61",
+      "source_location": "L69",
       "_origin": "ast",
       "id": "docs_findings_finding_1_critical_sandbox_rs_188_fixed",
       "community": 16,
@@ -12581,7 +12591,7 @@
       "label": "Finding 2 \u2014 Critical | `scanning.rs:199` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L77",
+      "source_location": "L85",
       "_origin": "ast",
       "id": "docs_findings_finding_2_critical_scanning_rs_199_fixed",
       "community": 16,
@@ -12591,7 +12601,7 @@
       "label": "Finding 3 \u2014 High | `scanning.rs:427` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L91",
+      "source_location": "L99",
       "_origin": "ast",
       "id": "docs_findings_finding_3_high_scanning_rs_427_fixed",
       "community": 16,
@@ -12601,7 +12611,7 @@
       "label": "Finding 4 \u2014 High | `sandbox.rs:307` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L111",
+      "source_location": "L119",
       "_origin": "ast",
       "id": "docs_findings_finding_4_high_sandbox_rs_307_fixed",
       "community": 16,
@@ -12611,7 +12621,7 @@
       "label": "Finding 5 \u2014 High | `parsing.rs:113` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L125",
+      "source_location": "L133",
       "_origin": "ast",
       "id": "docs_findings_finding_5_high_parsing_rs_113_fixed",
       "community": 16,
@@ -12621,7 +12631,7 @@
       "label": "Finding 6 \u2014 Medium | `parsing.rs:298` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L139",
+      "source_location": "L147",
       "_origin": "ast",
       "id": "docs_findings_finding_6_medium_parsing_rs_298_fixed",
       "community": 16,
@@ -12631,7 +12641,7 @@
       "label": "Finding 7 \u2014 Medium | `parsing.rs:576` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L155",
+      "source_location": "L163",
       "_origin": "ast",
       "id": "docs_findings_finding_7_medium_parsing_rs_576_fixed",
       "community": 16,
@@ -12641,7 +12651,7 @@
       "label": "Finding 8 \u2014 Medium | `lib.rs:536` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L169",
+      "source_location": "L177",
       "_origin": "ast",
       "id": "docs_findings_finding_8_medium_lib_rs_536_fixed",
       "community": 16,
@@ -12651,7 +12661,7 @@
       "label": "Finding 9 \u2014 Medium | `lib.rs` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L183",
+      "source_location": "L191",
       "_origin": "ast",
       "id": "docs_findings_finding_9_medium_lib_rs_fixed",
       "community": 16,
@@ -12661,7 +12671,7 @@
       "label": "Finding 10 \u2014 Critical | `scanning.rs:654` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L200",
+      "source_location": "L208",
       "_origin": "ast",
       "id": "docs_findings_finding_10_critical_scanning_rs_654_fixed",
       "community": 16,
@@ -12671,7 +12681,7 @@
       "label": "Finding 11 \u2014 High | `parsing.rs:468` | \u26a0\ufe0f Open",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L216",
+      "source_location": "L224",
       "_origin": "ast",
       "id": "docs_findings_finding_11_high_parsing_rs_468_open",
       "community": 16,
@@ -12681,7 +12691,7 @@
       "label": "Finding 12 \u2014 High | `lib.rs:1021` | \u26a0\ufe0f Open",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L230",
+      "source_location": "L238",
       "_origin": "ast",
       "id": "docs_findings_finding_12_high_lib_rs_1021_open",
       "community": 16,
@@ -12691,7 +12701,7 @@
       "label": "Finding 13 \u2014 Medium | `scanning.rs:1852` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L242",
+      "source_location": "L250",
       "_origin": "ast",
       "id": "docs_findings_finding_13_medium_scanning_rs_1852_fixed",
       "community": 16,
@@ -12701,7 +12711,7 @@
       "label": "Finding 14 \u2014 Low | `parsing.rs:880` | \u26a0\ufe0f Open",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L262",
+      "source_location": "L270",
       "_origin": "ast",
       "id": "docs_findings_finding_14_low_parsing_rs_880_open",
       "community": 16,
@@ -12711,7 +12721,7 @@
       "label": "Finding 15 \u2014 Low | `sandbox.rs:511` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L274",
+      "source_location": "L282",
       "_origin": "ast",
       "id": "docs_findings_finding_15_low_sandbox_rs_511_fixed",
       "community": 16,
@@ -12721,7 +12731,7 @@
       "label": "Finding 16 \u2014 Medium | `scanning.rs:509` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L288",
+      "source_location": "L296",
       "_origin": "ast",
       "id": "docs_findings_finding_16_medium_scanning_rs_509_fixed",
       "community": 16,
@@ -12731,7 +12741,7 @@
       "label": "Finding 17 \u2014 High | `scanning.rs:972` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L302",
+      "source_location": "L310",
       "_origin": "ast",
       "id": "docs_findings_finding_17_high_scanning_rs_972_fixed",
       "community": 16,
@@ -12741,7 +12751,7 @@
       "label": "Finding 18 \u2014 Medium | `scanning.rs:467` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L318",
+      "source_location": "L326",
       "_origin": "ast",
       "id": "docs_findings_finding_18_medium_scanning_rs_467_fixed",
       "community": 16,
@@ -12751,7 +12761,7 @@
       "label": "Finding 19 \u2014 High | `scanning.rs:392` | \u2705 Fixed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L340",
+      "source_location": "L348",
       "_origin": "ast",
       "id": "docs_findings_finding_19_high_scanning_rs_392_fixed",
       "community": 16,
@@ -12761,7 +12771,7 @@
       "label": "Review history",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L354",
+      "source_location": "L362",
       "_origin": "ast",
       "id": "docs_findings_review_history",
       "community": 16,
@@ -12771,7 +12781,7 @@
       "label": "Round 1 \u2014 2026-06-09",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L356",
+      "source_location": "L364",
       "_origin": "ast",
       "id": "docs_findings_round_1_2026_06_09",
       "community": 16,
@@ -12781,7 +12791,7 @@
       "label": "Round 1 fixes \u2014 2026-06-09",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L362",
+      "source_location": "L370",
       "_origin": "ast",
       "id": "docs_findings_round_1_fixes_2026_06_09",
       "community": 16,
@@ -12791,7 +12801,7 @@
       "label": "Round 1 runtime verification \u2014 2026-06-10, `GYRSEEK_SANDBOX=docker`",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L368",
+      "source_location": "L376",
       "_origin": "ast",
       "id": "docs_findings_round_1_runtime_verification_2026_06_10_gyrseek_sandbox_docker",
       "community": 16,
@@ -12801,7 +12811,7 @@
       "label": "Round 2 \u2014 2026-06-10",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L384",
+      "source_location": "L392",
       "_origin": "ast",
       "id": "docs_findings_round_2_2026_06_10",
       "community": 16,
@@ -12811,7 +12821,7 @@
       "label": "Round 3 \u2014 2026-06-11 \u2014 external LLM (ChatGPT) Rust-idiom review, assessed",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L388",
+      "source_location": "L396",
       "_origin": "ast",
       "id": "docs_findings_round_3_2026_06_11_external_llm_chatgpt_rust_idiom_review_assessed",
       "community": 16,
@@ -12821,7 +12831,7 @@
       "label": "Round 3 fixes \u2014 2026-06-11",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L412",
+      "source_location": "L420",
       "_origin": "ast",
       "id": "docs_findings_round_3_fixes_2026_06_11",
       "community": 16,
@@ -12831,7 +12841,7 @@
       "label": "Round 4 fixes \u2014 2026-06-12",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L419",
+      "source_location": "L427",
       "_origin": "ast",
       "id": "docs_findings_round_4_fixes_2026_06_12",
       "community": 16,
@@ -12841,7 +12851,7 @@
       "label": "Round 5 \u2014 2026-06-16 \u2014 DNS interceptor + `-xx` strace",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L425",
+      "source_location": "L433",
       "_origin": "ast",
       "id": "docs_findings_round_5_2026_06_16_dns_interceptor_xx_strace",
       "community": 16,
@@ -12851,17 +12861,117 @@
       "label": "Round 6 \u2014 2026-06-16 \u2014 Self-referencing baseline override fix",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L437",
+      "source_location": "L445",
       "_origin": "ast",
       "id": "docs_findings_round_6_2026_06_16_self_referencing_baseline_override_fix",
       "community": 16,
       "norm_label": "round 6 \u2014 2026-06-16 \u2014 self-referencing baseline override fix"
     },
     {
+      "label": "Round 7 \u2014 2026-06-16 \u2014 External audit",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L462",
+      "_origin": "ast",
+      "id": "docs_findings_round_7_2026_06_16_external_audit",
+      "community": 16,
+      "norm_label": "round 7 \u2014 2026-06-16 \u2014 external audit"
+    },
+    {
+      "label": "Round 8 \u2014 2026-06-16 \u2014 Architectural & coverage audit + Finding 20 fix",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L472",
+      "_origin": "ast",
+      "id": "docs_findings_round_8_2026_06_16_architectural_coverage_audit_finding_20_fix",
+      "community": 16,
+      "norm_label": "round 8 \u2014 2026-06-16 \u2014 architectural & coverage audit + finding 20 fix"
+    },
+    {
+      "label": "Finding 20 \u2014 Critical | `sandbox.rs:559` / `scanning.rs:730` | \u2705 Fixed",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L483",
+      "_origin": "ast",
+      "id": "docs_findings_finding_20_critical_sandbox_rs_559_scanning_rs_730_fixed",
+      "community": 16,
+      "norm_label": "finding 20 \u2014 critical | `sandbox.rs:559` / `scanning.rs:730` | \u2705 fixed"
+    },
+    {
+      "label": "Finding 21 \u2014 High | `sandbox.rs:629` | \u26a0\ufe0f Open",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L505",
+      "_origin": "ast",
+      "id": "docs_findings_finding_21_high_sandbox_rs_629_open",
+      "community": 16,
+      "norm_label": "finding 21 \u2014 high | `sandbox.rs:629` | \u26a0\ufe0f open"
+    },
+    {
+      "label": "Finding 22 \u2014 Medium | `scanning.rs:188` | \u26a0\ufe0f Open",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L517",
+      "_origin": "ast",
+      "id": "docs_findings_finding_22_medium_scanning_rs_188_open",
+      "community": 16,
+      "norm_label": "finding 22 \u2014 medium | `scanning.rs:188` | \u26a0\ufe0f open"
+    },
+    {
+      "label": "Finding 23 \u2014 Medium | `sandbox.rs:215` | \u26a0\ufe0f Open",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L540",
+      "_origin": "ast",
+      "id": "docs_findings_finding_23_medium_sandbox_rs_215_open",
+      "community": 16,
+      "norm_label": "finding 23 \u2014 medium | `sandbox.rs:215` | \u26a0\ufe0f open"
+    },
+    {
+      "label": "Finding 24 \u2014 Medium | `sandbox.rs:555` | \u26a0\ufe0f Open",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L559",
+      "_origin": "ast",
+      "id": "docs_findings_finding_24_medium_sandbox_rs_555_open",
+      "community": 16,
+      "norm_label": "finding 24 \u2014 medium | `sandbox.rs:555` | \u26a0\ufe0f open"
+    },
+    {
+      "label": "Finding 25 \u2014 High | `README.md:363` / `sandbox.rs` | \u26a0\ufe0f Open",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L584",
+      "_origin": "ast",
+      "id": "docs_findings_finding_25_high_readme_md_363_sandbox_rs_open",
+      "community": 16,
+      "norm_label": "finding 25 \u2014 high | `readme.md:363` / `sandbox.rs` | \u26a0\ufe0f open"
+    },
+    {
+      "label": "Finding 26 \u2014 Medium | `lib.rs:588` | \u26a0\ufe0f Open",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L600",
+      "_origin": "ast",
+      "id": "docs_findings_finding_26_medium_lib_rs_588_open",
+      "community": 16,
+      "norm_label": "finding 26 \u2014 medium | `lib.rs:588` | \u26a0\ufe0f open"
+    },
+    {
+      "label": "Finding 27 \u2014 Low | `lib.rs:64` | \u26a0\ufe0f Open",
+      "file_type": "document",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L634",
+      "_origin": "ast",
+      "id": "docs_findings_finding_27_low_lib_rs_64_open",
+      "community": 16,
+      "norm_label": "finding 27 \u2014 low | `lib.rs:64` | \u26a0\ufe0f open"
+    },
+    {
       "label": "Complexity & Over-Engineering Findings (Ponytail Review \u2014 2026-06-14)",
       "file_type": "document",
       "source_file": "docs/FINDINGS.md",
-      "source_location": "L454",
+      "source_location": "L662",
       "_origin": "ast",
       "id": "docs_findings_complexity_over_engineering_findings_ponytail_review_2026_06_14",
       "community": 16,
@@ -13273,7 +13383,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 5,
+      "community": 4,
       "norm_label": "behavioral diffing across versions",
       "id": "docs_architecture_behavioral_diffing"
     },
@@ -13481,7 +13591,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 5,
+      "community": 4,
       "norm_label": "direct git clone runtime interception",
       "id": "docs_roadmap_direct_git_clone_interception"
     },
@@ -14342,9 +14452,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L768",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib",
-      "target": "src_lib_scan_targets",
-      "confidence_score": 1.0
+      "target": "src_lib_scan_targets"
     },
     {
       "relation": "contains",
@@ -14362,9 +14472,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L672",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib",
-      "target": "src_lib_scantimer",
-      "confidence_score": 1.0
+      "target": "src_lib_scantimer"
     },
     {
       "relation": "contains",
@@ -14590,9 +14700,9 @@
       "source_location": "L768",
       "weight": 1.0,
       "context": "parameter_type",
+      "confidence_score": 1.0,
       "source": "src_lib_scan_targets",
-      "target": "src_lib_rs_vec",
-      "confidence_score": 1.0
+      "target": "src_lib_rs_vec"
     },
     {
       "relation": "references",
@@ -14799,9 +14909,9 @@
       "source_location": "L768",
       "weight": 1.0,
       "context": "generic_arg",
+      "confidence_score": 1.0,
       "source": "src_lib_scan_targets",
-      "target": "src_lib_rs_string",
-      "confidence_score": 1.0
+      "target": "src_lib_rs_string"
     },
     {
       "relation": "references",
@@ -14843,9 +14953,9 @@
       "source_location": "L768",
       "weight": 1.0,
       "context": "generic_arg",
+      "confidence_score": 1.0,
       "source": "src_lib_scan_targets",
-      "target": "src_lib_rs_hashmap",
-      "confidence_score": 1.0
+      "target": "src_lib_rs_hashmap"
     },
     {
       "relation": "references",
@@ -14931,9 +15041,9 @@
       "source_location": "L768",
       "weight": 1.0,
       "context": "return_type",
+      "confidence_score": 1.0,
       "source": "src_lib_scan_targets",
-      "target": "src_lib_rs_option",
-      "confidence_score": 1.0
+      "target": "src_lib_rs_option"
     },
     {
       "relation": "calls",
@@ -15150,9 +15260,9 @@
       "source_location": "L768",
       "weight": 1.0,
       "context": "parameter_type",
+      "confidence_score": 1.0,
       "source": "src_lib_scan_targets",
-      "target": "policyconfig",
-      "confidence_score": 1.0
+      "target": "policyconfig"
     },
     {
       "relation": "references",
@@ -15629,9 +15739,9 @@
       "source_location": "L768",
       "weight": 1.0,
       "context": "parameter_type",
+      "confidence_score": 1.0,
       "source": "src_lib_scan_targets",
-      "target": "src_lib_rs_sandboxrunner",
-      "confidence_score": 1.0
+      "target": "src_lib_rs_sandboxrunner"
     },
     {
       "relation": "references",
@@ -15827,9 +15937,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L674",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib_scantimer_start",
-      "target": "src_lib_rs_self",
-      "confidence_score": 1.0
+      "target": "src_lib_rs_self"
     },
     {
       "relation": "calls",
@@ -16145,9 +16255,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L678",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib_scantimer",
-      "target": "src_lib_rs_drop",
-      "confidence_score": 1.0
+      "target": "src_lib_rs_drop"
     },
     {
       "relation": "method",
@@ -16155,9 +16265,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L679",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib_scantimer",
-      "target": "src_lib_scantimer_drop",
-      "confidence_score": 1.0
+      "target": "src_lib_scantimer_drop"
     },
     {
       "relation": "method",
@@ -16165,9 +16275,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L674",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib_scantimer",
-      "target": "src_lib_scantimer_start",
-      "confidence_score": 1.0
+      "target": "src_lib_scantimer_start"
     },
     {
       "relation": "calls",
@@ -16176,9 +16286,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L723",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib_scan_many_with_cache",
-      "target": "src_lib_scantimer_start",
-      "confidence_score": 1.0
+      "target": "src_lib_scantimer_start"
     },
     {
       "relation": "calls",
@@ -16187,9 +16297,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L698",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib_scan_with_cache",
-      "target": "src_lib_scantimer_start",
-      "confidence_score": 1.0
+      "target": "src_lib_scantimer_start"
     },
     {
       "relation": "references",
@@ -16262,9 +16372,9 @@
       "source_location": "L768",
       "weight": 1.0,
       "context": "generic_arg",
+      "confidence_score": 1.0,
       "source": "src_lib_scan_targets",
-      "target": "scanreport",
-      "confidence_score": 1.0
+      "target": "scanreport"
     },
     {
       "relation": "calls",
@@ -16295,9 +16405,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L775",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib_scan_targets",
-      "target": "src_lib_scan_many_with_cache",
-      "confidence_score": 1.0
+      "target": "src_lib_scan_many_with_cache"
     },
     {
       "relation": "calls",
@@ -16306,9 +16416,9 @@
       "source_file": "src/lib.rs",
       "source_location": "L946",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_lib_run",
-      "target": "src_lib_scan_targets",
-      "confidence_score": 1.0
+      "target": "src_lib_scan_targets"
     },
     {
       "relation": "calls",
@@ -18909,9 +19019,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L519",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_image_setup_steps",
-      "confidence_score": 1.0
+      "target": "src_sandbox_image_setup_steps"
     },
     {
       "relation": "contains",
@@ -19079,9 +19189,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L465",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_scanner_user_setup_steps",
-      "confidence_score": 1.0
+      "target": "src_sandbox_scanner_user_setup_steps"
     },
     {
       "relation": "contains",
@@ -19302,9 +19412,9 @@
       "source_location": "L519",
       "weight": 1.0,
       "context": "generic_arg",
+      "confidence_score": 1.0,
       "source": "src_sandbox_image_setup_steps",
-      "target": "src_sandbox_rs_string",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_string"
     },
     {
       "relation": "references",
@@ -19379,9 +19489,9 @@
       "source_location": "L465",
       "weight": 1.0,
       "context": "generic_arg",
+      "confidence_score": 1.0,
       "source": "src_sandbox_scanner_user_setup_steps",
-      "target": "src_sandbox_rs_string",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_string"
     },
     {
       "relation": "references",
@@ -19920,9 +20030,9 @@
       "source_location": "L519",
       "weight": 1.0,
       "context": "return_type",
+      "confidence_score": 1.0,
       "source": "src_sandbox_image_setup_steps",
-      "target": "src_sandbox_rs_vec",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_vec"
     },
     {
       "relation": "references",
@@ -19953,9 +20063,9 @@
       "source_location": "L465",
       "weight": 1.0,
       "context": "return_type",
+      "confidence_score": 1.0,
       "source": "src_sandbox_scanner_user_setup_steps",
-      "target": "src_sandbox_rs_vec",
-      "confidence_score": 1.0
+      "target": "src_sandbox_rs_vec"
     },
     {
       "relation": "references",
@@ -20195,9 +20305,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L570",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_build_matrix_script",
-      "target": "src_sandbox_scanner_user_setup_steps",
-      "confidence_score": 1.0
+      "target": "src_sandbox_scanner_user_setup_steps"
     },
     {
       "relation": "calls",
@@ -20206,9 +20316,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L596",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_build_single_script",
-      "target": "src_sandbox_scanner_user_setup_steps",
-      "confidence_score": 1.0
+      "target": "src_sandbox_scanner_user_setup_steps"
     },
     {
       "relation": "calls",
@@ -20281,9 +20391,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L569",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_build_matrix_script",
-      "target": "src_sandbox_image_setup_steps",
-      "confidence_score": 1.0
+      "target": "src_sandbox_image_setup_steps"
     },
     {
       "relation": "calls",
@@ -20292,9 +20402,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L595",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_build_single_script",
-      "target": "src_sandbox_image_setup_steps",
-      "confidence_score": 1.0
+      "target": "src_sandbox_image_setup_steps"
     },
     {
       "relation": "calls",
@@ -21026,6 +21136,16 @@
       "confidence_score": 1.0,
       "source": "src_scanning",
       "target": "src_scanning_classify_inventory_mixed_findings"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
+      "source_location": "L4261",
+      "weight": 1.0,
+      "source": "src_scanning",
+      "target": "src_scanning_classify_inventory_pipe_in_filename_not_injected",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -25309,6 +25429,17 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "src/scanning.rs",
+      "source_location": "L4269",
+      "weight": 1.0,
+      "source": "src_scanning_classify_inventory_pipe_in_filename_not_injected",
+      "target": "src_scanning_classify_inventory_lines",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
       "source_location": "L2926",
       "weight": 1.0,
       "confidence_score": 1.0,
@@ -26693,9 +26824,9 @@
       "source_file": "src/scanning.rs",
       "source_location": "L3571",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_scanning_envvarguard",
-      "target": "src_scanning_rs_drop",
-      "confidence_score": 1.0
+      "target": "src_scanning_rs_drop"
     },
     {
       "relation": "calls",
@@ -34630,6 +34761,86 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "docs/FINDINGS.md",
+      "source_location": "L483",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_finding_20_critical_sandbox_rs_559_scanning_rs_730_fixed",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L505",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_finding_21_high_sandbox_rs_629_open",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L517",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_finding_22_medium_scanning_rs_188_open",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L540",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_finding_23_medium_sandbox_rs_215_open",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L559",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_finding_24_medium_sandbox_rs_555_open",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L584",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_finding_25_high_readme_md_363_sandbox_rs_open",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L600",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_finding_26_medium_lib_rs_588_open",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L634",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_finding_27_low_lib_rs_64_open",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
       "source_location": "L261",
       "weight": 1.0,
       "confidence_score": 1.0,
@@ -34715,6 +34926,26 @@
       "confidence_score": 1.0,
       "source": "docs_findings_review_history",
       "target": "docs_findings_round_6_2026_06_16_self_referencing_baseline_override_fix"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L462",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_round_7_2026_06_16_external_audit",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "docs/FINDINGS.md",
+      "source_location": "L472",
+      "weight": 1.0,
+      "source": "docs_findings_review_history",
+      "target": "docs_findings_round_8_2026_06_16_architectural_coverage_audit_finding_20_fix",
+      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -35200,5 +35431,5 @@
       "source_file": "docs/DEV_GUIDE.md"
     }
   ],
-  "built_at_commit": "4c9d0c9ac60b255b6b962d13f54e9bf56ad449ce"
+  "built_at_commit": "e9526b6cc9fd90f04f9e6df5ae461d573301420d"
 }

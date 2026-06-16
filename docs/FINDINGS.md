@@ -49,7 +49,7 @@ Two categories of findings are tracked:
 | 17 | `scanning.rs`  | 972  | High     | `-xx` strace flag hex-escapes execve argv → `is_harness_command` false positives | ✅ Fixed  |
 | 18 | `scanning.rs`  | 467  | Medium   | `parse_dns_response` RDLEN offset reads TTL bytes instead of RDLENGTH  | ✅ Fixed  |
 | 19 | `scanning.rs`  | 392  | High     | `decode_dns_name` no cycle detection → infinite loop on circular pointer | ✅ Fixed  |
-| 20 | `sandbox.rs` / `scanning.rs` | 559 / 730 | Critical | Pipe delimiter in artifact log — filename injection bypasses all artifact checks | ⚠️ Open  |
+| 20 | `sandbox.rs` / `scanning.rs` | 559 / 730 | Critical | Pipe delimiter in artifact log — filename injection bypasses all artifact checks | ✅ Fixed  |
 | 21 | `sandbox.rs`  | 629  | High     | Hardcoded 512 MB container memory — npm/pnpm native builds routinely OOM-killed | ⚠️ Open  |
 | 22 | `scanning.rs` | 188  | Medium   | IPv6 ULA (`fc00::/7`) not filtered as local — internal container traffic flagged as exfiltration | ⚠️ Open  |
 | 23 | `sandbox.rs`  | 215  | Medium   | Host mode selected silently — no stderr warning that sandbox protection is disabled | ⚠️ Open  |
@@ -463,15 +463,15 @@ All 259 tests pass (244 lib + 15 integration); clippy and fmt clean. See Finding
 
 External static review of `sandbox.rs` and `scanning.rs` for remaining sandbox-escaping, bypass, and performance gaps. Produced findings #20–24.
 
-- **Finding 20 (Critical)** — Pipe-delimiter injection in artifact scanner. File path not escaped; crafted filename can override `size` and `type` fields, bypassing all artifact checks.
+- **Finding 20 (Critical)** — Pipe-delimiter injection in artifact scanner. File path not escaped; crafted filename can override `size` and `type` fields, bypassing all artifact checks. **✅ Fixed in Round 8.**
 - **Finding 21 (High)** — Hardcoded 512 MB container memory limit. npm/pnpm native builds (node-gyp, esbuild) routinely OOM-killed.
 - **Finding 22 (Medium)** — Missing IPv6 ULA filter. `fc00::/7` not recognised as local address; internal container traffic flagged as exfiltration.
 - **Finding 23 (Medium)** — Host mode selected silently. No stderr warning when `GYRSEEK_SANDBOX=host` disables all container isolation.
 - **Finding 24 (Medium)** — Artifact scan O(N) subprocess overhead. 3 forks per file → 30k–40k processes on a 10k-file node_modules. Minutes of latency or timeout.
 
-### Round 8 — 2026-06-16 — Architectural & coverage audit
+### Round 8 — 2026-06-16 — Architectural & coverage audit + Finding 20 fix
 
-Review of `lib.rs`, `README.md`, and the forwarding pipeline for deferred-execution coverage gaps, supply-chain hardening, and code quality. Produced findings #25–27 and C16.
+Review of `lib.rs`, `README.md`, and the forwarding pipeline for deferred-execution coverage gaps, supply-chain hardening, and code quality. Produced findings #25–27 and C16. **Finding 20 fixed** — shell script switched to null-byte delimiters (`printf '%s\0...'`) so pipe characters in file paths cannot hijack the parser.
 
 - **Finding 25 (High)** — Import-time execution (Telnyx T26) not captured. Module-scope code in installed `.py` files fires after sandbox exits. Mitigation: post-install `python -c "import <pkg>"` trigger.
 - **Finding 26 (Medium)** — `Command::new(&self.manager)` uses PATH lookup; `.` or writable dirs in PATH allow relative-path hijacking. Mitigation: resolve to absolute path and validate prefix.
@@ -480,7 +480,7 @@ Review of `lib.rs`, `README.md`, and the forwarding pipeline for deferred-execut
 
 ---
 
-### Finding 20 — Critical | `sandbox.rs:559` / `scanning.rs:730` | ⚠️ Open
+### Finding 20 — Critical | `sandbox.rs:559` / `scanning.rs:730` | ✅ Fixed
 
 **Summary:** The artifact scan log uses `|` as a field delimiter, but the file path (`$f`) is not escaped for pipes or newlines. A crafted filename can inject fake fields into the parsed record, bypassing all artifact security checks (large_file, unexpected_runtime, suspicious_pth, binary).
 
@@ -497,6 +497,8 @@ A file named `payload.bin|0|ASCII text` produces `parts = ["payload.bin", "0", "
 **Failure scenario:** Attacker publishes a package containing `/bin/payload.bin|0|ASCII text` (30 MB ELF). The classifier sees `size=0` (no `large_file` hit), `file_type="ASCII text"` (no `binary`/`unexpected_runtime` hit). The artifact is not flagged. Post-install scan reports clean.
 
 **Fix direction:** Choose a delimiter that cannot appear in POSIX file paths (e.g. `\x00` via `printf`), or escape `|` and newlines in `$f` before writing the log line. The Rust parser must match whatever escaping scheme is chosen.
+
+**✅ Fix status — FIXED.** The shell script now uses `printf '%s\0%s\0%s\0%s\n'` with null-byte (`\0`) field delimiters instead of `|`. Null bytes cannot appear in POSIX file paths, so delimiter injection is impossible. The Rust parser (`classify_inventory_lines`) splits on `'\x00'` instead of `'|'`. Pipe characters in content are still replaced with spaces (`tr '|' ' '`) as defence-in-depth. (`sandbox.rs:554–559`, `scanning.rs:730`; test `classify_inventory_pipe_in_filename_not_injected` verifies a filename containing `|0|ASCII text` is parsed as a single path with correct size and file type fields.)
 
 ---
 
