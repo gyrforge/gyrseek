@@ -1130,11 +1130,14 @@ fn select_effective_baselines(
 
     if let Some((override_m1, override_m2)) = baseline_override {
         let mut merged = Vec::new();
-        if let Some(v) = override_m1.clone() {
+        if let Some(v) = override_m1.clone()
+            && v != *current
+        {
             merged.push(v);
         }
         if let Some(v) = override_m2.clone()
             && !merged.contains(&v)
+            && v != *current
         {
             merged.push(v);
         }
@@ -1377,7 +1380,13 @@ pub(crate) async fn scan_packages_versions(
             );
         }
 
-        if policy.baseline_overrides.contains_key(pkg_name) {
+        if let Some((m1, m2)) = policy.baseline_overrides.get(pkg_name) {
+            if m1.as_deref() == Some(&v_curr) || m2.as_deref() == Some(&v_curr) {
+                println!(
+                    "⚠️ [gyrseek] Baseline override for '{}' equals the version being scanned; ignoring (if not, it would silently disable all anomaly detection); one fewer baseline compared",
+                    pkg_name
+                );
+            }
             println!(
                 "ℹ️ [gyrseek] Applying baseline override(s) for '{}': baseline set={:?}",
                 pkg_name, baselines
@@ -3823,20 +3832,20 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     // --- gap #14: select_effective_baselines — override version equal to current ---
 
     #[test]
-    fn override_equal_to_current_is_included_as_baseline_producing_empty_diff() {
-        // An override that pins the same version as `current` means the baseline IS
-        // the current version. The diff will always be empty — no anomaly ever fires.
-        // This is a footgun: the test documents the behavior so a future change that
-        // guards against it is visible and deliberate.
+    fn override_equal_to_current_is_excluded_from_baselines() {
+        // An override that pins the same version as `current` would make the
+        // baseline identical to the scan target, producing an empty diff in
+        // every signal category — silently disabling all anomaly detection.
+        // The guard in select_effective_baselines skips it.
         let override_pair = (Some("3.0.0".to_string()), None);
         let out =
             select_effective_baselines("3.0.0", vec!["2.9.0".to_string()], Some(&override_pair), 2);
-        // The override version equals current; it ends up in the baseline set.
-        // Any scan using this baseline will produce an empty diff — always allowed.
         assert!(
-            out.contains(&"3.0.0".to_string()),
-            "override equal to current is currently included; if this changes, update the override validation in load_policy_config"
+            !out.contains(&"3.0.0".to_string()),
+            "override equal to current must be excluded"
         );
+        // The fetched baseline 2.9.0 should fill the slot instead.
+        assert!(out.contains(&"2.9.0".to_string()));
     }
 
     #[test]
@@ -3850,6 +3859,95 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         );
         assert!(out.contains(&"2.8.0".to_string()));
         assert!(!out.contains(&"3.0.0".to_string()));
+    }
+
+    #[test]
+    fn override_m2_equal_to_current_is_excluded_from_baselines() {
+        // Same as above but the self-reference is in baseline-2 (m2), not baseline-1.
+        let override_pair = (Some("2.8.0".to_string()), Some("3.0.0".to_string()));
+        let out =
+            select_effective_baselines("3.0.0", vec!["2.9.0".to_string()], Some(&override_pair), 2);
+        assert!(
+            !out.contains(&"3.0.0".to_string()),
+            "override m2 equal to current must be excluded"
+        );
+        // m1 (2.8.0) should be kept since it differs from current.
+        assert!(out.contains(&"2.8.0".to_string()));
+        // Fetched baseline fills the second slot.
+        assert!(out.contains(&"2.9.0".to_string()));
+    }
+
+    #[test]
+    fn both_overrides_equal_to_current_skipped_and_filled_from_fetched() {
+        // Both override slots equal current; both skipped, fetched baselines fill.
+        let override_pair = (Some("3.0.0".to_string()), Some("3.0.0".to_string()));
+        let out = select_effective_baselines(
+            "3.0.0",
+            vec!["2.9.0".to_string(), "2.8.0".to_string()],
+            Some(&override_pair),
+            2,
+        );
+        assert!(
+            !out.contains(&"3.0.0".to_string()),
+            "both overrides equal to current must be excluded"
+        );
+        assert_eq!(out, vec!["2.9.0".to_string(), "2.8.0".to_string()]);
+    }
+
+    #[test]
+    fn override_equal_to_current_with_no_fetched_baselines_returns_empty() {
+        // No fetched baselines available and the only override equals current.
+        let override_pair = (Some("3.0.0".to_string()), None);
+        let out = select_effective_baselines("3.0.0", vec![], Some(&override_pair), 2);
+        assert!(
+            out.is_empty(),
+            "no baselines when only override equals current and no fetched baselines"
+        );
+    }
+
+    #[test]
+    fn only_m2_is_set_and_equals_current_is_excluded() {
+        // m1 is absent, m2 (the second override slot) equals current.
+        let override_pair = (None, Some("3.0.0".to_string()));
+        let out =
+            select_effective_baselines("3.0.0", vec!["2.9.0".to_string()], Some(&override_pair), 2);
+        assert!(!out.contains(&"3.0.0".to_string()));
+        assert!(out.contains(&"2.9.0".to_string()));
+    }
+
+    #[test]
+    fn override_equal_to_current_with_baseline_count_one_is_skipped() {
+        // baseline_count=1, the only override equals current, one fetched
+        // baseline available to fill the slot.
+        let override_pair = (Some("3.0.0".to_string()), None);
+        let out =
+            select_effective_baselines("3.0.0", vec!["2.9.0".to_string()], Some(&override_pair), 1);
+        assert_eq!(out, vec!["2.9.0".to_string()]);
+    }
+
+    #[test]
+    fn baseline_count_zero_with_override_equal_to_current_returns_empty() {
+        // The early-return on baseline_count == 0 should fire before any
+        // override logic is reached.
+        let override_pair = (Some("3.0.0".to_string()), Some("2.8.0".to_string()));
+        let out =
+            select_effective_baselines("3.0.0", vec!["2.9.0".to_string()], Some(&override_pair), 0);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn both_override_slots_none_falls_through_to_fetched_baselines() {
+        // baseline_overrides.get(pkg_name) returns Some(&(None, None)) —
+        // enters the override block but neither slot has a value to push.
+        // Should behave as if no overrides were configured.
+        let override_pair: (Option<String>, Option<String>) = (None, None);
+        let out = select_effective_baselines(
+            "3.0.0",
+            vec!["2.9.0".to_string(), "2.8.0".to_string()],
+            Some(&override_pair),
+            2,
+        );
+        assert_eq!(out, vec!["2.9.0".to_string(), "2.8.0".to_string()]);
     }
 
     // --- gap #15: scan_packages_versions — missing baseline trace fails closed ---
