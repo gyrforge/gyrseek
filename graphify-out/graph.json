@@ -2318,10 +2318,20 @@
       "norm_label": "artifact_scan_steps_pipe_char_in_content_replaced()"
     },
     {
-      "label": "artifact_scan_steps_output_to_correct_log()",
+      "label": "artifact_scan_steps_uses_null_byte_delimiter()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
       "source_location": "L1339",
+      "_origin": "ast",
+      "id": "src_sandbox_artifact_scan_steps_uses_null_byte_delimiter",
+      "community": 2,
+      "norm_label": "artifact_scan_steps_uses_null_byte_delimiter()"
+    },
+    {
+      "label": "artifact_scan_steps_output_to_correct_log()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L1360",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_output_to_correct_log",
       "community": 2,
@@ -2331,7 +2341,7 @@
       "label": "matrix_script_includes_artifact_scan_after_each_probe()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1347",
+      "source_location": "L1368",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_includes_artifact_scan_after_each_probe",
       "community": 2,
@@ -2384,7 +2394,7 @@
       "source_location": "L20",
       "_origin": "ast",
       "id": "src_scanning_rs_hashmap",
-      "community": 4,
+      "community": 7,
       "norm_label": "hashmap"
     },
     {
@@ -2434,7 +2444,7 @@
       "source_location": "L63",
       "_origin": "ast",
       "id": "src_scanning_scanreport",
-      "community": 5,
+      "community": 4,
       "norm_label": "scanreport"
     },
     {
@@ -2444,7 +2454,7 @@
       "source_location": "L76",
       "_origin": "ast",
       "id": "src_scanning_parse_and_cmp",
-      "community": 7,
+      "community": 111,
       "norm_label": "parse_and_cmp()"
     },
     {
@@ -2454,7 +2464,7 @@
       "source_location": "L76",
       "_origin": "ast",
       "id": "ordering",
-      "community": 7,
+      "community": 111,
       "norm_label": "ordering"
     },
     {
@@ -2464,7 +2474,7 @@
       "source_location": "L85",
       "_origin": "ast",
       "id": "src_scanning_compare_version_strings",
-      "community": 7,
+      "community": 111,
       "norm_label": "compare_version_strings()"
     },
     {
@@ -2474,7 +2484,7 @@
       "source_location": "L93",
       "_origin": "ast",
       "id": "src_scanning_is_npm_family_manager",
-      "community": 7,
+      "community": 111,
       "norm_label": "is_npm_family_manager()"
     },
     {
@@ -2484,7 +2494,7 @@
       "source_location": "L98",
       "_origin": "ast",
       "id": "src_scanning_sort_versions_ascending",
-      "community": 7,
+      "community": 111,
       "norm_label": "sort_versions_ascending()"
     },
     {
@@ -2494,7 +2504,7 @@
       "source_location": "L103",
       "_origin": "ast",
       "id": "src_scanning_tracesignals",
-      "community": 4,
+      "community": 14,
       "norm_label": "tracesignals"
     },
     {
@@ -2504,7 +2514,7 @@
       "source_location": "L113",
       "_origin": "ast",
       "id": "src_scanning_rs_vec",
-      "community": 4,
+      "community": 14,
       "norm_label": "vec"
     },
     {
@@ -2514,7 +2524,7 @@
       "source_location": "L113",
       "_origin": "ast",
       "id": "ipaddr",
-      "community": 4,
+      "community": 14,
       "norm_label": "ipaddr"
     },
     {
@@ -2524,7 +2534,7 @@
       "source_location": "L117",
       "_origin": "ast",
       "id": "src_scanning_versionplan",
-      "community": 4,
+      "community": 14,
       "norm_label": "versionplan"
     },
     {
@@ -2534,7 +2544,7 @@
       "source_location": "L127",
       "_origin": "ast",
       "id": "src_scanning_pypiresponse",
-      "community": 4,
+      "community": 14,
       "norm_label": "pypiresponse"
     },
     {
@@ -2544,7 +2554,7 @@
       "source_location": "L128",
       "_origin": "ast",
       "id": "pypireleasefile",
-      "community": 4,
+      "community": 14,
       "norm_label": "pypireleasefile"
     },
     {
@@ -2564,7 +2574,7 @@
       "source_location": "L138",
       "_origin": "ast",
       "id": "src_scanning_npmresponse",
-      "community": 4,
+      "community": 7,
       "norm_label": "npmresponse"
     },
     {
@@ -2574,7 +2584,7 @@
       "source_location": "L139",
       "_origin": "ast",
       "id": "value",
-      "community": 4,
+      "community": 7,
       "norm_label": "value"
     },
     {
@@ -2614,7 +2624,7 @@
       "source_location": "L202",
       "_origin": "ast",
       "id": "f",
-      "community": 14,
+      "community": 4,
       "norm_label": "f"
     },
     {
@@ -2634,7 +2644,7 @@
       "source_location": "L257",
       "_origin": "ast",
       "id": "src_scanning_filter_allowlisted_new_connections",
-      "community": 14,
+      "community": 4,
       "norm_label": "filter_allowlisted_new_connections()"
     },
     {
@@ -2664,7 +2674,7 @@
       "source_location": "L304",
       "_origin": "ast",
       "id": "src_scanning_filter_domain_allowlisted_new_connections_with",
-      "community": 14,
+      "community": 4,
       "norm_label": "filter_domain_allowlisted_new_connections_with()"
     },
     {
@@ -2704,7 +2714,7 @@
       "source_location": "L363",
       "_origin": "ast",
       "id": "src_scanning_unescape_strace_string",
-      "community": 4,
+      "community": 14,
       "norm_label": "unescape_strace_string()"
     },
     {
@@ -2724,7 +2734,7 @@
       "source_location": "L444",
       "_origin": "ast",
       "id": "src_scanning_parse_dns_response",
-      "community": 4,
+      "community": 14,
       "norm_label": "parse_dns_response()"
     },
     {
@@ -2734,7 +2744,7 @@
       "source_location": "L508",
       "_origin": "ast",
       "id": "src_scanning_extract_dns_map",
-      "community": 4,
+      "community": 14,
       "norm_label": "extract_dns_map()"
     },
     {
@@ -2764,7 +2774,7 @@
       "source_location": "L705",
       "_origin": "ast",
       "id": "src_scanning_extract_artifact_findings",
-      "community": 3,
+      "community": 4,
       "norm_label": "extract_artifact_findings()"
     },
     {
@@ -2784,7 +2794,7 @@
       "source_location": "L781",
       "_origin": "ast",
       "id": "src_scanning_trace_sandbox_install_matrix",
-      "community": 4,
+      "community": 9,
       "norm_label": "trace_sandbox_install_matrix()"
     },
     {
@@ -2824,7 +2834,7 @@
       "source_location": "L850",
       "_origin": "ast",
       "id": "src_scanning_parse_execve_argvs",
-      "community": 4,
+      "community": 9,
       "norm_label": "parse_execve_argvs()"
     },
     {
@@ -2834,7 +2844,7 @@
       "source_location": "L881",
       "_origin": "ast",
       "id": "src_scanning_executable_basename",
-      "community": 9,
+      "community": 4,
       "norm_label": "executable_basename()"
     },
     {
@@ -2844,7 +2854,7 @@
       "source_location": "L885",
       "_origin": "ast",
       "id": "src_scanning_extract_git_clone_signatures",
-      "community": 4,
+      "community": 9,
       "norm_label": "extract_git_clone_signatures()"
     },
     {
@@ -2854,7 +2864,7 @@
       "source_location": "L939",
       "_origin": "ast",
       "id": "src_scanning_is_harness_command",
-      "community": 9,
+      "community": 4,
       "norm_label": "is_harness_command()"
     },
     {
@@ -3014,7 +3024,7 @@
       "source_location": "L1271",
       "_origin": "ast",
       "id": "src_scanning_warn_and_block",
-      "community": 5,
+      "community": 4,
       "norm_label": "warn_and_block()"
     },
     {
@@ -3044,7 +3054,7 @@
       "source_location": "L1775",
       "_origin": "ast",
       "id": "src_scanning_npm_versions_sort_semantically_not_lexically",
-      "community": 7,
+      "community": 111,
       "norm_label": "npm_versions_sort_semantically_not_lexically()"
     },
     {
@@ -3054,7 +3064,7 @@
       "source_location": "L1798",
       "_origin": "ast",
       "id": "src_scanning_pnpm_versions_use_npm_semver_ordering",
-      "community": 7,
+      "community": 111,
       "norm_label": "pnpm_versions_use_npm_semver_ordering()"
     },
     {
@@ -3064,7 +3074,7 @@
       "source_location": "L1809",
       "_origin": "ast",
       "id": "src_scanning_pypi_versions_sort_by_pep440_not_lexically",
-      "community": 7,
+      "community": 111,
       "norm_label": "pypi_versions_sort_by_pep440_not_lexically()"
     },
     {
@@ -3074,7 +3084,7 @@
       "source_location": "L1831",
       "_origin": "ast",
       "id": "src_scanning_unparseable_versions_sort_below_parseable_ones",
-      "community": 7,
+      "community": 111,
       "norm_label": "unparseable_versions_sort_below_parseable_ones()"
     },
     {
@@ -3564,7 +3574,7 @@
       "source_location": "L2552",
       "_origin": "ast",
       "id": "src_scanning_ip_allowlist_filters_new_ips_before_blocking",
-      "community": 14,
+      "community": 4,
       "norm_label": "ip_allowlist_filters_new_ips_before_blocking()"
     },
     {
@@ -3574,7 +3584,7 @@
       "source_location": "L2564",
       "_origin": "ast",
       "id": "src_scanning_domain_allowlist_filters_resolved_domains_before_blocking",
-      "community": 14,
+      "community": 4,
       "norm_label": "domain_allowlist_filters_resolved_domains_before_blocking()"
     },
     {
@@ -3584,7 +3594,7 @@
       "source_location": "L2585",
       "_origin": "ast",
       "id": "src_scanning_domain_allowlist_does_not_filter_when_lookup_fails",
-      "community": 14,
+      "community": 4,
       "norm_label": "domain_allowlist_does_not_filter_when_lookup_fails()"
     },
     {
@@ -3594,7 +3604,7 @@
       "source_location": "L2599",
       "_origin": "ast",
       "id": "src_scanning_domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot",
-      "community": 14,
+      "community": 4,
       "norm_label": "domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot()"
     },
     {
@@ -3754,7 +3764,7 @@
       "source_location": "L2954",
       "_origin": "ast",
       "id": "src_scanning_pipeline_chains_domain_aware_diff_with_allowlists",
-      "community": 14,
+      "community": 4,
       "norm_label": "pipeline_chains_domain_aware_diff_with_allowlists()"
     },
     {
@@ -3774,7 +3784,7 @@
       "source_location": "L3083",
       "_origin": "ast",
       "id": "src_scanning_ip_allowlist_matches_equivalent_ipv6_representations",
-      "community": 14,
+      "community": 4,
       "norm_label": "ip_allowlist_matches_equivalent_ipv6_representations()"
     },
     {
@@ -3784,7 +3794,7 @@
       "source_location": "L3099",
       "_origin": "ast",
       "id": "src_scanning_ip_allowlist_matches_across_ipv4_mapped_and_bare_forms",
-      "community": 14,
+      "community": 4,
       "norm_label": "ip_allowlist_matches_across_ipv4_mapped_and_bare_forms()"
     },
     {
@@ -3954,7 +3964,7 @@
       "source_location": "L3283",
       "_origin": "ast",
       "id": "src_scanning_parse_dns_response_a_record",
-      "community": 4,
+      "community": 14,
       "norm_label": "parse_dns_response_a_record()"
     },
     {
@@ -3964,7 +3974,7 @@
       "source_location": "L3309",
       "_origin": "ast",
       "id": "src_scanning_parse_dns_response_aaaa_record",
-      "community": 4,
+      "community": 14,
       "norm_label": "parse_dns_response_aaaa_record()"
     },
     {
@@ -3994,7 +4004,7 @@
       "source_location": "L3344",
       "_origin": "ast",
       "id": "src_scanning_extract_dns_map_empty_trace",
-      "community": 4,
+      "community": 14,
       "norm_label": "extract_dns_map_empty_trace()"
     },
     {
@@ -4004,7 +4014,7 @@
       "source_location": "L3350",
       "_origin": "ast",
       "id": "src_scanning_extract_dns_map_malformed_payload_skipped",
-      "community": 4,
+      "community": 14,
       "norm_label": "extract_dns_map_malformed_payload_skipped()"
     },
     {
@@ -4034,7 +4044,7 @@
       "source_location": "L3428",
       "_origin": "ast",
       "id": "src_scanning_dns_interceptor_end_to_end_with_realistic_strace_trace",
-      "community": 3,
+      "community": 14,
       "norm_label": "dns_interceptor_end_to_end_with_realistic_strace_trace()"
     },
     {
@@ -4374,7 +4384,7 @@
       "source_location": "L4107",
       "_origin": "ast",
       "id": "src_scanning_extracts_artifact_findings_when_delimiter_present",
-      "community": 3,
+      "community": 4,
       "norm_label": "extracts_artifact_findings_when_delimiter_present()"
     },
     {
@@ -4384,7 +4394,7 @@
       "source_location": "L4119",
       "_origin": "ast",
       "id": "src_scanning_extracts_artifact_findings_empty_when_no_delimiter",
-      "community": 3,
+      "community": 4,
       "norm_label": "extracts_artifact_findings_empty_when_no_delimiter()"
     },
     {
@@ -4414,7 +4424,7 @@
       "source_location": "L4144",
       "_origin": "ast",
       "id": "src_scanning_extracts_artifact_findings_skips_blank_lines",
-      "community": 3,
+      "community": 4,
       "norm_label": "extracts_artifact_findings_skips_blank_lines()"
     },
     {
@@ -4424,7 +4434,7 @@
       "source_location": "L4154",
       "_origin": "ast",
       "id": "src_scanning_artifact_findings_empty_for_clean_install",
-      "community": 3,
+      "community": 4,
       "norm_label": "artifact_findings_empty_for_clean_install()"
     },
     {
@@ -4508,20 +4518,40 @@
       "norm_label": "classify_inventory_mixed_findings()"
     },
     {
-      "label": "classify_inventory_pipe_in_filename_not_injected()",
+      "label": "artifact_delimiter_pipe_in_path_is_not_injected()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
       "source_location": "L4261",
       "_origin": "ast",
-      "id": "src_scanning_classify_inventory_pipe_in_filename_not_injected",
+      "id": "src_scanning_artifact_delimiter_pipe_in_path_is_not_injected",
       "community": 3,
-      "norm_label": "classify_inventory_pipe_in_filename_not_injected()"
+      "norm_label": "artifact_delimiter_pipe_in_path_is_not_injected()"
+    },
+    {
+      "label": "artifact_delimiter_injection_attack_defeated_end_to_end()",
+      "file_type": "code",
+      "source_file": "src/scanning.rs",
+      "source_location": "L4303",
+      "_origin": "ast",
+      "id": "src_scanning_artifact_delimiter_injection_attack_defeated_end_to_end",
+      "community": 5,
+      "norm_label": "artifact_delimiter_injection_attack_defeated_end_to_end()"
+    },
+    {
+      "label": "artifact_delimiter_injection_does_not_block_clean_package()",
+      "file_type": "code",
+      "source_file": "src/scanning.rs",
+      "source_location": "L4354",
+      "_origin": "ast",
+      "id": "src_scanning_artifact_delimiter_injection_does_not_block_clean_package",
+      "community": 5,
+      "norm_label": "artifact_delimiter_injection_does_not_block_clean_package()"
     },
     {
       "label": "flags_new_artifact_findings_across_versions()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4285",
+      "source_location": "L4401",
       "_origin": "ast",
       "id": "src_scanning_flags_new_artifact_findings_across_versions",
       "community": 5,
@@ -4531,7 +4561,7 @@
       "label": "artifact_allowlist_unblocks_new_findings()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4330",
+      "source_location": "L4446",
       "_origin": "ast",
       "id": "src_scanning_artifact_allowlist_unblocks_new_findings",
       "community": 5,
@@ -4541,7 +4571,7 @@
       "label": "allows_when_artifact_findings_match_baseline()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4379",
+      "source_location": "L4495",
       "_origin": "ast",
       "id": "src_scanning_allows_when_artifact_findings_match_baseline",
       "community": 5,
@@ -4551,7 +4581,7 @@
       "label": "new_package_exemption_skips_artifact_check()",
       "file_type": "code",
       "source_file": "src/scanning.rs",
-      "source_location": "L4420",
+      "source_location": "L4536",
       "_origin": "ast",
       "id": "src_scanning_new_package_exemption_skips_artifact_check",
       "community": 5,
@@ -11558,6 +11588,36 @@
       "norm_label": "quick post-change checklist"
     },
     {
+      "label": "FEEDBACK.md",
+      "file_type": "document",
+      "source_file": "FEEDBACK.md",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "feedback",
+      "community": 113,
+      "norm_label": "feedback.md"
+    },
+    {
+      "label": "Feedback",
+      "file_type": "document",
+      "source_file": "FEEDBACK.md",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "feedback_feedback",
+      "community": 113,
+      "norm_label": "feedback"
+    },
+    {
+      "label": "Guidelines",
+      "file_type": "document",
+      "source_file": "FEEDBACK.md",
+      "source_location": "L7",
+      "_origin": "ast",
+      "id": "feedback_guidelines",
+      "community": 113,
+      "norm_label": "guidelines"
+    },
+    {
       "label": "README.md",
       "file_type": "document",
       "source_file": "README.md",
@@ -13383,7 +13443,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 4,
+      "community": 9,
       "norm_label": "behavioral diffing across versions",
       "id": "docs_architecture_behavioral_diffing"
     },
@@ -13539,7 +13599,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 7,
+      "community": 111,
       "norm_label": "semantic version ordering (semver / pep 440)",
       "id": "docs_architecture_semantic_version_ordering"
     },
@@ -13591,7 +13651,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 4,
+      "community": 9,
       "norm_label": "direct git clone runtime interception",
       "id": "docs_roadmap_direct_git_clone_interception"
     },
@@ -13656,7 +13716,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 4,
+      "community": 9,
       "norm_label": "finding 3: argv regex truncation at ]",
       "id": "docs_findings_finding_3_argv_truncation"
     },
@@ -18757,6 +18817,16 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L1339",
+      "weight": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_artifact_scan_steps_uses_null_byte_delimiter",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L369",
       "weight": 1.0,
       "confidence_score": 1.0,
@@ -20444,6 +20514,17 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
+      "source_location": "L1342",
+      "weight": 1.0,
+      "source": "src_sandbox_artifact_scan_steps_uses_null_byte_delimiter",
+      "target": "src_sandbox_build_artifact_scan_steps",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
       "source_location": "L414",
       "weight": 1.0,
       "confidence_score": 1.0,
@@ -20951,6 +21032,36 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "src/scanning.rs",
+      "source_location": "L4303",
+      "weight": 1.0,
+      "source": "src_scanning",
+      "target": "src_scanning_artifact_delimiter_injection_attack_defeated_end_to_end",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
+      "source_location": "L4354",
+      "weight": 1.0,
+      "source": "src_scanning",
+      "target": "src_scanning_artifact_delimiter_injection_does_not_block_clean_package",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
+      "source_location": "L4261",
+      "weight": 1.0,
+      "source": "src_scanning",
+      "target": "src_scanning_artifact_delimiter_pipe_in_path_is_not_injected",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
       "source_location": "L2771",
       "weight": 1.0,
       "confidence_score": 1.0,
@@ -21136,16 +21247,6 @@
       "confidence_score": 1.0,
       "source": "src_scanning",
       "target": "src_scanning_classify_inventory_mixed_findings"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "src/scanning.rs",
-      "source_location": "L4261",
-      "weight": 1.0,
-      "source": "src_scanning",
-      "target": "src_scanning_classify_inventory_pipe_in_filename_not_injected",
-      "confidence_score": 1.0
     },
     {
       "relation": "contains",
@@ -23930,6 +24031,28 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "src/scanning.rs",
+      "source_location": "L4335",
+      "weight": 1.0,
+      "source": "src_scanning_artifact_delimiter_injection_attack_defeated_end_to_end",
+      "target": "src_scanning_policyconfig_default",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
+      "source_location": "L4382",
+      "weight": 1.0,
+      "source": "src_scanning_artifact_delimiter_injection_does_not_block_clean_package",
+      "target": "src_scanning_policyconfig_default",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
       "source_location": "L2804",
       "weight": 1.0,
       "confidence_score": 1.0,
@@ -25374,6 +25497,17 @@
       "context": "call",
       "confidence": "EXTRACTED",
       "source_file": "src/scanning.rs",
+      "source_location": "L4279",
+      "weight": 1.0,
+      "source": "src_scanning_artifact_delimiter_pipe_in_path_is_not_injected",
+      "target": "src_scanning_classify_inventory_lines",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
       "source_location": "L2906",
       "weight": 1.0,
       "confidence_score": 1.0,
@@ -25423,17 +25557,6 @@
       "confidence_score": 1.0,
       "source": "src_scanning_classify_inventory_mixed_findings",
       "target": "src_scanning_classify_inventory_lines"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "src/scanning.rs",
-      "source_location": "L4269",
-      "weight": 1.0,
-      "source": "src_scanning_classify_inventory_pipe_in_filename_not_injected",
-      "target": "src_scanning_classify_inventory_lines",
-      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -26514,6 +26637,28 @@
       "confidence_score": 1.0,
       "source": "src_scanning_artifact_allowlist_unblocks_new_findings",
       "target": "src_scanning_scan_packages_versions"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
+      "source_location": "L4338",
+      "weight": 1.0,
+      "source": "src_scanning_artifact_delimiter_injection_attack_defeated_end_to_end",
+      "target": "src_scanning_scan_packages_versions",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/scanning.rs",
+      "source_location": "L4385",
+      "weight": 1.0,
+      "source": "src_scanning_artifact_delimiter_injection_does_not_block_clean_package",
+      "target": "src_scanning_scan_packages_versions",
+      "confidence_score": 1.0
     },
     {
       "relation": "calls",
@@ -33480,6 +33625,26 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
+      "source_file": "FEEDBACK.md",
+      "source_location": "L1",
+      "weight": 1.0,
+      "source": "feedback",
+      "target": "feedback_feedback",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "FEEDBACK.md",
+      "source_location": "L7",
+      "weight": 1.0,
+      "source": "feedback_feedback",
+      "target": "feedback_guidelines",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
       "source_file": "README.md",
       "source_location": "L1",
       "weight": 1.0,
@@ -34763,9 +34928,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L483",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_finding_20_critical_sandbox_rs_559_scanning_rs_730_fixed",
-      "confidence_score": 1.0
+      "target": "docs_findings_finding_20_critical_sandbox_rs_559_scanning_rs_730_fixed"
     },
     {
       "relation": "contains",
@@ -34773,9 +34938,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L505",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_finding_21_high_sandbox_rs_629_open",
-      "confidence_score": 1.0
+      "target": "docs_findings_finding_21_high_sandbox_rs_629_open"
     },
     {
       "relation": "contains",
@@ -34783,9 +34948,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L517",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_finding_22_medium_scanning_rs_188_open",
-      "confidence_score": 1.0
+      "target": "docs_findings_finding_22_medium_scanning_rs_188_open"
     },
     {
       "relation": "contains",
@@ -34793,9 +34958,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L540",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_finding_23_medium_sandbox_rs_215_open",
-      "confidence_score": 1.0
+      "target": "docs_findings_finding_23_medium_sandbox_rs_215_open"
     },
     {
       "relation": "contains",
@@ -34803,9 +34968,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L559",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_finding_24_medium_sandbox_rs_555_open",
-      "confidence_score": 1.0
+      "target": "docs_findings_finding_24_medium_sandbox_rs_555_open"
     },
     {
       "relation": "contains",
@@ -34813,9 +34978,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L584",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_finding_25_high_readme_md_363_sandbox_rs_open",
-      "confidence_score": 1.0
+      "target": "docs_findings_finding_25_high_readme_md_363_sandbox_rs_open"
     },
     {
       "relation": "contains",
@@ -34823,9 +34988,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L600",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_finding_26_medium_lib_rs_588_open",
-      "confidence_score": 1.0
+      "target": "docs_findings_finding_26_medium_lib_rs_588_open"
     },
     {
       "relation": "contains",
@@ -34833,9 +34998,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L634",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_finding_27_low_lib_rs_64_open",
-      "confidence_score": 1.0
+      "target": "docs_findings_finding_27_low_lib_rs_64_open"
     },
     {
       "relation": "contains",
@@ -34933,9 +35098,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L462",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_round_7_2026_06_16_external_audit",
-      "confidence_score": 1.0
+      "target": "docs_findings_round_7_2026_06_16_external_audit"
     },
     {
       "relation": "contains",
@@ -34943,9 +35108,9 @@
       "source_file": "docs/FINDINGS.md",
       "source_location": "L472",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "docs_findings_review_history",
-      "target": "docs_findings_round_8_2026_06_16_architectural_coverage_audit_finding_20_fix",
-      "confidence_score": 1.0
+      "target": "docs_findings_round_8_2026_06_16_architectural_coverage_audit_finding_20_fix"
     },
     {
       "relation": "contains",
@@ -35431,5 +35596,5 @@
       "source_file": "docs/DEV_GUIDE.md"
     }
   ],
-  "built_at_commit": "e9526b6cc9fd90f04f9e6df5ae461d573301420d"
+  "built_at_commit": "4aa1f1e32802818cf2684d6a09c3fbada284cfe1"
 }

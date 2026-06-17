@@ -1,16 +1,16 @@
-# Graph Report - gyrseek  (2026-06-17)
+# Graph Report - gyrseek  (2026-06-18)
 
 ## Corpus Check
-- 79 files · ~113,897 words
+- 80 files · ~114,417 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1371 nodes · 2061 edges · 112 communities (74 shown, 38 thin omitted)
+- 1377 nodes · 2071 edges · 114 communities (75 shown, 39 thin omitted)
 - Extraction: 98% EXTRACTED · 2% INFERRED · 0% AMBIGUOUS · INFERRED: 34 edges (avg confidence: 0.82)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e9526b6c`
+- Built from commit: `4aa1f1e3`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -123,11 +123,13 @@
 - [[_COMMUNITY_Community 108|Community 108]]
 - [[_COMMUNITY_Community 109|Community 109]]
 - [[_COMMUNITY_Community 110|Community 110]]
+- [[_COMMUNITY_Community 111|Community 111]]
 - [[_COMMUNITY_Community 112|Community 112]]
+- [[_COMMUNITY_Community 113|Community 113]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `String` - 46 edges
-2. `scan_packages_versions()` - 40 edges
+2. `scan_packages_versions()` - 42 edges
 3. `run()` - 37 edges
 4. `Code Security` - 31 edges
 5. `find_new_connections_domain_aware()` - 30 edges
@@ -164,7 +166,7 @@
 - **Three Behavioral Signal Classes (network/git-clone/watched-process)** — src_scanning_extract_connection_ips, src_scanning_extract_process_exec_signatures, docs_architecture_behavioral_diffing [EXTRACTED 1.00]
 - **Binary-Spawning CLI Integration Tests** — cli_burst_exit_tests_exits_with_code_1_release_burst_threshold, forward_fail_closed_tests_forwarding_propagates_host_nonzero_exit_status, lock_routing_tests_poetry_lock_is_routed_to_lockfile_scan, version_flag_tests_version_flag_prints_crate_version_and_exits_zero [EXTRACTED 1.00]
 
-## Communities (112 total, 38 thin omitted)
+## Communities (114 total, 39 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.06
@@ -176,35 +178,35 @@ Nodes (71): BaselineOverrideConfig, test: minimum_release_age_package not met ex
 
 ### Community 2 - "Community 2"
 Cohesion: 0.07
-Nodes (63): Box, CAP_SYS_PTRACE for Cross-UID Tracing, Unprivileged-Payload Trace Integrity (strace -u), MicroVM Sandbox Backend (planned hardening), ProbeTrace, announce_apparmor_status(), announce_seccomp_status(), apparmor_disabled_wont_call_apparmor_parser() (+55 more)
+Nodes (64): Box, CAP_SYS_PTRACE for Cross-UID Tracing, Unprivileged-Payload Trace Integrity (strace -u), MicroVM Sandbox Backend (planned hardening), ProbeTrace, announce_apparmor_status(), announce_seccomp_status(), apparmor_disabled_wont_call_apparmor_parser() (+56 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.04
-Nodes (56): Finding 10: Self-Referencing Baseline Override (Open), G, artifact_findings_empty_for_clean_install(), baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_returns_no_effective_baselines(), baseline_count_zero_with_override_equal_to_current_returns_empty(), both_override_slots_none_falls_through_to_fetched_baselines(), both_overrides_equal_to_current_skipped_and_filled_from_fetched() (+48 more)
+Cohesion: 0.05
+Nodes (50): Finding 10: Self-Referencing Baseline Override (Open), G, artifact_delimiter_pipe_in_path_is_not_injected(), baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_returns_no_effective_baselines(), baseline_count_zero_with_override_equal_to_current_returns_empty(), both_override_slots_none_falls_through_to_fetched_baselines(), both_overrides_equal_to_current_skipped_and_filled_from_fetched() (+42 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.10
-Nodes (37): Behavioral Diffing Across Versions, Finding 3: Argv Regex Truncation at ], Direct Git Clone Runtime Interception, IpAddr, PyPiReleaseFile, artifact_allowlist_matches_exact_finding_and_prefix(), domain_is_allowlisted(), extract_dns_map() (+29 more)
+Cohesion: 0.08
+Nodes (34): F, artifact_allowlist_matches_exact_finding_and_prefix(), artifact_findings_empty_for_clean_install(), domain_allowlist_does_not_filter_when_lookup_fails(), domain_allowlist_filters_resolved_domains_before_blocking(), domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot(), domain_is_allowlisted(), executable_basename() (+26 more)
 
 ### Community 5 - "Community 5"
 Cohesion: 0.14
-Nodes (28): Default, Adding a New Supported Command, Behavioral Diffing, allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline(), artifact_allowlist_unblocks_new_findings(), env_lock() (+20 more)
+Nodes (28): Default, Adding a New Supported Command, Behavioral Diffing, allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline(), artifact_allowlist_unblocks_new_findings(), artifact_delimiter_injection_attack_defeated_end_to_end() (+20 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.11
 Nodes (21): Forward-Confirmed Reverse DNS (FCrDNS), Finding 2: PTR-Record Allowlist Bypass, R, Forward-Confirmed Reverse DNS, burst_policy_emits_warning_when_triggered(), burst_policy_warning(), decode_dns_name(), decode_dns_name_long_but_not_circular_pointer_chain() (+13 more)
 
 ### Community 7 - "Community 7"
-Cohesion: 0.11
-Nodes (23): DateTime, Semantic Version Ordering (semver / PEP 440), Ordering, age_filter_includes_versions_exactly_at_cutoff(), age_filter_keeps_only_versions_older_than_cutoff(), age_filter_skips_candidates_without_publish_timestamps(), age_filter_still_respects_baseline_count_limit(), burst_count_is_not_inflated_by_created_modified() (+15 more)
+Cohesion: 0.18
+Nodes (16): DateTime, age_filter_includes_versions_exactly_at_cutoff(), age_filter_keeps_only_versions_older_than_cutoff(), age_filter_skips_candidates_without_publish_timestamps(), age_filter_still_respects_baseline_count_limit(), burst_count_is_not_inflated_by_created_modified(), count_releases_in_window(), fetch_history_with_baselines() (+8 more)
 
 ### Community 8 - "Community 8"
 Cohesion: 0.05
 Nodes (38): 1) Build the scanner images, 1. Prerequisites, 2. Build, 2) Use a prebuilt image, 3) Enable prebuilt mode globally (optional), 3. Run your first scan, 4) Verify images are usable, 5) Use pinned image digests (recommended for reproducibility) (+30 more)
 
 ### Community 9 - "Community 9"
-Cohesion: 0.11
-Nodes (20): Shai-Hulud Attack Class, Watched-Process Execution Detection, Shai-Hulud Attack, case_1_new_bun_is_flagged_against_clean_baseline(), case_2_existing_bun_plus_additional_invocation_is_flagged(), case_2b_changed_bun_arguments_are_flagged(), executable_basename(), extract_process_exec_captures_all_executables() (+12 more)
+Cohesion: 0.10
+Nodes (24): Behavioral Diffing Across Versions, Shai-Hulud Attack Class, Watched-Process Execution Detection, Finding 3: Argv Regex Truncation at ], Direct Git Clone Runtime Interception, Shai-Hulud Attack, case_1_new_bun_is_flagged_against_clean_baseline(), case_2_existing_bun_plus_additional_invocation_is_flagged() (+16 more)
 
 ### Community 10 - "Community 10"
 Cohesion: 0.10
@@ -223,8 +225,8 @@ Cohesion: 0.19
 Nodes (13): Cloud Metadata IP Exemption (169.254.169.254), Sandbox-Local IP Filtering, extract_connection_ips(), extract_connection_ips_captures_ipv4(), extract_connection_ips_captures_ipv6_inet_pton(), extract_connection_ips_collapses_ipv4_mapped_ipv6(), extract_connection_ips_drops_loopback_link_local_and_private(), extract_connection_ips_handles_mixed_v4_and_v6() (+5 more)
 
 ### Community 14 - "Community 14"
-Cohesion: 0.20
-Nodes (10): F, domain_allowlist_does_not_filter_when_lookup_fails(), domain_allowlist_filters_resolved_domains_before_blocking(), domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot(), filter_allowlisted_new_connections(), filter_domain_allowlisted_new_connections_with(), ip_allowlist_filters_new_ips_before_blocking(), ip_allowlist_matches_across_ipv4_mapped_and_bare_forms() (+2 more)
+Cohesion: 0.19
+Nodes (14): IpAddr, PyPiReleaseFile, dns_interceptor_end_to_end_with_realistic_strace_trace(), extract_dns_map(), extract_dns_map_empty_trace(), extract_dns_map_malformed_payload_skipped(), parse_dns_response(), parse_dns_response_a_record() (+6 more)
 
 ### Community 15 - "Community 15"
 Cohesion: 0.33
@@ -446,28 +448,32 @@ Nodes (3): Key Prevention Patterns, Prevent Code Injection, References
 Cohesion: 0.22
 Nodes (8): Architecture, Core Components, Current Limitations, Decision Model, Docker Sandbox Security, Goal, Internal Package Exemption, Main Files
 
+### Community 111 - "Community 111"
+Cohesion: 0.20
+Nodes (10): Semantic Version Ordering (semver / PEP 440), Ordering, compare_version_strings(), is_npm_family_manager(), npm_versions_sort_semantically_not_lexically(), parse_and_cmp(), pnpm_versions_use_npm_semver_ordering(), pypi_versions_sort_by_pep440_not_lexically() (+2 more)
+
 ### Community 112 - "Community 112"
 Cohesion: 0.33
 Nodes (5): Approach, Checklist, Goal, Understand Code, Verification
 
 ## Knowledge Gaps
-- **637 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Drop`, `ForwardMode` (+632 more)
+- **638 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Drop`, `ForwardMode` (+633 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **38 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **39 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `run()` connect `Community 1` to `Community 0`, `Community 10`, `Community 2`?**
-  _High betweenness centrality (0.054) - this node is a cross-community bridge._
-- **Why does `trace_sandbox_install_matrix()` connect `Community 4` to `Community 2`, `Community 3`, `Community 5`, `Community 9`, `Community 13`?**
-  _High betweenness centrality (0.039) - this node is a cross-community bridge._
-- **Why does `SandboxRunner` connect `Community 2` to `Community 1`, `Community 4`?**
-  _High betweenness centrality (0.038) - this node is a cross-community bridge._
+  _High betweenness centrality (0.057) - this node is a cross-community bridge._
+- **Why does `SandboxRunner` connect `Community 2` to `Community 1`, `Community 9`?**
+  _High betweenness centrality (0.037) - this node is a cross-community bridge._
+- **Why does `trace_sandbox_install_matrix()` connect `Community 9` to `Community 2`, `Community 3`, `Community 4`, `Community 5`, `Community 7`, `Community 13`, `Community 14`?**
+  _High betweenness centrality (0.036) - this node is a cross-community bridge._
 - **Are the 7 inferred relationships involving `run()` (e.g. with `test: minimum_release_age_package not met exits 1` and `test: release_burst_threshold triggers exit 1`) actually correct?**
   _`run()` has 7 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `$schema`, `plugin`, `BaselineOverrideConfig` to the rest of the system?**
-  _639 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _640 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.061708860759493674 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
