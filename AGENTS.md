@@ -144,7 +144,7 @@ or "what does this do".
   - Network access enabled for registry access during probes; egress controls planned for future phases
   - In-run cache reuses scan results for repeated manager/package/version probes within the same execution
   - Fail-closed when package detection is expected but missing
-  - README detection coverage table now includes four new TeamPCP attack waves: Telnyx Python SDK T26 (import-time, ❌ gap), Namastex/CanisterSprawl T27 (npm postinstall, ✅), SAP CAP T28 (npm preinstall+Bun, ✅), Bitwarden CLI T29 (npm CI/CD pipeline compromise, ✅)
+  - README detection coverage table now includes four new TeamPCP attack waves: Telnyx Python SDK T26 (import-time, ❌ gap), Namastex/CanisterSprawl T27 (npm postinstall, ✅), SAP CAP T28 (npm preinstall+Bun, ✅), Bitwarden CLI T29 (npm CI/CD pipeline compromise, ✅), TanStack/Mini-Shai-Hulud T31 (npm CI/CD hijack, ✅), T32 (PyPI mistralai import-time, ❌ gap), T33 (OIDC propagation, ⚠️), and Deep Specter T34 (GitHub platform evasions, ✅ unaffected)
 
 ## Mandatory Update Policy (After Every Change)
 After every code or behavior change in this repository:

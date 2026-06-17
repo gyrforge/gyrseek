@@ -11821,7 +11821,7 @@
       "label": "Configuration",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L365",
+      "source_location": "L370",
       "_origin": "ast",
       "id": "readme_configuration",
       "community": 8,
@@ -11831,7 +11831,7 @@
       "label": "Config keys",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L377",
+      "source_location": "L382",
       "_origin": "ast",
       "id": "readme_config_keys",
       "community": 8,
@@ -11841,7 +11841,7 @@
       "label": "Example config",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L395",
+      "source_location": "L400",
       "_origin": "ast",
       "id": "readme_example_config",
       "community": 8,
@@ -11851,7 +11851,7 @@
       "label": "Config loading behavior",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L431",
+      "source_location": "L436",
       "_origin": "ast",
       "id": "readme_config_loading_behavior",
       "community": 8,
@@ -11861,7 +11861,7 @@
       "label": "Sandbox Modes",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L436",
+      "source_location": "L441",
       "_origin": "ast",
       "id": "readme_sandbox_modes",
       "community": 8,
@@ -11871,7 +11871,7 @@
       "label": "MicroVM configuration",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L454",
+      "source_location": "L459",
       "_origin": "ast",
       "id": "readme_microvm_configuration",
       "community": 8,
@@ -11881,7 +11881,7 @@
       "label": "Platform support matrix",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L461",
+      "source_location": "L466",
       "_origin": "ast",
       "id": "readme_platform_support_matrix",
       "community": 8,
@@ -11891,7 +11891,7 @@
       "label": "Scanner image configuration",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L469",
+      "source_location": "L474",
       "_origin": "ast",
       "id": "readme_scanner_image_configuration",
       "community": 8,
@@ -11901,7 +11901,7 @@
       "label": "Prebuilt Scanner Images",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L482",
+      "source_location": "L487",
       "_origin": "ast",
       "id": "readme_prebuilt_scanner_images",
       "community": 8,
@@ -11911,7 +11911,7 @@
       "label": "1) Build the scanner images",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L486",
+      "source_location": "L491",
       "_origin": "ast",
       "id": "readme_1_build_the_scanner_images",
       "community": 8,
@@ -11921,7 +11921,7 @@
       "label": "2) Use a prebuilt image",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L503",
+      "source_location": "L508",
       "_origin": "ast",
       "id": "readme_2_use_a_prebuilt_image",
       "community": 8,
@@ -11931,7 +11931,7 @@
       "label": "3) Enable prebuilt mode globally (optional)",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L515",
+      "source_location": "L520",
       "_origin": "ast",
       "id": "readme_3_enable_prebuilt_mode_globally_optional",
       "community": 8,
@@ -11941,7 +11941,7 @@
       "label": "4) Verify images are usable",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L524",
+      "source_location": "L529",
       "_origin": "ast",
       "id": "readme_4_verify_images_are_usable",
       "community": 8,
@@ -11951,7 +11951,7 @@
       "label": "5) Use pinned image digests (recommended for reproducibility)",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L533",
+      "source_location": "L538",
       "_origin": "ast",
       "id": "readme_5_use_pinned_image_digests_recommended_for_reproducibility",
       "community": 8,
@@ -11961,7 +11961,7 @@
       "label": "Behavior Reference",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L546",
+      "source_location": "L551",
       "_origin": "ast",
       "id": "readme_behavior_reference",
       "community": 8,
@@ -11971,7 +11971,7 @@
       "label": "Docker Security",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L582",
+      "source_location": "L587",
       "_origin": "ast",
       "id": "readme_docker_security",
       "community": 8,
@@ -11981,7 +11981,7 @@
       "label": "Testing",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L592",
+      "source_location": "L597",
       "_origin": "ast",
       "id": "readme_testing",
       "community": 8,
@@ -11991,7 +11991,7 @@
       "label": "Project Layout & Docs",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L639",
+      "source_location": "L644",
       "_origin": "ast",
       "id": "readme_project_layout_docs",
       "community": 8,
@@ -12001,7 +12001,7 @@
       "label": "License",
       "file_type": "document",
       "source_file": "README.md",
-      "source_location": "L678",
+      "source_location": "L683",
       "_origin": "ast",
       "id": "readme_license",
       "community": 8,
@@ -18819,9 +18819,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L1339",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox",
-      "target": "src_sandbox_artifact_scan_steps_uses_null_byte_delimiter",
-      "confidence_score": 1.0
+      "target": "src_sandbox_artifact_scan_steps_uses_null_byte_delimiter"
     },
     {
       "relation": "contains",
@@ -20516,9 +20516,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L1342",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_artifact_scan_steps_uses_null_byte_delimiter",
-      "target": "src_sandbox_build_artifact_scan_steps",
-      "confidence_score": 1.0
+      "target": "src_sandbox_build_artifact_scan_steps"
     },
     {
       "relation": "calls",
@@ -21034,9 +21034,9 @@
       "source_file": "src/scanning.rs",
       "source_location": "L4303",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_scanning",
-      "target": "src_scanning_artifact_delimiter_injection_attack_defeated_end_to_end",
-      "confidence_score": 1.0
+      "target": "src_scanning_artifact_delimiter_injection_attack_defeated_end_to_end"
     },
     {
       "relation": "contains",
@@ -21044,9 +21044,9 @@
       "source_file": "src/scanning.rs",
       "source_location": "L4354",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_scanning",
-      "target": "src_scanning_artifact_delimiter_injection_does_not_block_clean_package",
-      "confidence_score": 1.0
+      "target": "src_scanning_artifact_delimiter_injection_does_not_block_clean_package"
     },
     {
       "relation": "contains",
@@ -21054,9 +21054,9 @@
       "source_file": "src/scanning.rs",
       "source_location": "L4261",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_scanning",
-      "target": "src_scanning_artifact_delimiter_pipe_in_path_is_not_injected",
-      "confidence_score": 1.0
+      "target": "src_scanning_artifact_delimiter_pipe_in_path_is_not_injected"
     },
     {
       "relation": "contains",
@@ -24033,9 +24033,9 @@
       "source_file": "src/scanning.rs",
       "source_location": "L4335",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_scanning_artifact_delimiter_injection_attack_defeated_end_to_end",
-      "target": "src_scanning_policyconfig_default",
-      "confidence_score": 1.0
+      "target": "src_scanning_policyconfig_default"
     },
     {
       "relation": "calls",
@@ -24044,9 +24044,9 @@
       "source_file": "src/scanning.rs",
       "source_location": "L4382",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_scanning_artifact_delimiter_injection_does_not_block_clean_package",
-      "target": "src_scanning_policyconfig_default",
-      "confidence_score": 1.0
+      "target": "src_scanning_policyconfig_default"
     },
     {
       "relation": "calls",
@@ -25499,9 +25499,9 @@
       "source_file": "src/scanning.rs",
       "source_location": "L4279",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_scanning_artifact_delimiter_pipe_in_path_is_not_injected",
-      "target": "src_scanning_classify_inventory_lines",
-      "confidence_score": 1.0
+      "target": "src_scanning_classify_inventory_lines"
     },
     {
       "relation": "calls",
@@ -26645,9 +26645,9 @@
       "source_file": "src/scanning.rs",
       "source_location": "L4338",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_scanning_artifact_delimiter_injection_attack_defeated_end_to_end",
-      "target": "src_scanning_scan_packages_versions",
-      "confidence_score": 1.0
+      "target": "src_scanning_scan_packages_versions"
     },
     {
       "relation": "calls",
@@ -26656,9 +26656,9 @@
       "source_file": "src/scanning.rs",
       "source_location": "L4385",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_scanning_artifact_delimiter_injection_does_not_block_clean_package",
-      "target": "src_scanning_scan_packages_versions",
-      "confidence_score": 1.0
+      "target": "src_scanning_scan_packages_versions"
     },
     {
       "relation": "calls",
@@ -33628,9 +33628,9 @@
       "source_file": "FEEDBACK.md",
       "source_location": "L1",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "feedback",
-      "target": "feedback_feedback",
-      "confidence_score": 1.0
+      "target": "feedback_feedback"
     },
     {
       "relation": "contains",
@@ -33638,9 +33638,9 @@
       "source_file": "FEEDBACK.md",
       "source_location": "L7",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "feedback_feedback",
-      "target": "feedback_guidelines",
-      "confidence_score": 1.0
+      "target": "feedback_guidelines"
     },
     {
       "relation": "contains",
@@ -35596,5 +35596,5 @@
       "source_file": "docs/DEV_GUIDE.md"
     }
   ],
-  "built_at_commit": "4aa1f1e32802818cf2684d6a09c3fbada284cfe1"
+  "built_at_commit": "54d7abd38c2ac5738025dd55ad13be42df8eedb4"
 }
