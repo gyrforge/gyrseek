@@ -15,27 +15,27 @@ Rules:
 - When the user types `/graphify`, invoke the `skill` tool with `skill: "graphify"` before doing anything else.
 - Always rerun `/graphify` via `graphify update .` after every code change to keep graph artifacts current before handing off or committing (AST-only, no API cost).
 
-## ponytail
+## Mandatory Pre-Session Setup
 
-Load the `ponytail` skill at the start of every session. It enforces the lazy
-engineering ladder: does it need to exist? Does stdlib cover it? Can it be
-one line? The shortest path to done is the right path. Default intensity
-level: full. Override with `/ponytail lite|ultra` or `stop ponytail` for
-normal mode.
+All skills below only apply to code changes within this branch/session,
+not the entire codebase.
+
+1. **Load ponytail** — Enforces the lazy engineering ladder: does it need to
+   exist? Does stdlib cover it? Can it be one line? The shortest path to done
+   is the right path. Default intensity: full. Override with `/ponytail lite|ultra`
+   or `stop ponytail` for normal mode.
+2. **Load interrogation** — Available on demand via `/grill`, `/interrogate`,
+   "grill me", "stress-test this plan", or "pick this apart". See
+   `.agents/skills/interrogation/SKILL.md` for full details.
+3. **Load code-security** — Active for all code writing and review. Automatically
+   checks for vulnerabilities relevant to the language and patterns in use.
+   See `.agents/skills/code-security/SKILL.md` for full details.
 
 ## Agent Portability Symlinks
 - `.claude/skills` → `.agents/skills` (folder-level symlink; auto-picks up new skills)
 - `.github/skills` → `.agents/skills` (same)
 - `CLAUDE.md` → `AGENTS.md` (changes to AGENTS.md propagate instantly to Claude Code)
 - `skills-lock.json` at repo root tracks 6 external skills: 3 from `semgrep/skills` (code-security, llm-security, semgrep) and 3 from `DietrichGebert/ponytail` (ponytail, ponytail-help, ponytail-review). See `docs/DEV_GUIDE.md` for details.
-
-## understand-code
-
-Always loaded at the end of the session. It enforces incremental teaching
-with verification at each step — quizzes, restatement checks, and adaptive
-depth (ELI5/ELI14/ELII). Also load manually with `/skill understand-code`
-or when the user says "help me understand", "explain", "walk me through",
-or "what does this do".
 
 ## Repository Memory
 - Project name: gyrseek
@@ -46,7 +46,7 @@ or "what does this do".
   - src/parsing.rs (parsing helpers)
   - src/scanning.rs (registry lookup and anomaly scanning)
   - src/sandbox.rs (sandbox runner backends and mode selection)
-- CI: `.github/workflows/ci.yml` — `rust-checks` (just lint + just test with hadolint/yamllint), `linux-docker-uv-test` (test-uv with seccomp disabled), `linux-docker-seccomp-uv-test` (test-uv with seccomp enabled), `linux-docker-apparmor-seccomp-{uv,pip,poetry,npm,pnpm}-test` (test each manager with AppArmor + prebuilt scanner images), `cargo-audit` (dependency advisory scan). Installs just 1.52.0 via `extractions/setup-just@v4` for `[working-directory]` support
+- CI: `.github/workflows/ci.yml` — `rust-checks` (hadolint + yamllint + just lint + just test + opencode AI code review via the default Big Pickle model, no API key needed; review posted as PR comment using `GITHUB_TOKEN`), `linux-docker-uv-test` (test-uv with seccomp disabled), `linux-docker-seccomp-uv-test` (test-uv with seccomp enabled), `linux-docker-apparmor-seccomp-{uv,pip,poetry,npm,pnpm}-test` (test each manager with AppArmor + prebuilt scanner images), `cargo-audit` (dependency advisory scan). Installs just 1.52.0 via `extractions/setup-just@v4` for `[working-directory]` support. OpenCode install uses `sha256sum --check` against a pinned checksum (`fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e` for v1.17.7) — when bumping the opencode version, update checksum by running `curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v<VERSION>/install | sha256sum`. The AI code review prompt is inline in the workflow and includes the git diff of the PR to scope the review to changed code only.
 - Build and scripts:
   - Justfile is the task runner entrypoint; run `just --list` to see recipes
   - just build — release build (cargo build --release)
@@ -146,19 +146,24 @@ or "what does this do".
   - Fail-closed when package detection is expected but missing
   - README detection coverage table now includes four new TeamPCP attack waves: Telnyx Python SDK T26 (import-time, ❌ gap), Namastex/CanisterSprawl T27 (npm postinstall, ✅), SAP CAP T28 (npm preinstall+Bun, ✅), Bitwarden CLI T29 (npm CI/CD pipeline compromise, ✅), TanStack/Mini-Shai-Hulud T31 (npm CI/CD hijack, ✅), T32 (PyPI mistralai import-time, ❌ gap), T33 (OIDC propagation, ⚠️), and Deep Specter T34 (GitHub platform evasions, ✅ unaffected)
 
-## Mandatory Update Policy (After Every Change)
+## Mandatory Post-Change Policy
 After every code or behavior change in this repository:
 1. Update this file (AGENTS.md) with the new behavior, scope, or constraints.
-2. Update README.md so user-facing documentation matches the current implementation.
-3. Rerun `/graphify` with `graphify update .` so `graphify-out/` stays in sync with the latest code.
-4. Ensure these updates happen in the same change set whenever possible.
-5. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, docs/ROADMAP.md, and docs/DOCKER_SECURITY.md.
-6. If test structure or coverage changes significantly, update docs/TESTS.md.
-7. If a new security or correctness finding is identified and fixed, document it in docs/FINDINGS.md.
+2. Confirm the code is efficient and fast (no unnecessary work, no wasted I/O, caching where beneficial) and idiomatic — prefer iterator adaptors (`.filter_map()`, `.partition()`, `.map().collect()`) over explicit `Vec::new()` + push loops.
+3. Run `ponytail review` on the changes and address any over-engineering findings.
+4. Run tests and confirm they pass.
+5. Rerun `/graphify` with `graphify update .` so `graphify-out/` stays in sync with the latest code.
+6. Ensure these updates happen in the same change set whenever possible.
+7. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, docs/ROADMAP.md, and docs/DOCKER_SECURITY.md.
+8. If test structure or coverage changes significantly, update docs/TESTS.md.
+9. If a new security or correctness finding is identified and fixed, document it in docs/FINDINGS.md.
+10. Load `understand-code` skill for end-of-session teaching and verification.
 
 ## Quick Post-Change Checklist
 - [ ] Code updated
+- [ ] Code is efficient and fast (no unnecessary work, no wasted I/O)
 - [ ] Tests updated and run
+- [ ] ponytail review run
 - [ ] graphify update . run
 - [ ] AGENTS.md updated
 - [ ] README.md updated if needed

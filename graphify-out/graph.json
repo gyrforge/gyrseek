@@ -8558,6 +8558,106 @@
       "norm_label": "libxml2 - external entities enabled"
     },
     {
+      "label": "SKILL.md",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "interrogation_skill",
+      "community": 114,
+      "norm_label": "skill.md"
+    },
+    {
+      "label": "Interrogation",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L9",
+      "_origin": "ast",
+      "id": "interrogation_skill_interrogation",
+      "community": 114,
+      "norm_label": "interrogation"
+    },
+    {
+      "label": "Activation",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L15",
+      "_origin": "ast",
+      "id": "interrogation_skill_activation",
+      "community": 114,
+      "norm_label": "activation"
+    },
+    {
+      "label": "The Method",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L23",
+      "_origin": "ast",
+      "id": "interrogation_skill_the_method",
+      "community": 114,
+      "norm_label": "the method"
+    },
+    {
+      "label": "Branch Resolution",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L39",
+      "_origin": "ast",
+      "id": "interrogation_skill_branch_resolution",
+      "community": 114,
+      "norm_label": "branch resolution"
+    },
+    {
+      "label": "Answer Handling",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L52",
+      "_origin": "ast",
+      "id": "interrogation_skill_answer_handling",
+      "community": 114,
+      "norm_label": "answer handling"
+    },
+    {
+      "label": "Depth Control",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L62",
+      "_origin": "ast",
+      "id": "interrogation_skill_depth_control",
+      "community": 114,
+      "norm_label": "depth control"
+    },
+    {
+      "label": "Termination",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L70",
+      "_origin": "ast",
+      "id": "interrogation_skill_termination",
+      "community": 114,
+      "norm_label": "termination"
+    },
+    {
+      "label": "Boundaries",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L89",
+      "_origin": "ast",
+      "id": "interrogation_skill_boundaries",
+      "community": 114,
+      "norm_label": "boundaries"
+    },
+    {
+      "label": "When NOT to interrogate",
+      "file_type": "document",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L101",
+      "_origin": "ast",
+      "id": "interrogation_skill_when_not_to_interrogate",
+      "community": 114,
+      "norm_label": "when not to interrogate"
+    },
+    {
       "label": "AGENTS.md",
       "file_type": "document",
       "source_file": ".agents/skills/llm-security/AGENTS.md",
@@ -11388,6 +11488,16 @@
       "norm_label": "goal"
     },
     {
+      "label": "opencode-review-prompt.md",
+      "file_type": "document",
+      "source_file": ".github/opencode-review-prompt.md",
+      "source_location": "L1",
+      "_origin": "ast",
+      "id": "github_opencode_review_prompt",
+      "community": 115,
+      "norm_label": "opencode-review-prompt.md"
+    },
+    {
       "label": "AGENTS.md",
       "file_type": "document",
       "source_file": "AGENTS.md",
@@ -11428,34 +11538,24 @@
       "norm_label": "graphify"
     },
     {
-      "label": "ponytail",
+      "label": "Mandatory Pre-Session Setup",
       "file_type": "document",
       "source_file": "AGENTS.md",
       "source_location": "L18",
       "_origin": "ast",
-      "id": "gyrseek_agents_ponytail",
+      "id": "gyrseek_agents_mandatory_pre_session_setup",
       "community": 42,
-      "norm_label": "ponytail"
+      "norm_label": "mandatory pre-session setup"
     },
     {
       "label": "Agent Portability Symlinks",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L26",
+      "source_location": "L34",
       "_origin": "ast",
       "id": "gyrseek_agents_agent_portability_symlinks",
       "community": 42,
       "norm_label": "agent portability symlinks"
-    },
-    {
-      "label": "understand-code",
-      "file_type": "document",
-      "source_file": "AGENTS.md",
-      "source_location": "L32",
-      "_origin": "ast",
-      "id": "gyrseek_agents_understand_code",
-      "community": 42,
-      "norm_label": "understand-code"
     },
     {
       "label": "Repository Memory",
@@ -11468,20 +11568,20 @@
       "norm_label": "repository memory"
     },
     {
-      "label": "Mandatory Update Policy (After Every Change)",
+      "label": "Mandatory Post-Change Policy",
       "file_type": "document",
       "source_file": "AGENTS.md",
       "source_location": "L149",
       "_origin": "ast",
-      "id": "gyrseek_agents_mandatory_update_policy_after_every_change",
+      "id": "gyrseek_agents_mandatory_post_change_policy",
       "community": 42,
-      "norm_label": "mandatory update policy (after every change)"
+      "norm_label": "mandatory post-change policy"
     },
     {
       "label": "Quick Post-Change Checklist",
       "file_type": "document",
       "source_file": "AGENTS.md",
-      "source_location": "L159",
+      "source_location": "L162",
       "_origin": "ast",
       "id": "gyrseek_agents_quick_post_change_checklist",
       "community": 42,
@@ -11528,34 +11628,24 @@
       "norm_label": "graphify"
     },
     {
-      "label": "ponytail",
+      "label": "Mandatory Pre-Session Setup",
       "file_type": "document",
       "source_file": "CLAUDE.md",
       "source_location": "L18",
       "_origin": "ast",
-      "id": "claude_ponytail",
+      "id": "claude_mandatory_pre_session_setup",
       "community": 17,
-      "norm_label": "ponytail"
+      "norm_label": "mandatory pre-session setup"
     },
     {
       "label": "Agent Portability Symlinks",
       "file_type": "document",
       "source_file": "CLAUDE.md",
-      "source_location": "L26",
+      "source_location": "L34",
       "_origin": "ast",
       "id": "claude_agent_portability_symlinks",
       "community": 17,
       "norm_label": "agent portability symlinks"
-    },
-    {
-      "label": "understand-code",
-      "file_type": "document",
-      "source_file": "CLAUDE.md",
-      "source_location": "L32",
-      "_origin": "ast",
-      "id": "claude_understand_code",
-      "community": 17,
-      "norm_label": "understand-code"
     },
     {
       "label": "Repository Memory",
@@ -11568,20 +11658,20 @@
       "norm_label": "repository memory"
     },
     {
-      "label": "Mandatory Update Policy (After Every Change)",
+      "label": "Mandatory Post-Change Policy",
       "file_type": "document",
       "source_file": "CLAUDE.md",
       "source_location": "L149",
       "_origin": "ast",
-      "id": "claude_mandatory_update_policy_after_every_change",
+      "id": "claude_mandatory_post_change_policy",
       "community": 17,
-      "norm_label": "mandatory update policy (after every change)"
+      "norm_label": "mandatory post-change policy"
     },
     {
       "label": "Quick Post-Change Checklist",
       "file_type": "document",
       "source_file": "CLAUDE.md",
-      "source_location": "L159",
+      "source_location": "L162",
       "_origin": "ast",
       "id": "claude_quick_post_change_checklist",
       "community": 17,
@@ -30835,6 +30925,96 @@
     {
       "relation": "contains",
       "confidence": "EXTRACTED",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L9",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "interrogation_skill",
+      "target": "interrogation_skill_interrogation"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L15",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "interrogation_skill_interrogation",
+      "target": "interrogation_skill_activation"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L52",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "interrogation_skill_interrogation",
+      "target": "interrogation_skill_answer_handling"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L89",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "interrogation_skill_interrogation",
+      "target": "interrogation_skill_boundaries"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L39",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "interrogation_skill_interrogation",
+      "target": "interrogation_skill_branch_resolution"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L62",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "interrogation_skill_interrogation",
+      "target": "interrogation_skill_depth_control"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L70",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "interrogation_skill_interrogation",
+      "target": "interrogation_skill_termination"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L23",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "interrogation_skill_interrogation",
+      "target": "interrogation_skill_the_method"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": ".agents/skills/interrogation/SKILL.md",
+      "source_location": "L101",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "interrogation_skill_interrogation",
+      "target": "interrogation_skill_when_not_to_interrogate"
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
       "source_file": ".agents/skills/llm-security/AGENTS.md",
       "source_location": "L1",
       "weight": 1.0,
@@ -33480,7 +33660,7 @@
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "gyrseek_agents_agents_memory_and_workflow",
-      "target": "gyrseek_agents_mandatory_update_policy_after_every_change"
+      "target": "gyrseek_agents_mandatory_post_change_policy"
     },
     {
       "relation": "contains",
@@ -33490,7 +33670,7 @@
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "gyrseek_agents_agents_memory_and_workflow",
-      "target": "gyrseek_agents_ponytail"
+      "target": "gyrseek_agents_mandatory_pre_session_setup"
     },
     {
       "relation": "contains",
@@ -33521,16 +33701,6 @@
       "confidence_score": 1.0,
       "source": "gyrseek_agents_agents_memory_and_workflow",
       "target": "gyrseek_agents_repository_memory"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "AGENTS.md",
-      "source_location": "L32",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "gyrseek_agents_agents_memory_and_workflow",
-      "target": "gyrseek_agents_understand_code"
     },
     {
       "relation": "contains",
@@ -33566,11 +33736,11 @@
       "relation": "contains",
       "confidence": "EXTRACTED",
       "source_file": "CLAUDE.md",
-      "source_location": "L115",
+      "source_location": "L149",
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "claude_agents_memory_and_workflow",
-      "target": "claude_mandatory_update_policy_after_every_change"
+      "target": "claude_mandatory_post_change_policy"
     },
     {
       "relation": "contains",
@@ -33580,7 +33750,7 @@
       "weight": 1.0,
       "confidence_score": 1.0,
       "source": "claude_agents_memory_and_workflow",
-      "target": "claude_ponytail"
+      "target": "claude_mandatory_pre_session_setup"
     },
     {
       "relation": "contains",
@@ -33611,16 +33781,6 @@
       "confidence_score": 1.0,
       "source": "claude_agents_memory_and_workflow",
       "target": "claude_repository_memory"
-    },
-    {
-      "relation": "contains",
-      "confidence": "EXTRACTED",
-      "source_file": "CLAUDE.md",
-      "source_location": "L32",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "claude_agents_memory_and_workflow",
-      "target": "claude_understand_code"
     },
     {
       "relation": "contains",
@@ -35596,5 +35756,5 @@
       "source_file": "docs/DEV_GUIDE.md"
     }
   ],
-  "built_at_commit": "54d7abd38c2ac5738025dd55ad13be42df8eedb4"
+  "built_at_commit": "43fbe22d7485db5de594e6a2078ec393f7427d48"
 }
