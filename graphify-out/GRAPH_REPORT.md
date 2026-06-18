@@ -1,16 +1,16 @@
 # Graph Report - gyrseek  (2026-06-18)
 
 ## Corpus Check
-- 81 files · ~115,178 words
+- 83 files · ~116,427 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1377 nodes · 2071 edges · 114 communities (75 shown, 39 thin omitted)
+- 1386 nodes · 2078 edges · 116 communities (77 shown, 39 thin omitted)
 - Extraction: 98% EXTRACTED · 2% INFERRED · 0% AMBIGUOUS · INFERRED: 34 edges (avg confidence: 0.82)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `54d7abd3`
+- Built from commit: `43fbe22d`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -126,6 +126,7 @@
 - [[_COMMUNITY_Community 111|Community 111]]
 - [[_COMMUNITY_Community 112|Community 112]]
 - [[_COMMUNITY_Community 113|Community 113]]
+- [[_COMMUNITY_Community 114|Community 114]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `String` - 46 edges
@@ -166,7 +167,7 @@
 - **Three Behavioral Signal Classes (network/git-clone/watched-process)** — src_scanning_extract_connection_ips, src_scanning_extract_process_exec_signatures, docs_architecture_behavioral_diffing [EXTRACTED 1.00]
 - **Binary-Spawning CLI Integration Tests** — cli_burst_exit_tests_exits_with_code_1_release_burst_threshold, forward_fail_closed_tests_forwarding_propagates_host_nonzero_exit_status, lock_routing_tests_poetry_lock_is_routed_to_lockfile_scan, version_flag_tests_version_flag_prints_crate_version_and_exits_zero [EXTRACTED 1.00]
 
-## Communities (114 total, 39 thin omitted)
+## Communities (116 total, 39 thin omitted)
 
 ### Community 0 - "Package Parsing & Version Pinning"
 Cohesion: 0.06
@@ -237,8 +238,8 @@ Cohesion: 0.04
 Nodes (47): Empty-Trace Hard Error, Complexity & Over-Engineering Findings (Ponytail Review — 2026-06-14), Finding 10 — Critical | `scanning.rs:654` | ✅ Fixed, Finding 11 — High | `parsing.rs:468` | ⚠️ Open, Finding 12 — High | `lib.rs:1021` | ⚠️ Open, Finding 13 — Medium | `scanning.rs:1852` | ✅ Fixed, Finding 14 — Low | `parsing.rs:880` | ⚠️ Open, Finding 15 — Low | `sandbox.rs:511` | ✅ Fixed (+39 more)
 
 ### Community 17 - "Network Anomaly Decision"
-Cohesion: 0.20
-Nodes (9): Agent Portability Symlinks, Agents Memory and Workflow, graphify, Mandatory Update Policy (After Every Change), ponytail, Purpose, Quick Post-Change Checklist, Repository Memory (+1 more)
+Cohesion: 0.22
+Nodes (8): Agent Portability Symlinks, Agents Memory and Workflow, graphify, Mandatory Post-Change Policy, Mandatory Pre-Session Setup, Purpose, Quick Post-Change Checklist, Repository Memory
 
 ### Community 18 - "Community 18"
 Cohesion: 0.05
@@ -297,8 +298,8 @@ Cohesion: 0.14
 Nodes (13): Browser DOM Manipulation, Direct ResponseWriter Write, Django HttpResponse, Echo with Request Data, Flask Unsanitized Response, General Prevention Guidelines, Language: Go, Language: Java (+5 more)
 
 ### Community 42 - "Community 42"
-Cohesion: 0.20
-Nodes (9): Agent Portability Symlinks, Agents Memory and Workflow, graphify, Mandatory Update Policy (After Every Change), ponytail, Purpose, Quick Post-Change Checklist, Repository Memory (+1 more)
+Cohesion: 0.22
+Nodes (8): Agent Portability Symlinks, Agents Memory and Workflow, graphify, Mandatory Post-Change Policy, Mandatory Pre-Session Setup, Purpose, Quick Post-Change Checklist, Repository Memory
 
 ### Community 43 - "Community 43"
 Cohesion: 0.15
@@ -456,8 +457,12 @@ Nodes (10): Semantic Version Ordering (semver / PEP 440), Ordering, compare_vers
 Cohesion: 0.33
 Nodes (5): Approach, Checklist, Goal, Understand Code, Verification
 
+### Community 114 - "Community 114"
+Cohesion: 0.20
+Nodes (9): Activation, Answer Handling, Boundaries, Branch Resolution, Depth Control, Interrogation, Termination, The Method (+1 more)
+
 ## Knowledge Gaps
-- **638 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Drop`, `ForwardMode` (+633 more)
+- **644 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Drop`, `ForwardMode` (+639 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **39 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
@@ -465,15 +470,15 @@ Nodes (5): Approach, Checklist, Goal, Understand Code, Verification
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `run()` connect `Routing, Config & Scan Orchestration` to `Package Parsing & Version Pinning`, `Host Command Forwarding`, `Sandbox Backends & Docker/strace`?**
-  _High betweenness centrality (0.057) - this node is a cross-community bridge._
+  _High betweenness centrality (0.065) - this node is a cross-community bridge._
 - **Why does `SandboxRunner` connect `Sandbox Backends & Docker/strace` to `Routing, Config & Scan Orchestration`, `npm package.json Manifest`?**
   _High betweenness centrality (0.037) - this node is a cross-community bridge._
 - **Why does `trace_sandbox_install_matrix()` connect `npm package.json Manifest` to `Sandbox Backends & Docker/strace`, `Connection IP Extraction & Filtering`, `Git-Clone & Process-Exec Signatures`, `Bun Execution Detection & Exemptions`, `Registry History & Baseline Selection`, `Fail-Closed Forwarding Tests`, `Community 14`?**
-  _High betweenness centrality (0.036) - this node is a cross-community bridge._
+  _High betweenness centrality (0.035) - this node is a cross-community bridge._
 - **Are the 7 inferred relationships involving `run()` (e.g. with `test: minimum_release_age_package not met exits 1` and `test: release_burst_threshold triggers exit 1`) actually correct?**
   _`run()` has 7 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `$schema`, `plugin`, `BaselineOverrideConfig` to the rest of the system?**
-  _640 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _646 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Package Parsing & Version Pinning` be split into smaller, more focused modules?**
   _Cohesion score 0.061708860759493674 - nodes in this community are weakly interconnected._
 - **Should `Routing, Config & Scan Orchestration` be split into smaller, more focused modules?**

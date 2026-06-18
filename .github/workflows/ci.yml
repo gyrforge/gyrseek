@@ -17,6 +17,9 @@ jobs:
   rust-checks:
     name: Rust checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,6 +54,61 @@ jobs:
 
       - name: Just Test
         run: just test
+
+      - name: Cache OpenCode binary
+        id: cache-opencode
+        uses: actions/cache@v4
+        with:
+          path: ~/.opencode
+          key: opencode-1.17.7
+
+      - name: Install OpenCode
+        if: steps.cache-opencode.outputs.cache-hit != 'true'
+        env:
+          OPENCODE_INSTALL_SHA256: fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/anomalyco/opencode/v1.17.7/install" -o /tmp/opencode-install.sh
+          echo "$OPENCODE_INSTALL_SHA256  /tmp/opencode-install.sh" | sha256sum --check
+          bash /tmp/opencode-install.sh --version 1.17.7
+
+      - name: Ensure OpenCode in PATH
+        run: echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      - name: Generate AI Code Review
+        run: |
+          git fetch --unshallow 2>/dev/null || true
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff "origin/${{ github.event.pull_request.base.ref }}...HEAD" > pr_diff.txt 2>/dev/null || \
+              git diff HEAD~1...HEAD > pr_diff.txt 2>/dev/null || \
+              echo "(no diff)" > pr_diff.txt
+          else
+            git diff HEAD~1...HEAD > pr_diff.txt 2>/dev/null || echo "(no diff)" > pr_diff.txt
+          fi
+          opencode run -m opencode/big-pickle "
+          You are reviewing a Rust CLI project called gyrseek.
+          Read AGENTS.md then review the PR diff in pr_diff.txt. Do NOT
+          execute the Mandatory Pre-Session Setup or Mandatory Post-Change
+          Policy -- this is a stateless CI review, not an interactive session.
+          Read the file and review the changes. Check for:
+            - Logic errors and race conditions
+            - Unsafe code and memory safety issues
+            - Rust idioms (prefer iterator adaptors over Vec+push loops, use
+              filter_map/partition/map where appropriate)
+            - Rust and general coding best practices (will the code run efficiently, fast, etc.)
+            - Error handling (unwraps, expect, ignored Results)
+            - Security vulnerabilities (command injection, path traversal, etc.)
+            - API design and type safety
+          Output a concise review report. Write the report to gyrseek_review.md.
+          "
+
+      - name: Post Review Comment
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body-file gyrseek_review.md \
+            --repo "${{ github.repository }}"
 
   linux-docker-uv-test:
     name: (Linux) (Docker) Test CLI with (uv)
