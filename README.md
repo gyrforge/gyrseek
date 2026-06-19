@@ -17,12 +17,12 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 - [Quick Start](#quick-start)
 - [Just Recipes](#just-recipes)
 - [Supported Commands](#supported-commands)
-- [How It Works](#how-it-works)
 - [Usage](#usage)
-- [Network Behavior Detection](#network-behavior-detection)
-- [Git Clone Behavior Detection](#git-clone-behavior-detection)
-- [Process-Execution Detection](#process-execution-detection)
-- [Post-Install Artifact Detection](#post-install-artifact-detection)
+- [How It Works](#how-it-works)
+  - [Network Behavior Detection](#network-behavior-detection)
+  - [Git Clone Behavior Detection](#git-clone-behavior-detection)
+  - [Process-Execution Detection](#process-execution-detection)
+  - [Post-Install Artifact Detection](#post-install-artifact-detection)
 - [Package Related Supply Chain Attack Detection Coverage](#package-related-supply-chain-attack-detection-coverage)
 - [Configuration](#configuration)
 - [Sandbox Modes](#sandbox-modes)
@@ -135,32 +135,6 @@ just test-poetry
 
 > **`--version` / `-V`:** pass either flag as the first argument to print `gyrseek <version>` and exit 0. This works with no config file or Docker present. A forwarded command's own trailing `--version` (e.g. `gyrseek pip install foo --version`) is passed through unchanged.
 
-## How It Works
-
-1. **Parse** the package name and optional version from your command. If no version is given, it's treated as `latest`.
-2. **Fetch version history** from PyPI (Python) or the npm registry (npm/pnpm) and order it semantically (semver for npm-family packages, PEP 440 for Python).
-3. **Run sandbox installs** for:
-   - the current/target version
-   - the previous version (`baseline-1`)
-   - two versions back (`baseline-2`)
-
-   Multiple packages and versions may run in one sandbox session while keeping per-package, per-version trace attribution. Bulk commands (`uv sync`, `uv pip sync`, etc.) apply this to every detected package.
-
-4. **Compare behavior signals** between the target and its baselines:
-   - **Network**: endpoints contacted during install.
-   - **Git clone**: install-time `git clone` command signatures.
-   - **Process execution**: all programs executed during install — the payload's own commands plus the sandbox's internal setup (see [Process-Execution Detection](#process-execution-detection)).
-   - **Artifacts**: post-install file inventory of every installed file — binary executables, suspicious `.pth` files, unexpected runtimes, and large files (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
-5. **Decide**:
-   - New endpoint, clone behavior, process execution, or artifact finding found → **block and exit non-zero**.
-   - Nothing new → **forward your original command**.
-6. **Fail closed**: if a package target was expected but couldn't be detected — _or if the sandbox produced no trace at all_ (e.g. `strace` could not attach) — `gyrseek` blocks rather than letting the command through. A blank trace is never treated as a clean, zero-activity install. New artifact findings across versions also fail closed.
-7. **Propagate the host exit code**: when the original command is forwarded, `gyrseek` exits with the package manager's own status. A failed install (non-zero) surfaces as non-zero, so agents and CI `$?` checks are not misled into thinking a broken install succeeded.
-
-This gives you a _behavioral_ signal, rather than relying only on package metadata.
-
-> **PEP 508 extras** (e.g. `requests[security]`) are handled correctly: the extras are stripped for registry lookups and version-pin bookkeeping (so the PyPI lookup hits `requests`, not a 404), while the forwarded install command keeps the full `requests[security]==<scanned version>` spec.
-
 ## Usage
 
 General pattern:
@@ -212,7 +186,33 @@ cargo run npm install lodash
 
 > For project-aware tools like `poetry` or `npm`, run inside a directory containing the expected project files (`pyproject.toml`, `package.json`, etc.).
 
-## Network Behavior Detection
+## How It Works
+
+1. **Parse** the package name and optional version from your command. If no version is given, it's treated as `latest`.
+2. **Fetch version history** from PyPI (Python) or the npm registry (npm/pnpm) and order it semantically (semver for npm-family packages, PEP 440 for Python).
+3. **Run sandbox installs** for:
+   - the current/target version
+   - the previous version (`baseline-1`)
+   - two versions back (`baseline-2`)
+
+   Multiple packages and versions may run in one sandbox session while keeping per-package, per-version trace attribution. Bulk commands (`uv sync`, `uv pip sync`, etc.) apply this to every detected package.
+
+4. **Compare behavior signals** between the target and its baselines:
+   - **Network**: endpoints contacted during install (see [Network Behavior Detection](#network-behavior-detection)).
+   - **Git clone**: install-time `git clone` command signatures (see [Git Clone Behavior Detection](#git-clone-behavior-detection)).
+   - **Process execution**: all programs executed during install — the payload's own commands plus the sandbox's internal setup (see [Process-Execution Detection](#process-execution-detection)).
+   - **Artifacts**: post-install file inventory of every installed file — binary executables, suspicious `.pth` files, unexpected runtimes, and large files (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
+5. **Decide**:
+   - New endpoint, clone behavior, process execution, or artifact finding found → **block and exit non-zero**.
+   - Nothing new → **forward your original command**.
+6. **Fail closed**: if a package target was expected but couldn't be detected — _or if the sandbox produced no trace at all_ (e.g. `strace` could not attach) — `gyrseek` blocks rather than letting the command through. A blank trace is never treated as a clean, zero-activity install. New artifact findings across versions also fail closed.
+7. **Propagate the host exit code**: when the original command is forwarded, `gyrseek` exits with the package manager's own status. A failed install (non-zero) surfaces as non-zero, so agents and CI `$?` checks are not misled into thinking a broken install succeeded.
+
+This gives you a _behavioral_ signal, rather than relying only on package metadata.
+
+> **PEP 508 extras** (e.g. `requests[security]`) are handled correctly: the extras are stripped for registry lookups and version-pin bookkeeping (so the PyPI lookup hits `requests`, not a 404), while the forwarded install command keeps the full `requests[security]==<scanned version>` spec.
+
+### Network Behavior Detection
 
 `gyrseek` uses syscall tracing (`strace`) during sandbox installs to observe outbound network connections.
 
@@ -242,7 +242,7 @@ Package 'left-pad', version '1.3.0' introduced new git clone behavior not seen i
 Aborting host operation securely.
 ```
 
-## Git Clone Behavior Detection
+### Git Clone Behavior Detection
 
 - **Install-time clones** (e.g. hidden `git clone` calls inside package scripts) are compared across package versions during scanning, and new behavior is fail-closed unless allowlisted.
 - Clone-detection logic is exercised via inline unit tests in `src/scanning.rs` (moved from the old `tests/git_clone_behavior_tests.rs`).
@@ -256,7 +256,7 @@ git clone simulation contacted new endpoints not seen in baseline clone behavior
 Aborting host operation securely.
 ```
 
-## Process-Execution Detection
+### Process-Execution Detection
 
 Some supply-chain attacks don't assume a runtime is present — they **download one and use it to run the payload**. The Shai-Hulud "Hades/miasma" PyPI wave downloads the **Bun** JavaScript runtime during install/startup and runs an obfuscated stealer with `bun run _index.js`.
 
@@ -268,7 +268,7 @@ Tune this with the `process_exec_allowlist` config key (see [Configuration](#con
 
 > **Scope:** this observes processes executed _inside the sandbox during install_ (where the Bun loader fires for npm-style hooks and where Python install-time execution can occur). The PyPI `*-setup.pth` variant that triggers on the _next interpreter startup_ rather than at install time may execute outside the install window, though the post-install artifact scan catches the `.pth` file itself during install (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
 
-## Post-Install Artifact Detection
+### Post-Install Artifact Detection
 
 `gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, file type, first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
 
