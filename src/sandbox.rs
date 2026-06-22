@@ -171,12 +171,13 @@ pub(crate) trait SandboxRunner {
         manager: &str,
         probes: &[(String, String)],
     ) -> Result<Vec<ProbeTrace>, String> {
-        let mut results = Vec::new();
-        for (package, version) in probes {
-            let trace = self.trace_install(manager, package, version)?;
-            results.push(((package.clone(), version.clone()), trace));
-        }
-        Ok(results)
+        probes
+            .iter()
+            .map(|(package, version)| {
+                let trace = self.trace_install(manager, package, version)?;
+                Ok(((package.clone(), version.clone()), trace))
+            })
+            .collect()
     }
 }
 
@@ -342,15 +343,9 @@ fn trace_install_docker_matrix_with_runtime(
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let tail = stdout
-            .lines()
-            .rev()
-            .take(20)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
+        let mut tail_lines: Vec<_> = stdout.lines().rev().take(20).collect();
+        tail_lines.reverse();
+        let tail = tail_lines.join("\n");
         return Err(format!(
             "docker sandbox command failed (exit code: {}).\nstderr:\n{}\nstdout (last 20 lines):\n{}",
             output.status.code().unwrap_or(-1),
