@@ -24,6 +24,9 @@ not the entire codebase.
    exist? Does stdlib cover it? Can it be one line? The shortest path to done
    is the right path. Default intensity: full. Override with `/ponytail lite|ultra`
    or `stop ponytail` for normal mode.
+   **Note:** Rust idioms take precedence over ponytail recommendations when
+   they conflict. The shortest path is idiomatic Rust, not necessarily the
+   fewest lines.
 2. **Load interrogation** — Available on demand via `/grill`, `/interrogate`,
    "grill me", "stress-test this plan", or "pick this apart". See
    `.agents/skills/interrogation/SKILL.md` for full details.
