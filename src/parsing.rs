@@ -318,15 +318,10 @@ fn parse_requirements_spec(spec: &str) -> Option<(String, Option<String>)> {
 pub(crate) fn parse_requirements_packages_from_content(
     content: &str,
 ) -> Vec<(String, Option<String>)> {
-    let mut packages = Vec::new();
-
-    for line in content.lines() {
-        if let Some(pkg) = parse_requirements_spec(line) {
-            packages.push(pkg);
-        }
-    }
-
-    packages
+    content
+        .lines()
+        .filter_map(parse_requirements_spec)
+        .collect()
 }
 
 pub(crate) fn parse_pip_install_packages_from_args(
@@ -454,31 +449,29 @@ fn is_npm_family_package_command(manager: &str, command: Option<&str>) -> bool {
 pub(crate) fn parse_npm_packages_from_package_json_content(
     content: &str,
 ) -> Vec<(String, Option<String>)> {
-    let mut packages = Vec::new();
     let parsed: serde_json::Value = match serde_json::from_str(content) {
         Ok(value) => value,
-        Err(_) => return packages,
+        Err(_) => return Vec::new(),
     };
 
-    for section in [
+    [
         "dependencies",
         "devDependencies",
         "optionalDependencies",
         "peerDependencies",
-    ] {
-        if let Some(obj) = parsed.get(section).and_then(serde_json::Value::as_object) {
-            for (name, version_val) in obj {
-                if let Some(spec) = version_val.as_str() {
-                    if is_non_registry_npm_spec(spec) {
-                        continue;
-                    }
-                    packages.push((name.to_string(), normalize_npm_version_spec(spec)));
-                }
+    ]
+    .into_iter()
+    .filter_map(|section| parsed.get(section).and_then(serde_json::Value::as_object))
+    .flat_map(|obj| {
+        obj.into_iter().filter_map(|(name, version_val)| {
+            let spec = version_val.as_str()?;
+            if is_non_registry_npm_spec(spec) {
+                return None;
             }
-        }
-    }
-
-    packages
+            Some((name.to_string(), normalize_npm_version_spec(spec)))
+        })
+    })
+    .collect()
 }
 
 pub(crate) fn parse_npm_install_packages_from_args(
@@ -496,14 +489,15 @@ pub(crate) fn parse_npm_install_packages_from_args(
         return Vec::new();
     }
 
-    let mut packages = Vec::new();
-    for arg in args.iter().skip(2) {
-        if arg.starts_with('-') || is_non_registry_npm_spec(arg) {
-            continue;
-        }
-        let (name, version) = parse_npm_spec(arg);
-        packages.push((name, version.and_then(|v| normalize_npm_version_spec(&v))));
-    }
+    let packages: Vec<_> = args
+        .iter()
+        .skip(2)
+        .filter(|arg| !arg.starts_with('-') && !is_non_registry_npm_spec(arg))
+        .map(|arg| {
+            let (name, version) = parse_npm_spec(arg);
+            (name, version.and_then(|v| normalize_npm_version_spec(&v)))
+        })
+        .collect();
 
     if !packages.is_empty() {
         return packages;

@@ -258,32 +258,20 @@ pub(crate) fn filter_allowlisted_new_connections(
     new_connections: Vec<String>,
     ip_allowlist: &HashSet<String>,
 ) -> (Vec<String>, Vec<String>) {
-    let mut remaining = Vec::new();
-    let mut allowlisted = Vec::new();
-
     let canonical_allowlist: HashSet<String> = ip_allowlist
         .iter()
         .filter_map(|ip| ip.parse::<IpAddr>().ok().map(|_| normalize_ip_string(ip)))
         .collect();
 
-    for ip in new_connections {
-        match ip.parse::<IpAddr>() {
+    new_connections
+        .into_iter()
+        .partition(|ip| match ip.parse::<IpAddr>() {
             Ok(_) => {
-                // Compare on the IPv4-mapped-collapsed form so an allowlist
-                // entry of `172.17.0.2` matches a `::ffff:172.17.0.2` hit and
-                // vice versa.
-                let canonical = normalize_ip_string(&ip);
-                if canonical_allowlist.contains(&canonical) {
-                    allowlisted.push(ip);
-                } else {
-                    remaining.push(ip);
-                }
+                let canonical = normalize_ip_string(ip);
+                !canonical_allowlist.contains(&canonical)
             }
-            Err(_) => remaining.push(ip),
-        }
-    }
-
-    (remaining, allowlisted)
+            Err(_) => true,
+        })
 }
 
 fn normalize_domain(domain: &str) -> String {
@@ -863,18 +851,17 @@ fn parse_execve_argvs(trace: &str) -> Vec<Vec<String>> {
     let quoted_arg_re =
         QUOTED_ARG_RE.get_or_init(|| Regex::new(r#"\"((?:\\.|[^\"])*)\""#).unwrap());
 
-    let mut argvs = Vec::new();
-    for cap in execve_re.captures_iter(trace) {
-        let argv = cap.name("argv").map(|m| m.as_str()).unwrap_or("");
-        let args: Vec<String> = quoted_arg_re
-            .captures_iter(argv)
-            .filter_map(|m| m.get(1).map(|x| x.as_str().replace("\\\"", "\"")))
-            .collect();
-        if !args.is_empty() {
-            argvs.push(args);
-        }
-    }
-    argvs
+    execve_re
+        .captures_iter(trace)
+        .filter_map(|cap| {
+            let argv = cap.name("argv").map(|m| m.as_str()).unwrap_or("");
+            let args: Vec<String> = quoted_arg_re
+                .captures_iter(argv)
+                .filter_map(|m| m.get(1).map(|x| x.as_str().replace("\\\"", "\"")))
+                .collect();
+            if args.is_empty() { None } else { Some(args) }
+        })
+        .collect()
 }
 
 /// Returns the lowercased basename of an executable path (`/usr/bin/bun` -> `bun`).
@@ -1028,20 +1015,11 @@ fn filter_allowlisted_process_exec_signatures(
         .filter(|v| !v.is_empty())
         .collect();
 
-    let mut remaining = Vec::new();
-    let mut allowlisted = Vec::new();
-
-    for signature in signatures {
+    signatures.into_iter().partition(|signature| {
         let lower = signature.to_ascii_lowercase();
         let exe = lower.split('|').next().unwrap_or("").to_string();
-        if normalized_allowlist.contains(&lower) || normalized_allowlist.contains(&exe) {
-            allowlisted.push(signature);
-        } else {
-            remaining.push(signature);
-        }
-    }
-
-    (remaining, allowlisted)
+        !normalized_allowlist.contains(&lower) && !normalized_allowlist.contains(&exe)
+    })
 }
 
 /// Splits artifact findings into (blocked, allowlisted). An entry is
@@ -1059,10 +1037,7 @@ fn filter_allowlisted_artifact_findings(
         .filter(|v| !v.is_empty())
         .collect();
 
-    let mut remaining = Vec::new();
-    let mut allowlisted = Vec::new();
-
-    for finding in findings {
+    findings.into_iter().partition(|finding| {
         let prefix = {
             let parts: Vec<&str> = finding.splitn(3, '|').collect();
             if parts.len() >= 2 {
@@ -1071,30 +1046,21 @@ fn filter_allowlisted_artifact_findings(
                 finding.clone()
             }
         };
-        if normalized_allowlist.contains(&finding) || normalized_allowlist.contains(&prefix) {
-            allowlisted.push(finding);
-        } else {
-            remaining.push(finding);
-        }
-    }
-
-    (remaining, allowlisted)
+        !normalized_allowlist.contains(finding) && !normalized_allowlist.contains(&prefix)
+    })
 }
 
 fn filter_allowlisted_git_clone_signatures(
     signatures: Vec<String>,
     git_clone_allowlist: &HashSet<String>,
 ) -> (Vec<String>, Vec<String>) {
-    let mut remaining = Vec::new();
-    let mut allowlisted = Vec::new();
-
     let normalized_allowlist: HashSet<String> = git_clone_allowlist
         .iter()
         .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| !v.is_empty())
         .collect();
 
-    for signature in signatures {
+    signatures.into_iter().partition(|signature| {
         let target = signature
             .split('|')
             .next()
@@ -1102,14 +1068,8 @@ fn filter_allowlisted_git_clone_signatures(
             .trim()
             .to_ascii_lowercase();
 
-        if !target.is_empty() && normalized_allowlist.contains(&target) {
-            allowlisted.push(signature);
-        } else {
-            remaining.push(signature);
-        }
-    }
-
-    (remaining, allowlisted)
+        target.is_empty() || !normalized_allowlist.contains(&target)
+    })
 }
 
 fn select_effective_baselines(
@@ -1163,18 +1123,11 @@ fn select_age_eligible_baselines(
     cutoff: DateTime<Utc>,
     baseline_count: usize,
 ) -> Vec<String> {
-    let mut selected = Vec::new();
-    for version in candidates_newest_first {
-        if let Some(ts) = published_at.get(&version)
-            && *ts <= cutoff
-        {
-            selected.push(version);
-            if selected.len() >= baseline_count {
-                break;
-            }
-        }
-    }
-    selected
+    candidates_newest_first
+        .into_iter()
+        .filter(|version| published_at.get(version).is_some_and(|ts| *ts <= cutoff))
+        .take(baseline_count)
+        .collect()
 }
 
 /// Parses npm's `time` map into per-version publish timestamps, excluding the

@@ -1,40 +1,40 @@
-# Graph Report - gyrseek  (2026-06-18)
+# Graph Report - gyrseek  (2026-06-22)
 
 ## Corpus Check
-- 83 files · ~116,427 words
+- 81 files · ~116,353 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1386 nodes · 2078 edges · 116 communities (77 shown, 39 thin omitted)
+- 1376 nodes · 2074 edges · 114 communities (75 shown, 39 thin omitted)
 - Extraction: 98% EXTRACTED · 2% INFERRED · 0% AMBIGUOUS · INFERRED: 34 edges (avg confidence: 0.82)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `43fbe22d`
+- Built from commit: `0cd2935c`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
-- [[_COMMUNITY_Package Parsing & Version Pinning|Package Parsing & Version Pinning]]
-- [[_COMMUNITY_Routing, Config & Scan Orchestration|Routing, Config & Scan Orchestration]]
-- [[_COMMUNITY_Sandbox Backends & Dockerstrace|Sandbox Backends & Docker/strace]]
-- [[_COMMUNITY_Connection IP Extraction & Filtering|Connection IP Extraction & Filtering]]
-- [[_COMMUNITY_Git-Clone & Process-Exec Signatures|Git-Clone & Process-Exec Signatures]]
-- [[_COMMUNITY_Bun Execution Detection & Exemptions|Bun Execution Detection & Exemptions]]
-- [[_COMMUNITY_FCrDNS Allowlist Verification|FCrDNS Allowlist Verification]]
-- [[_COMMUNITY_Registry History & Baseline Selection|Registry History & Baseline Selection]]
-- [[_COMMUNITY_Shai-Hulud Watched-Process Detection|Shai-Hulud Watched-Process Detection]]
-- [[_COMMUNITY_npm package.json Manifest|npm package.json Manifest]]
-- [[_COMMUNITY_Host Command Forwarding|Host Command Forwarding]]
-- [[_COMMUNITY_Domain Allowlist & DNS Enrichment|Domain Allowlist & DNS Enrichment]]
-- [[_COMMUNITY_BurstRelease-Age CLI Tests|Burst/Release-Age CLI Tests]]
-- [[_COMMUNITY_Fail-Closed Forwarding Tests|Fail-Closed Forwarding Tests]]
+- [[_COMMUNITY_Community 0|Community 0]]
+- [[_COMMUNITY_Community 1|Community 1]]
+- [[_COMMUNITY_Community 2|Community 2]]
+- [[_COMMUNITY_Community 3|Community 3]]
+- [[_COMMUNITY_Community 4|Community 4]]
+- [[_COMMUNITY_Community 5|Community 5]]
+- [[_COMMUNITY_Community 6|Community 6]]
+- [[_COMMUNITY_Community 7|Community 7]]
+- [[_COMMUNITY_Community 8|Community 8]]
+- [[_COMMUNITY_Community 9|Community 9]]
+- [[_COMMUNITY_Community 10|Community 10]]
+- [[_COMMUNITY_Community 11|Community 11]]
+- [[_COMMUNITY_Community 12|Community 12]]
+- [[_COMMUNITY_Community 13|Community 13]]
 - [[_COMMUNITY_Community 14|Community 14]]
 - [[_COMMUNITY_Community 15|Community 15]]
-- [[_COMMUNITY_Fail-Closed Policy & Findings|Fail-Closed Policy & Findings]]
-- [[_COMMUNITY_Network Anomaly Decision|Network Anomaly Decision]]
+- [[_COMMUNITY_Community 16|Community 16]]
+- [[_COMMUNITY_Community 17|Community 17]]
 - [[_COMMUNITY_Community 18|Community 18]]
-- [[_COMMUNITY_Version Flag Tests|Version Flag Tests]]
+- [[_COMMUNITY_Community 19|Community 19]]
 - [[_COMMUNITY_Community 20|Community 20]]
 - [[_COMMUNITY_Community 23|Community 23]]
 - [[_COMMUNITY_Community 24|Community 24]]
@@ -54,7 +54,6 @@
 - [[_COMMUNITY_Community 39|Community 39]]
 - [[_COMMUNITY_Community 40|Community 40]]
 - [[_COMMUNITY_Community 41|Community 41]]
-- [[_COMMUNITY_Community 42|Community 42]]
 - [[_COMMUNITY_Community 43|Community 43]]
 - [[_COMMUNITY_Community 44|Community 44]]
 - [[_COMMUNITY_Community 45|Community 45]]
@@ -167,61 +166,61 @@
 - **Three Behavioral Signal Classes (network/git-clone/watched-process)** — src_scanning_extract_connection_ips, src_scanning_extract_process_exec_signatures, docs_architecture_behavioral_diffing [EXTRACTED 1.00]
 - **Binary-Spawning CLI Integration Tests** — cli_burst_exit_tests_exits_with_code_1_release_burst_threshold, forward_fail_closed_tests_forwarding_propagates_host_nonzero_exit_status, lock_routing_tests_poetry_lock_is_routed_to_lockfile_scan, version_flag_tests_version_flag_prints_crate_version_and_exits_zero [EXTRACTED 1.00]
 
-## Communities (116 total, 39 thin omitted)
+## Communities (114 total, 39 thin omitted)
 
-### Community 0 - "Package Parsing & Version Pinning"
+### Community 0 - "Community 0"
 Cohesion: 0.06
 Nodes (75): PEP 508 Extras Stripping, Forwarded-Command Version Pinning, Finding 11: Non-Registry npm Args Trigger package.json Fallback (Open), Finding 12: Non-Registry npm Args + No package.json Blocks Install (Open), Finding 5: Poetry Non-Develop Local Path Leak, Finding 6: PEP 508 Extras Cause PyPI 404, Finding 7: Extras Key Mismatch Breaks Pinning, Resolved-Version Pinning (+67 more)
 
-### Community 1 - "Routing, Config & Scan Orchestration"
+### Community 1 - "Community 1"
 Cohesion: 0.06
 Nodes (71): BaselineOverrideConfig, test: minimum_release_age_package not met exits 1, test: release_burst_threshold triggers exit 1, Fail-Closed Policy, In-Run Scan Cache, Runtime Entry Flow, Finding 9: Unrecognized Managers Forwarded Unscanned, Structured Logging Mode (planned) (+63 more)
 
-### Community 2 - "Sandbox Backends & Docker/strace"
+### Community 2 - "Community 2"
 Cohesion: 0.07
 Nodes (64): Box, CAP_SYS_PTRACE for Cross-UID Tracing, Unprivileged-Payload Trace Integrity (strace -u), MicroVM Sandbox Backend (planned hardening), ProbeTrace, announce_apparmor_status(), announce_seccomp_status(), apparmor_disabled_wont_call_apparmor_parser() (+56 more)
 
-### Community 3 - "Connection IP Extraction & Filtering"
+### Community 3 - "Community 3"
 Cohesion: 0.05
 Nodes (50): Finding 10: Self-Referencing Baseline Override (Open), G, artifact_delimiter_pipe_in_path_is_not_injected(), baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_returns_no_effective_baselines(), baseline_count_zero_with_override_equal_to_current_returns_empty(), both_override_slots_none_falls_through_to_fetched_baselines(), both_overrides_equal_to_current_skipped_and_filled_from_fetched() (+42 more)
 
-### Community 4 - "Git-Clone & Process-Exec Signatures"
+### Community 4 - "Community 4"
 Cohesion: 0.08
 Nodes (34): F, artifact_allowlist_matches_exact_finding_and_prefix(), artifact_findings_empty_for_clean_install(), domain_allowlist_does_not_filter_when_lookup_fails(), domain_allowlist_filters_resolved_domains_before_blocking(), domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot(), domain_is_allowlisted(), executable_basename() (+26 more)
 
-### Community 5 - "Bun Execution Detection & Exemptions"
+### Community 5 - "Community 5"
 Cohesion: 0.14
 Nodes (28): Default, Adding a New Supported Command, Behavioral Diffing, allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline(), artifact_allowlist_unblocks_new_findings(), artifact_delimiter_injection_attack_defeated_end_to_end() (+20 more)
 
-### Community 6 - "FCrDNS Allowlist Verification"
+### Community 6 - "Community 6"
 Cohesion: 0.11
 Nodes (21): Forward-Confirmed Reverse DNS (FCrDNS), Finding 2: PTR-Record Allowlist Bypass, R, Forward-Confirmed Reverse DNS, burst_policy_emits_warning_when_triggered(), burst_policy_warning(), decode_dns_name(), decode_dns_name_long_but_not_circular_pointer_chain() (+13 more)
 
-### Community 7 - "Registry History & Baseline Selection"
+### Community 7 - "Community 7"
 Cohesion: 0.18
 Nodes (16): DateTime, age_filter_includes_versions_exactly_at_cutoff(), age_filter_keeps_only_versions_older_than_cutoff(), age_filter_skips_candidates_without_publish_timestamps(), age_filter_still_respects_baseline_count_limit(), burst_count_is_not_inflated_by_created_modified(), count_releases_in_window(), fetch_history_with_baselines() (+8 more)
 
-### Community 8 - "Shai-Hulud Watched-Process Detection"
-Cohesion: 0.05
+### Community 8 - "Community 8"
+Cohesion: 0.06
 Nodes (38): 1) Build the scanner images, 1. Prerequisites, 2. Build, 2) Use a prebuilt image, 3) Enable prebuilt mode globally (optional), 3. Run your first scan, 4) Verify images are usable, 5) Use pinned image digests (recommended for reproducibility) (+30 more)
 
-### Community 9 - "npm package.json Manifest"
+### Community 9 - "Community 9"
 Cohesion: 0.10
 Nodes (24): Behavioral Diffing Across Versions, Shai-Hulud Attack Class, Watched-Process Execution Detection, Finding 3: Argv Regex Truncation at ], Direct Git Clone Runtime Interception, Shai-Hulud Attack, case_1_new_bun_is_flagged_against_clean_baseline(), case_2_existing_bun_plus_additional_invocation_is_flagged() (+16 more)
 
-### Community 10 - "Host Command Forwarding"
+### Community 10 - "Community 10"
 Cohesion: 0.10
 Nodes (19): Agent Portability Symlinks, Build and Test, Developer Guide, just Task Runner, Local Setup, Policy Config Surface, Practical Review Checklist, Required Change Hygiene (+11 more)
 
-### Community 11 - "Domain Allowlist & DNS Enrichment"
+### Community 11 - "Community 11"
 Cohesion: 0.06
 Nodes (34): Allowed operations, AppArmor, Backout plan, Capabilities and privileges, Configuration, Configuration, Current hardening limitations, Docker Security (+26 more)
 
-### Community 12 - "Burst/Release-Age CLI Tests"
+### Community 12 - "Community 12"
 Cohesion: 0.10
 Nodes (17): Command, Output, exits_with_code_1_and_uses_configured_release_burst_window_hours(), exits_with_code_1_and_warning_when_release_burst_threshold_triggers(), exits_with_code_1_when_minimum_release_age_package_is_not_met(), minimum_release_age_package_runs_before_burst_threshold(), run_with_config(), run_with_config_and_env() (+9 more)
 
-### Community 13 - "Fail-Closed Forwarding Tests"
+### Community 13 - "Community 13"
 Cohesion: 0.19
 Nodes (13): Cloud Metadata IP Exemption (169.254.169.254), Sandbox-Local IP Filtering, extract_connection_ips(), extract_connection_ips_captures_ipv4(), extract_connection_ips_captures_ipv6_inet_pton(), extract_connection_ips_collapses_ipv4_mapped_ipv6(), extract_connection_ips_drops_loopback_link_local_and_private(), extract_connection_ips_handles_mixed_v4_and_v6() (+5 more)
 
@@ -233,11 +232,11 @@ Nodes (14): IpAddr, PyPiReleaseFile, dns_interceptor_end_to_end_with_realistic_s
 Cohesion: 0.33
 Nodes (4): MutexGuard, EnvVarGuard, Drop, Self
 
-### Community 16 - "Fail-Closed Policy & Findings"
+### Community 16 - "Community 16"
 Cohesion: 0.04
 Nodes (47): Empty-Trace Hard Error, Complexity & Over-Engineering Findings (Ponytail Review — 2026-06-14), Finding 10 — Critical | `scanning.rs:654` | ✅ Fixed, Finding 11 — High | `parsing.rs:468` | ⚠️ Open, Finding 12 — High | `lib.rs:1021` | ⚠️ Open, Finding 13 — Medium | `scanning.rs:1852` | ✅ Fixed, Finding 14 — Low | `parsing.rs:880` | ⚠️ Open, Finding 15 — Low | `sandbox.rs:511` | ✅ Fixed (+39 more)
 
-### Community 17 - "Network Anomaly Decision"
+### Community 17 - "Community 17"
 Cohesion: 0.22
 Nodes (8): Agent Portability Symlinks, Agents Memory and Workflow, graphify, Mandatory Post-Change Policy, Mandatory Pre-Session Setup, Purpose, Quick Post-Change Checklist, Repository Memory
 
@@ -296,10 +295,6 @@ Nodes (13): File Inclusion (LFI/RFI), filepath.Clean Misuse, HttpServlet Path Tr
 ### Community 41 - "Community 41"
 Cohesion: 0.14
 Nodes (13): Browser DOM Manipulation, Direct ResponseWriter Write, Django HttpResponse, Echo with Request Data, Flask Unsanitized Response, General Prevention Guidelines, Language: Go, Language: Java (+5 more)
-
-### Community 42 - "Community 42"
-Cohesion: 0.22
-Nodes (8): Agent Portability Symlinks, Agents Memory and Workflow, graphify, Mandatory Post-Change Policy, Mandatory Pre-Session Setup, Purpose, Quick Post-Change Checklist, Repository Memory
 
 ### Community 43 - "Community 43"
 Cohesion: 0.15
@@ -462,24 +457,24 @@ Cohesion: 0.20
 Nodes (9): Activation, Answer Handling, Boundaries, Branch Resolution, Depth Control, Interrogation, Termination, The Method (+1 more)
 
 ## Knowledge Gaps
-- **644 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Drop`, `ForwardMode` (+639 more)
+- **632 isolated node(s):** `$schema`, `plugin`, `BaselineOverrideConfig`, `Drop`, `ForwardMode` (+627 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **39 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `run()` connect `Routing, Config & Scan Orchestration` to `Package Parsing & Version Pinning`, `Host Command Forwarding`, `Sandbox Backends & Docker/strace`?**
-  _High betweenness centrality (0.065) - this node is a cross-community bridge._
-- **Why does `SandboxRunner` connect `Sandbox Backends & Docker/strace` to `Routing, Config & Scan Orchestration`, `npm package.json Manifest`?**
-  _High betweenness centrality (0.037) - this node is a cross-community bridge._
-- **Why does `trace_sandbox_install_matrix()` connect `npm package.json Manifest` to `Sandbox Backends & Docker/strace`, `Connection IP Extraction & Filtering`, `Git-Clone & Process-Exec Signatures`, `Bun Execution Detection & Exemptions`, `Registry History & Baseline Selection`, `Fail-Closed Forwarding Tests`, `Community 14`?**
+- **Why does `run()` connect `Community 1` to `Community 0`, `Community 10`, `Community 2`?**
+  _High betweenness centrality (0.058) - this node is a cross-community bridge._
+- **Why does `SandboxRunner` connect `Community 2` to `Community 1`, `Community 9`?**
+  _High betweenness centrality (0.035) - this node is a cross-community bridge._
+- **Why does `trace_sandbox_install_matrix()` connect `Community 9` to `Community 2`, `Community 3`, `Community 4`, `Community 5`, `Community 7`, `Community 13`, `Community 14`?**
   _High betweenness centrality (0.035) - this node is a cross-community bridge._
 - **Are the 7 inferred relationships involving `run()` (e.g. with `test: minimum_release_age_package not met exits 1` and `test: release_burst_threshold triggers exit 1`) actually correct?**
   _`run()` has 7 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `$schema`, `plugin`, `BaselineOverrideConfig` to the rest of the system?**
-  _646 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `Package Parsing & Version Pinning` be split into smaller, more focused modules?**
+  _634 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Should `Community 0` be split into smaller, more focused modules?**
   _Cohesion score 0.061708860759493674 - nodes in this community are weakly interconnected._
-- **Should `Routing, Config & Scan Orchestration` be split into smaller, more focused modules?**
+- **Should `Community 1` be split into smaller, more focused modules?**
   _Cohesion score 0.05987703822507351 - nodes in this community are weakly interconnected._
