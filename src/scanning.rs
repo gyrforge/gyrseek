@@ -289,8 +289,6 @@ fn domain_is_allowlisted(domain: &str, domain_allowlist: &HashSet<String>) -> bo
     false
 }
 
-use itertools::{Either, Itertools};
-
 pub(crate) fn filter_domain_allowlisted_new_connections_with<F>(
     new_connections: Vec<String>,
     domain_allowlist: &HashSet<String>,
@@ -299,12 +297,19 @@ pub(crate) fn filter_domain_allowlisted_new_connections_with<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    new_connections.into_iter().partition_map(|ip| match resolver(&ip) {
-        Some(domain) if domain_is_allowlisted(&domain, domain_allowlist) => {
-            Either::Right(format!("{} -> {}", ip, domain))
+    let mut remaining = Vec::new();
+    let mut allowlisted = Vec::new();
+
+    for ip in new_connections {
+        match resolver(&ip) {
+            Some(domain) if domain_is_allowlisted(&domain, domain_allowlist) => {
+                allowlisted.push(format!("{} -> {}", ip, domain));
+            }
+            _ => remaining.push(ip),
         }
-        _ => Either::Left(ip),
-    })
+    }
+
+    (remaining, allowlisted)
 }
 
 /// Forward-confirmed reverse DNS (FCrDNS) for `ip`.
