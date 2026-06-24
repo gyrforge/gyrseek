@@ -51,6 +51,8 @@ struct GyrseekConfig {
     process_exec_allowlist: Vec<String>,
     #[serde(default)]
     artifact_allowlist: Vec<String>,
+    #[serde(default)]
+    sensitive_file_access_allowlist: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -232,6 +234,7 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
 
     let process_exec_allowlist = parse_list(cfg.process_exec_allowlist, true);
     let artifact_allowlist = parse_list(cfg.artifact_allowlist, false);
+    let sensitive_file_access_allowlist = parse_list(cfg.sensitive_file_access_allowlist, false);
 
     Ok(PolicyConfig {
         ip_allowlist,
@@ -247,6 +250,7 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         minimum_release_age_package,
         process_exec_allowlist,
         artifact_allowlist,
+        sensitive_file_access_allowlist,
     })
 }
 
@@ -385,6 +389,21 @@ mod config_tests {
         assert!(cfg.new_package_exemptions.contains("requests"));
         assert!(cfg.new_package_exemptions.contains("lodash"));
         assert_eq!(cfg.new_package_exemptions.len(), 2);
+    }
+
+    #[test]
+    fn parses_sensitive_file_access_allowlist() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(
+            file,
+            "sensitive_file_access_allowlist:\n  - .env\n  - /etc/passwd\n  - '  '"
+        )
+        .expect("config should be written");
+
+        let cfg = load(&file);
+        assert!(cfg.sensitive_file_access_allowlist.contains(".env"));
+        assert!(cfg.sensitive_file_access_allowlist.contains("/etc/passwd"));
+        assert_eq!(cfg.sensitive_file_access_allowlist.len(), 2);
     }
 
     #[test]
@@ -753,6 +772,7 @@ async fn scan_many_with_cache(
             .unwrap_or_else(|| ScanReport {
                 allowed: false,
                 resolved_version: tgt_version.clone(),
+                blocked_reasons: vec!["scan_failed".to_string()],
             });
         let key = format!("{}|{}|{}", manager, pkg_name, tgt_version);
         cache.insert(key, report.clone());

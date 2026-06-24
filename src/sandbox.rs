@@ -233,7 +233,7 @@ impl SandboxRunner for HostRunner {
             let mut args = vec![
                 "-f".to_string(),
                 "-e".to_string(),
-                "trace=network,execve".to_string(),
+                "trace=network,execve,open,openat,openat2,openat64,link,linkat,symlink,symlinkat,clone,clone3,fork,vfork,dup,dup2,dup3,fcntl".to_string(),
                 manager.to_string(),
                 npm_family_install_subcommand(manager).to_string(),
                 format!("{}@{}", package, version),
@@ -250,7 +250,7 @@ impl SandboxRunner for HostRunner {
             vec![
                 "-f".to_string(),
                 "-e".to_string(),
-                "trace=network,execve".to_string(),
+                "trace=network,execve,open,openat,openat2,openat64,link,linkat,symlink,symlinkat,clone,clone3,fork,vfork,dup,dup2,dup3,fcntl".to_string(),
                 "uv".to_string(),
                 "pip".to_string(),
                 "install".to_string(),
@@ -500,7 +500,7 @@ fn install_invocation(manager: &str, pkg_spec: &str) -> String {
 /// stderr.
 fn strace_install_command(manager: &str, pkg_spec: &str, out_log: Option<&str>) -> String {
     let mut cmd = format!(
-        "strace -f -s 4096 -v -xx -u {u} -e trace=network,execve",
+        "strace -f -s 4096 -v -xx -u {u} -e trace=network,execve,open,openat,?openat2,?openat64,link,linkat,symlink,symlinkat,clone,?clone3,fork,vfork,dup,dup2,?dup3,fcntl",
         u = SCANNER_USER
     );
     if let Some(path) = out_log {
@@ -941,7 +941,10 @@ mod tests {
         assert!(cmd.contains("-s 4096"), "missing -s flag: {cmd}");
         assert!(cmd.contains(" -v "), "missing -v flag: {cmd}");
         assert!(cmd.contains(" -xx "), "missing -xx flag: {cmd}");
-        assert!(cmd.contains("trace=network,execve"));
+        assert!(
+            cmd.contains("trace=network,execve,open,openat,?openat2,?openat64,link,linkat,symlink,symlinkat,clone,?clone3,fork,vfork,dup,dup2,?dup3,fcntl"),
+            "strace must trace exactly the required syscalls, found: {cmd}"
+        );
     }
 
     #[test]
