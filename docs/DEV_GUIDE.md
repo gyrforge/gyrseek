@@ -30,7 +30,7 @@ New skills added under `.agents/skills/` are automatically picked up by all tool
 See [`docs/DOCKER_SECURITY.md`](DOCKER_SECURITY.md) for the full reference. Key points:
 
 - Docker/microvm sandbox runs use `--cap-add SYS_PTRACE`, `--security-opt no-new-privileges`, and embedded seccomp + AppArmor profiles from `src/sandbox.rs`.
-- Seccomp: enabled by default (`GYRSEEK_DOCKER_SECCOMP_PROFILE`, default `true`). Disable: `GYRSEEK_DOCKER_SECCOMP_PROFILE=false`.
+- Seccomp: enabled by default by default. Disable: `--danger-disable-seccomp`.
 - AppArmor: disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`), requires `apparmor-utils` + prebuilt scanner image on Linux. Enable: `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`.
 - Startup logs announce seccomp/AppArmor status to stderr.
 - On macOS, AppArmor is unavailable — gyrseek warns and falls back to Docker's default profile.

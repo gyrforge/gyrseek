@@ -71,7 +71,7 @@ gyrseek fails closed in the following situations:
 
 See [`docs/DOCKER_SECURITY.md`](DOCKER_SECURITY.md) for the full reference. In brief:
 
-- Seccomp (enabled by default) and AppArmor (disabled by default) profiles are embedded in `src/sandbox.rs` and loaded at runtime.
+- Seccomp (enabled by default, can be disabled via `--danger-disable-seccomp`) and AppArmor (disabled by default) profiles are embedded in `src/sandbox.rs` and loaded at runtime.
 - `SYS_PTRACE` is added for cross-UID strace; the traced payload runs unprivileged.
 - Network access is enabled for package-manager registry access during probes.
 - Egress controls are planned for future phases once prebuilt scanner images and no-execution-first detection are stable.
@@ -92,7 +92,7 @@ See [`docs/DOCKER_SECURITY.md`](DOCKER_SECURITY.md) for the full reference. In b
 - src/lib.rs: routing and enforcement orchestration (including the `--version`/`-V` short-circuit); inline tests for GyrSeek::parse_package_details, parse_global_options edge cases, and config parsing (new_package_exemptions, internal_package_exemptions)
 - src/parsing.rs: command, lockfile, and requirements parsing; inline tests for all parsers, rewrite_args_with_pinned_versions (including the `latest`-pin guard for skipped internal packages), PEP 508 extras, local-source exclusions, npm non-registry filtering, uv lock upgrade arg parsing
 - src/scanning.rs: registry history lookup and behavior scanning; inline tests for version ordering, trace extraction (sandbox-local IP filtering, `::ffff:` collapse, metadata-IP preserved), anomaly detection, git-clone and watched-process diffing, FCrDNS, allowlist matching (including IPv4-mapped/bare equivalence), internal-package-exemption skip, missing-baseline fail-closed
-- src/sandbox.rs: sandbox backend abstraction and mode selection; inline seccomp profile (embedded JSON, materialized at runtime); inline tests for docker args, strace flags, SYS_PTRACE, seccomp toggle, strace-stderr capture, network isolation
+- src/sandbox.rs: sandbox backend abstraction and mode selection; inline seccomp profile (embedded JSON, materialized at runtime); inline tests for docker args, strace flags, SYS_PTRACE, seccomp toggle, strace-stderr capture, network isolation, sandbox constraints enforcement
 - tests/cli_burst_exit_tests.rs: release burst and minimum release age CLI exit-code tests (spawn binary)
 - tests/forward_fail_closed_tests.rs: fail-closed forwarding and host exit-status propagation (spawn binary; uses a fake `uv venv` passthrough vehicle)
 - tests/lock_routing_tests.rs: routing checks that bare `poetry lock` and `uv lock` reach the lockfile-scan branch, and that `uv venv` stays an unscanned passthrough (spawn binary)

@@ -164,9 +164,38 @@ This validates:
 - dns_map threading into the domain-aware diff
 - CDN rotation silent discard via DNS interceptor
 
-**Total: 53 tests documented; 53 pass, 0 fail.**
+**Original count: 53 tests documented.**
 
-## Coverage summary
+## 11. Expanded Test Coverage (278+ tests total)
+
+The codebase has evolved significantly since the initial domain-aware IP diff tests were documented. We now have comprehensive test coverage for all features, enforcing the strict fail-closed safety properties of the scanner.
+
+### `src/scanning.rs` (158 tests)
+- **Network Anomaly Detection**: 53 tests (documented in detail above).
+- **Behavioral Anomaly Detection**:
+  - `process_exec` (15+ tests): Watched-process detection (bun, deno, etc.), `process_exec_allowlist` overrides, exact vs. bare executable matching, and harness-command exclusions (`is_harness_command`).
+  - `git_clone` (10+ tests): Install-time git clone behavior diffing, recursive vs. non-recursive, and `git_clone_allowlist`.
+  - `sensitive_files` (15+ tests): Strace log parsing for `open`/`openat`/`symlinkat` attempts on high-risk files (`~/.aws/credentials`, `~/.npmrc`), absolute path resolution from `fdcwd`, and `sensitive_file_access_allowlist` prefix filtering.
+- **Artifact Scanning**: (15+ tests) End-to-end trace artifact extraction, binary classification (ELF/Mach-O), `suspicious_pth`, `unexpected_runtime`, null-byte (` `) delimiter injection prevention, and `artifact_allowlist` unblocking.
+- **Version Ordering & Overrides**: (30+ tests) PEP 440 vs Semver version resolution, `latest` pin resolution, minimum release age, burst threshold windows, and config overrides (`baseline_overrides`, `internal_package_exemptions`, `new_package_exemptions`).
+
+### `src/sandbox.rs` (27 tests)
+- **Container Constraints**: `docker_enforces_sandbox_constraints` integration test validating seccomp blocking of `process_vm_writev`.
+- **Sandbox Orchestration**: Arguments compilation (`build_docker_run_args`), `--danger-disable-seccomp` boolean toggle, `microvm` runtime injection, Docker CLI availability, strace stderr capture, and inline seccomp/AppArmor profile validity.
+
+### `src/parsing.rs` (47 tests)
+- **Lockfile & Requirements Parsing**: Exhaustive parser tests for `uv.lock`, `poetry.lock`, `requirements.txt`, `package.json` fallbacks.
+- **Exclusion Filters**: Poetry local-directory exclusion, npm non-registry spec (file/link/git) exclusion, editable vs. regular dependencies.
+- **Command Rewriting**: `rewrite_args_with_pinned_versions` ensuring safely-scanned packages are precisely pinned before host execution. PEP 508 extras stripping (`requests[security]`).
+
+### `src/lib.rs` & `tests/*.rs` (46 tests)
+- **Routing**: `lock_routing_tests`, `pnpm_routing_tests` asserting bare `uv lock`, `poetry lock`, and `pnpm install` correctly reach lockfile vs. package fallback scanners, while commands like `uv venv` passthrough safely.
+- **Process Exit**: `cli_burst_exit_tests` verifying exit code 1 propagation for release burst rules, `forward_fail_closed_tests` proving host command failure propagates perfectly.
+- **Version & Config**: `version_flag_tests` (`--version` short circuit without sandboxing), config deserialization tests.
+
+**Total**: 278 tests. 100% pass.
+
+## Original DNS Coverage summary
 
 - FCrDNS (forward_confirmed_hostname): 3 tests — all resolver branches
 - reverse_dns_domain: 1 test — input guard

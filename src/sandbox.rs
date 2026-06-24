@@ -72,6 +72,9 @@ const EMBEDDED_SECCOMP_PROFILE_JSON: &str = r#"{
                 "fspick",
                 "fsopen",
                 "init_module",
+                "io_uring_enter",
+                "io_uring_register",
+                "io_uring_setup",
                 "kexec_file_load",
                 "kexec_load",
                 "listen",
@@ -83,6 +86,7 @@ const EMBEDDED_SECCOMP_PROFILE_JSON: &str = r#"{
                 "open_tree",
                 "perf_event_open",
                 "pivot_root",
+                "process_vm_writev",
                 "umount2",
                 "userfaultfd"
             ],
@@ -181,25 +185,23 @@ pub(crate) trait SandboxRunner {
     }
 }
 
-pub(crate) fn build_runner_from_env() -> Result<Box<dyn SandboxRunner>, String> {
+pub(crate) fn build_runner_from_env(
+    danger_disable_seccomp: bool,
+) -> Result<Box<dyn SandboxRunner>, String> {
     let mode = std::env::var("GYRSEEK_SANDBOX").unwrap_or_else(|_| "docker".to_string());
 
-    match mode.as_str() {
+    let runner: Result<Box<dyn SandboxRunner>, String> = match mode.as_str() {
         "docker" => {
             if !docker_available() {
-                return Err(
-                    "Docker sandbox requested but `docker` is not available. Set GYRSEEK_SANDBOX=host only if you accept reduced safety.".to_string(),
-                );
+                return Err("docker is not available but GYRSEEK_SANDBOX=docker".to_string());
             }
-            announce_seccomp_status();
-            announce_apparmor_status();
-            Ok(Box::new(DockerRunner))
+            Ok(Box::new(DockerRunner {
+                danger_disable_seccomp,
+            }))
         }
         "microvm" => {
             if !docker_available() {
-                return Err(
-                    "MicroVM sandbox requested but `docker` is not available. Set GYRSEEK_SANDBOX=host only if you accept reduced safety.".to_string(),
-                );
+                return Err("docker is not available but GYRSEEK_SANDBOX=microvm".to_string());
             }
             let runtime = std::env::var("GYRSEEK_MICROVM_RUNTIME")
                 .unwrap_or_else(|_| "kata-runtime".to_string());
@@ -209,16 +211,34 @@ pub(crate) fn build_runner_from_env() -> Result<Box<dyn SandboxRunner>, String> 
                     runtime
                 ));
             }
-            announce_seccomp_status();
-            announce_apparmor_status();
-            Ok(Box::new(MicroVmRunner { runtime }))
+            Ok(Box::new(MicroVmRunner {
+                runtime,
+                danger_disable_seccomp,
+            }))
         }
-        "host" => Ok(Box::new(HostRunner)),
+        "host" => {
+            eprintln!(
+                "⚠️ [gyrseek] CRITICAL WARNING: Running in HOST mode (GYRSEEK_SANDBOX=host). Container isolation is completely INACTIVE. Packages will execute directly on your machine!"
+            );
+            if danger_disable_seccomp {
+                eprintln!(
+                    "⚠️ [gyrseek] Warning: --danger-disable-seccomp has no effect in host mode."
+                );
+            }
+            Ok(Box::new(HostRunner))
+        }
         _ => Err(format!(
             "Unsupported GYRSEEK_SANDBOX mode '{}'. Supported values: docker, microvm, host",
             mode
         )),
+    };
+
+    if runner.is_ok() && mode != "host" {
+        announce_seccomp_status(danger_disable_seccomp);
+        announce_apparmor_status();
     }
+
+    runner
 }
 
 struct HostRunner;
@@ -272,10 +292,13 @@ impl SandboxRunner for HostRunner {
     }
 }
 
-struct DockerRunner;
+struct DockerRunner {
+    danger_disable_seccomp: bool,
+}
 
 struct MicroVmRunner {
     runtime: String,
+    danger_disable_seccomp: bool,
 }
 
 impl SandboxRunner for DockerRunner {
@@ -293,7 +316,7 @@ impl SandboxRunner for DockerRunner {
         manager: &str,
         probes: &[(String, String)],
     ) -> Result<Vec<ProbeTrace>, String> {
-        trace_install_docker_matrix_with_runtime(manager, probes, None)
+        trace_install_docker_matrix_with_runtime(manager, probes, None, self.danger_disable_seccomp)
     }
 }
 
@@ -312,7 +335,12 @@ impl SandboxRunner for MicroVmRunner {
         manager: &str,
         probes: &[(String, String)],
     ) -> Result<Vec<ProbeTrace>, String> {
-        trace_install_docker_matrix_with_runtime(manager, probes, Some(&self.runtime))
+        trace_install_docker_matrix_with_runtime(
+            manager,
+            probes,
+            Some(&self.runtime),
+            self.danger_disable_seccomp,
+        )
     }
 }
 
@@ -320,6 +348,7 @@ fn trace_install_docker_matrix_with_runtime(
     manager: &str,
     probes: &[(String, String)],
     runtime: Option<&str>,
+    danger_disable_seccomp: bool,
 ) -> Result<Vec<ProbeTrace>, String> {
     if probes.is_empty() {
         return Ok(Vec::new());
@@ -331,7 +360,13 @@ fn trace_install_docker_matrix_with_runtime(
     let out_dir_path = out_dir.path().to_string_lossy().to_string();
 
     let script = build_matrix_script(manager, probes, image_config.prebuilt);
-    let args = build_docker_run_args(&image_config.image, &out_dir_path, runtime, &script)?;
+    let args = build_docker_run_args(
+        &image_config.image,
+        &out_dir_path,
+        runtime,
+        &script,
+        danger_disable_seccomp,
+    )?;
 
     let output = Command::new("docker")
         .args(&args)
@@ -362,7 +397,13 @@ fn trace_install_docker_matrix_with_runtime(
         // MUST NOT be treated as a clean zero-connection scan — fail closed.
         let mut trace = match std::fs::read_to_string(&trace_path) {
             Ok(contents) if !contents.trim().is_empty() => contents,
-            _ => trace_install_docker_single_with_runtime(manager, package, version, runtime)?,
+            _ => trace_install_docker_single_with_runtime(
+                manager,
+                package,
+                version,
+                runtime,
+                danger_disable_seccomp,
+            )?,
         };
         if trace.trim().is_empty() {
             let err_path = out_dir.path().join(format!("gyrseek_err_{}.log", idx));
@@ -397,12 +438,19 @@ fn trace_install_docker_single_with_runtime(
     package: &str,
     version: &str,
     runtime: Option<&str>,
+    danger_disable_seccomp: bool,
 ) -> Result<String, String> {
     let image_config = scanner_image_config(manager);
     let script = build_single_script(manager, package, version, image_config.prebuilt);
     // No /out bind mount here: the single-probe fallback captures strace output
     // from stderr rather than a log file.
-    let args = build_docker_run_args(&image_config.image, "", runtime, &script)?;
+    let args = build_docker_run_args(
+        &image_config.image,
+        "",
+        runtime,
+        &script,
+        danger_disable_seccomp,
+    )?;
 
     let output = Command::new("docker")
         .args(&args)
@@ -606,6 +654,7 @@ fn build_docker_run_args(
     out_dir_path: &str,
     runtime: Option<&str>,
     script: &str,
+    danger_disable_seccomp: bool,
 ) -> Result<Vec<String>, String> {
     let mut args = vec![
         "run".to_string(),
@@ -635,7 +684,7 @@ fn build_docker_run_args(
         "--tmpfs".to_string(),
         "/work:rw,noexec,nosuid,size=512m".to_string(),
     ];
-    if docker_seccomp_enabled_from_env() {
+    if !danger_disable_seccomp {
         let profile_path = embedded_seccomp_profile_path()?;
         args.push("--security-opt".to_string());
         args.push(format!("seccomp={profile_path}"));
@@ -659,13 +708,6 @@ fn build_docker_run_args(
     args.push("-lc".to_string());
     args.push(script.to_string());
     Ok(args)
-}
-
-fn docker_seccomp_enabled_from_env() -> bool {
-    std::env::var("GYRSEEK_DOCKER_SECCOMP_PROFILE")
-        .ok()
-        .map(|v| parse_bool_env(&v))
-        .unwrap_or(true)
 }
 
 fn docker_apparmor_enabled_from_env() -> bool {
@@ -786,15 +828,15 @@ fn embedded_seccomp_profile_path() -> Result<String, String> {
         .clone()
 }
 
-fn announce_seccomp_status() {
-    if docker_seccomp_enabled_from_env() {
+fn announce_seccomp_status(danger_disable_seccomp: bool) {
+    if !danger_disable_seccomp {
         eprintln!(
             "ℹ️ [gyrseek] Seccomp profile enabled: {} (embedded)",
             EMBEDDED_SECCOMP_PROFILE_NAME
         );
     } else {
         eprintln!(
-            "⚠️ [gyrseek] Seccomp profile not in use. Set GYRSEEK_DOCKER_SECCOMP_PROFILE=true to enable it."
+            "⚠️ [gyrseek] Embedded seccomp profile disabled via --danger-disable-seccomp. Omit the flag to re-enable."
         );
     }
 }
@@ -1018,47 +1060,31 @@ mod tests {
 
     #[test]
     fn docker_args_keep_out_mount_when_provided_and_omit_when_empty() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "false");
-        }
-
-        let with_out = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
+        let with_out = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
             .expect("docker args should build");
         assert!(with_out.iter().any(|a| a == "/tmp/out:/out"));
         assert!(with_out.iter().any(|a| a == "no-new-privileges"));
 
-        let without_out = build_docker_run_args("img:latest", "", None, "echo hi")
+        let without_out = build_docker_run_args("img:latest", "", None, "echo hi", false)
             .expect("docker args should build");
         assert!(!without_out.iter().any(|a| a.ends_with(":/out")));
-
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
-        }
     }
 
     #[test]
     fn docker_args_pass_runtime_when_set() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "false");
-        }
-
-        let args = build_docker_run_args("img:latest", "/tmp/out", Some("kata-runtime"), "echo hi")
-            .expect("docker args should build");
+        let args = build_docker_run_args(
+            "img:latest",
+            "/tmp/out",
+            Some("kata-runtime"),
+            "echo hi",
+            false,
+        )
+        .expect("docker args should build");
         let pos = args
             .iter()
             .position(|a| a == "--runtime")
             .expect("runtime flag present");
         assert_eq!(args.get(pos + 1).map(String::as_str), Some("kata-runtime"));
-
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
-        }
     }
 
     #[test]
@@ -1066,35 +1092,19 @@ mod tests {
         // strace -u drops the install to an unprivileged user; attaching across
         // UIDs needs CAP_SYS_PTRACE, which Docker does not grant by default.
         // Without this the sandbox can never produce a trace.
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "false");
-        }
 
-        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
+        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
             .expect("docker args should build");
         let pos = args
             .iter()
             .position(|a| a == "--cap-add")
             .expect("--cap-add flag present");
         assert_eq!(args.get(pos + 1).map(String::as_str), Some("SYS_PTRACE"));
-
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
-        }
     }
 
     #[test]
     fn docker_args_adds_seccomp_profile_by_default() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
-        }
-
-        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
+        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
             .expect("docker args should build");
 
         let mut found = false;
@@ -1111,46 +1121,12 @@ mod tests {
     }
 
     #[test]
-    fn docker_args_disables_seccomp_when_env_var_false() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "false");
-        }
-
-        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
+    fn docker_args_disables_seccomp_when_danger_flag_true() {
+        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", true)
             .expect("docker args should build");
-
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
-        }
-
         assert!(
             !args.iter().any(|a| a.starts_with("seccomp=")),
-            "false env var must disable seccomp profile"
-        );
-    }
-
-    #[test]
-    fn docker_args_enables_seccomp_when_env_var_true() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::set_var("GYRSEEK_DOCKER_SECCOMP_PROFILE", "true");
-        }
-
-        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi")
-            .expect("docker args should build");
-
-        // SAFETY: guarded by a process-wide mutex in this test module.
-        unsafe {
-            std::env::remove_var("GYRSEEK_DOCKER_SECCOMP_PROFILE");
-        }
-
-        assert!(
-            args.iter().any(|a| a.starts_with("seccomp=")),
-            "true env var should enable seccomp profile"
+            "danger flag must disable seccomp profile"
         );
     }
 
@@ -1389,6 +1365,122 @@ mod tests {
         assert!(
             probe1_artifacts > probe1_install,
             "artifact scan must follow install for probe 1"
+        );
+    }
+
+    #[test]
+    fn embedded_seccomp_profile_structurally_blocks_dangerous_syscalls() {
+        let profile: serde_json::Value = serde_json::from_str(EMBEDDED_SECCOMP_PROFILE_JSON)
+            .expect("embedded seccomp profile should be valid JSON");
+
+        let syscalls = profile["syscalls"]
+            .as_array()
+            .expect("profile syscalls should be an array");
+
+        let mut found_setup = false;
+        let mut found_enter = false;
+        let mut found_register = false;
+        let mut found_vm_writev = false;
+
+        for rule in syscalls {
+            if rule["action"] == "SCMP_ACT_ERRNO" {
+                let Some(names) = rule["names"].as_array() else {
+                    continue;
+                };
+                for name in names {
+                    if let Some(s) = name.as_str() {
+                        match s {
+                            "io_uring_setup" => found_setup = true,
+                            "io_uring_enter" => found_enter = true,
+                            "io_uring_register" => found_register = true,
+                            "process_vm_writev" => found_vm_writev = true,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(found_setup, "io_uring_setup must be blocked");
+        assert!(found_enter, "io_uring_enter must be blocked");
+        assert!(found_register, "io_uring_register must be blocked");
+        assert!(found_vm_writev, "process_vm_writev must be blocked");
+    }
+
+    #[test]
+    fn docker_enforces_sandbox_constraints() {
+        use std::process::Command;
+
+        if Command::new("docker").arg("info").output().is_err() {
+            if std::env::var("CI").is_ok() {
+                panic!("Docker must be available in CI environments for enforcement testing!");
+            }
+            eprintln!("Docker not available, skipping sandbox enforcement test");
+            return;
+        }
+
+        let arch = std::env::consts::ARCH;
+        if arch != "x86_64" && arch != "aarch64" {
+            if std::env::var("CI").is_ok() {
+                panic!("CI must run on x86_64 or aarch64 to test seccomp constraints!");
+            }
+            eprintln!(
+                "Unsupported architecture '{}' for syscall test, skipping",
+                arch
+            );
+            return;
+        }
+
+        let python_script = r#"import sys, ctypes, platform
+success = True
+
+libc = ctypes.CDLL("libc.so.6", use_errno=True)
+machine = platform.machine()
+if machine in ("x86_64", "amd64"):
+    SYS_process_vm_writev = 311
+elif machine in ("aarch64", "arm64"):
+    SYS_process_vm_writev = 271
+else:
+    print("Unknown architecture:", machine, file=sys.stderr)
+    sys.exit(1)
+
+ctypes.set_errno(0)
+res = libc.syscall(SYS_process_vm_writev, 0, 0, 0, 0, 0, 0)
+err = ctypes.get_errno()
+
+if res == -1 and err == 1:
+    print("PASS: process_vm_writev blocked with EPERM", file=sys.stderr)
+else:
+    print(f"FAIL: process_vm_writev returned {res}, errno {err} (expected EPERM=1)", file=sys.stderr)
+    success = False
+
+sys.exit(0 if success else 1)"#;
+
+        let command_str = format!("python3 -c '{}'", python_script);
+
+        let image = match arch {
+            "x86_64" => {
+                "python@sha256:129f9f5d5729767916d79f0021ba4fe56ff113332b08ef1213ecf529a9da7ebb"
+            } // python:3.13-slim-bookworm (amd64)
+            "aarch64" => {
+                "python@sha256:f2c0cbd763245b6de85ecbbf17b07a4802e847cecd9b9e2807a2cef330bd8245"
+            } // python:3.13-slim-bookworm (arm64/v8)
+            _ => unreachable!(),
+        };
+        let protected_args = build_docker_run_args(image, "", None, &command_str, false).unwrap();
+
+        let protected_run = Command::new("docker")
+            .args(&protected_args)
+            .output()
+            .expect("docker command should run");
+
+        assert!(
+            protected_run.status.success(),
+            "Protected sandbox test failed (constraints violated)!
+Stdout: {}
+Stderr: {}",
+            String::from_utf8_lossy(&protected_run.stdout),
+            String::from_utf8_lossy(&protected_run.stderr)
         );
     }
 }

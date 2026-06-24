@@ -390,6 +390,17 @@ A distinct gap is the Telnyx import-time pattern (T26): placing malicious code a
 
 `gyrseek` reads a YAML policy file to allowlist known-good endpoints and tune its release gates.
 
+### CLI Arguments
+
+Gyrseek supports the following global CLI arguments. They must be provided *before* the package manager command (e.g., `gyrseek --config=./my.yaml npm install`).
+
+| Argument | Description |
+|---|---|
+| `--version`, `-V` | Prints the current Gyrseek version and exits. |
+| `--config`, `-c` | Path to the YAML policy file. Overrides the default `gyrseek.yaml` and `GYRSEEK_CONFIG` environment variable. Example: `--config=./policy.yaml`. |
+| `--danger-disable-seccomp` | Disables the embedded default-allow seccomp profile during the sandbox phase. This drastically reduces the sandbox's security guarantees and should only be used for debugging. |
+
+
 **Config path:** defaults to `gyrseek.yaml` in the working directory. Override it with `--config` / `-c` or the `GYRSEEK_CONFIG` environment variable:
 
 ```bash
@@ -502,7 +513,7 @@ GYRSEEK_SANDBOX=host  ./target/release/gyrseek pip3 install -r requirements.txt
 | `GYRSEEK_PY_SCANNER_IMAGE`                                     | `python:3.13-slim-bookworm@sha256:05b9...` | Python scanner image (pip/uv/poetry).     |
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES`                              | `false`                 | Enable prebuilt fast path for both managers. |
 | `GYRSEEK_NPM_SCANNER_PREBUILT` / `GYRSEEK_PY_SCANNER_PREBUILT` | `false`                 | Per-manager prebuilt override.               |
-| `GYRSEEK_DOCKER_SECCOMP_PROFILE`                               | `true`                  | Boolean toggle (`true`/`false`) for embedded seccomp profile use in Docker/microvm sandbox runs. |
+
 | `GYRSEEK_DOCKER_APPARMOR_PROFILE`                               | `false`                 | Boolean toggle (`true`/`false`) for embedded AppArmor profile use in Docker/microvm sandbox runs. Loaded via `apparmor_parser` at runtime. On macOS (where `apparmor_parser` is unavailable), a warning is emitted and the sandbox falls back to Docker's default AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on native Linux hosts (runtime apt setup conflicts with profile). Defaults to `false` because the prerequisites are not always met. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection. |
 
 In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency.
@@ -611,7 +622,7 @@ Details worth knowing once you're past the basics.
 
 See [`docs/DOCKER_SECURITY.md`](docs/DOCKER_SECURITY.md) for the canonical reference on Docker sandbox hardening, including:
 
-- **Seccomp profile** — embedded in `src/sandbox.rs`, enabled by default (`GYRSEEK_DOCKER_SECCOMP_PROFILE=true`), materialized to a temp file at runtime. Denies high-risk syscalls while preserving network access for package managers.
+- **Seccomp profile** — embedded in `src/sandbox.rs`, enabled by default, materialized to a temp file at runtime. Denies high-risk syscalls while preserving network access for package managers.
 - **AppArmor profile** — embedded in `src/sandbox.rs`, disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`); enable explicitly with `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`. Loaded via `apparmor_parser` at runtime. Requires `apparmor-utils` + prebuilt scanner image on Linux. Falls back with a warning on macOS. Recommended for stronger path-based protection.
 - **Capabilities** — `SYS_PTRACE` added for cross-UID strace; `no-new-privileges` enabled.
 - **Unprivileged payload** — traced install runs as unprivileged user; trace logs are root-owned.

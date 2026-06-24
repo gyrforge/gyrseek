@@ -63,10 +63,26 @@ struct BaselineOverrideConfig {
     baseline_2: Option<String>,
 }
 
-fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool), String> {
+fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool, bool), String> {
+    if env::var("GYRSEEK_DOCKER_SECCOMP_PROFILE").is_ok() {
+        eprintln!(
+            "⚠️ [gyrseek] Warning: GYRSEEK_DOCKER_SECCOMP_PROFILE is deprecated and ignored. Use --danger-disable-seccomp instead."
+        );
+    }
+
     let mut cfg_path =
         env::var("GYRSEEK_CONFIG").unwrap_or_else(|_| DEFAULT_CONFIG_PATH.to_string());
     let mut cfg_explicit = env::var("GYRSEEK_CONFIG").is_ok();
+
+    let danger_disable_seccomp = args.iter().any(|arg| arg == "--danger-disable-seccomp");
+    let mut filtered_args = Vec::with_capacity(args.len());
+    for arg in args {
+        if arg != "--danger-disable-seccomp" {
+            filtered_args.push(arg);
+        }
+    }
+    let args = filtered_args;
+
     let mut idx = 0usize;
 
     while idx < args.len() {
@@ -92,7 +108,12 @@ fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool)
         break;
     }
 
-    Ok((args[idx..].to_vec(), cfg_path, cfg_explicit))
+    Ok((
+        args[idx..].to_vec(),
+        cfg_path,
+        cfg_explicit,
+        danger_disable_seccomp,
+    ))
 }
 
 fn parse_list(items: Vec<String>, lowercase: bool) -> HashSet<String> {
@@ -270,17 +291,17 @@ mod config_tests {
             "lodash".to_string(),
         ];
 
-        let (manager_args, path, explicit) =
+        let (manager_args, cfg_path, cfg_explicit, _) =
             parse_global_options(args).expect("parse should succeed");
         assert_eq!(manager_args, vec!["npm", "install", "lodash"]);
-        assert_eq!(path, "my-policy.yaml");
-        assert!(explicit);
+        assert_eq!(cfg_path, "my-policy.yaml");
+        assert!(cfg_explicit);
     }
 
     #[test]
     fn keeps_args_untouched_when_no_global_options_present() {
         let args = vec!["uv".to_string(), "sync".to_string()];
-        let (manager_args, _, _) = parse_global_options(args).expect("parse should succeed");
+        let (manager_args, _, _, _) = parse_global_options(args).expect("parse should succeed");
         assert_eq!(manager_args, vec!["uv", "sync"]);
     }
 
@@ -538,7 +559,7 @@ mod config_tests {
             "install".to_string(),
             "pkg".to_string(),
         ];
-        let (manager_args, path, explicit) = parse_global_options(args).expect("should parse");
+        let (manager_args, path, explicit, _) = parse_global_options(args).expect("should parse");
         assert_eq!(path, "-relative.yaml");
         assert!(explicit);
         assert_eq!(manager_args, vec!["npm", "install", "pkg"]);
@@ -553,10 +574,57 @@ mod config_tests {
             "install".to_string(),
             "requests".to_string(),
         ];
-        let (manager_args, path, explicit) = parse_global_options(args).expect("should parse");
+        let (manager_args, path, explicit, _) = parse_global_options(args).expect("should parse");
         assert_eq!(path, "path=with=equals.yaml");
         assert!(explicit);
         assert_eq!(manager_args, vec!["pip", "install", "requests"]);
+    }
+
+    #[test]
+    fn danger_disable_seccomp_parsing_edge_cases() {
+        // (a) Flag before --config
+        let args = vec![
+            "--danger-disable-seccomp".to_string(),
+            "--config=my.yaml".to_string(),
+            "npm".to_string(),
+            "install".to_string(),
+        ];
+        let (mgr_args, _, _, danger) = parse_global_options(args).expect("should parse");
+        assert!(danger);
+        assert_eq!(mgr_args, vec!["npm", "install"]);
+
+        // (a) Flag after --config
+        let args = vec![
+            "--config=my.yaml".to_string(),
+            "--danger-disable-seccomp".to_string(),
+            "npm".to_string(),
+            "install".to_string(),
+        ];
+        let (mgr_args, _, _, danger) = parse_global_options(args).expect("should parse");
+        assert!(danger);
+        assert_eq!(mgr_args, vec!["npm", "install"]);
+
+        // (b) Multiple occurrences
+        let args = vec![
+            "--danger-disable-seccomp".to_string(),
+            "--danger-disable-seccomp".to_string(),
+            "npm".to_string(),
+            "install".to_string(),
+        ];
+        let (mgr_args, _, _, danger) = parse_global_options(args).expect("should parse");
+        assert!(danger);
+        assert_eq!(mgr_args, vec!["npm", "install"]);
+
+        // (c) Flag after manager command is forwarded/consumed globally
+        let args = vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "lodash".to_string(),
+            "--danger-disable-seccomp".to_string(),
+        ];
+        let (mgr_args, _, _, danger) = parse_global_options(args).expect("should parse");
+        assert!(danger);
+        assert_eq!(mgr_args, vec!["npm", "install", "lodash"]);
     }
 }
 
@@ -818,13 +886,14 @@ pub async fn run(args: Vec<String>) {
         return;
     }
 
-    let (args, config_path, config_explicit) = match parse_global_options(args) {
-        Ok(v) => v,
-        Err(e) => {
-            println!("❌ [gyrseek] {}", e);
-            std::process::exit(1);
-        }
-    };
+    let (args, config_path, config_explicit, danger_disable_seccomp) =
+        match parse_global_options(args) {
+            Ok(v) => v,
+            Err(e) => {
+                println!("❌ [gyrseek] {}", e);
+                std::process::exit(1);
+            }
+        };
 
     let policy = match load_policy_config(&config_path, config_explicit) {
         Ok(v) => v,
@@ -938,7 +1007,7 @@ pub async fn run(args: Vec<String>) {
     let runner = if env::var("GYRSEEK_TEST_BYPASS_RUNNER_INIT").ok().as_deref() == Some("1") {
         Box::new(NoopRunner) as Box<dyn SandboxRunner>
     } else {
-        match build_runner_from_env() {
+        match build_runner_from_env(danger_disable_seccomp) {
             Ok(r) => r,
             Err(e) => {
                 println!("❌ [gyrseek] Sandbox initialization failed: {}", e);
