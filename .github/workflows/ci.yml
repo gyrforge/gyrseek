@@ -495,9 +495,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Just test uv
-        env:
-          GYRSEEK_DOCKER_SECCOMP_PROFILE: false
-        run: just test-uv
+        run: just test-uv "--danger-disable-seccomp"
 
   linux-docker-seccomp-uv-test:
     name: (Linux) (Docker) (Seccomp) Test CLI with (uv)

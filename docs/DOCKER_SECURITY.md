@@ -37,14 +37,11 @@ The Docker backend batches multiple package-version probes (current + baselines 
 An embedded seccomp profile is stored in `src/sandbox.rs` as `EMBEDDED_SECCOMP_PROFILE_JSON` and materialized to a temp file at runtime.
 
 ### Configuration
-
-| Variable | Default | Notes |
-|---|---|---|
-| `GYRSEEK_DOCKER_SECCOMP_PROFILE` | `true` | Boolean toggle (`true`/`false`). |
+The profile can be disabled via the `--danger-disable-seccomp` CLI flag.
 
 ```bash
 # Disable seccomp
-GYRSEEK_DOCKER_SECCOMP_PROFILE=false \
+gyrseek ... --danger-disable-seccomp \
 ./target/release/gyrseek npm install lodash
 ```
 
@@ -57,7 +54,7 @@ An early version of the profile denied core networking syscalls (`socket`, `conn
 ### Status output
 
 - Enabled: `ℹ️ [gyrseek] Seccomp profile enabled: seccomp.gyrseek-tracing.json (embedded)`
-- Disabled: `⚠️ [gyrseek] Seccomp profile not in use. Set GYRSEEK_DOCKER_SECCOMP_PROFILE=true to enable it.`
+- Disabled: `⚠️ [gyrseek] Seccomp profile not in use. Remove --danger-disable-seccomp to enable it.`
 
 ### Platform note
 
@@ -232,8 +229,8 @@ Expected: exit code 0, `/tmp/trace.log` non-empty, apt registry reachable.
 Test with and without seccomp:
 
 ```bash
-GYRSEEK_DOCKER_SECCOMP_PROFILE=true just test-npm
-GYRSEEK_DOCKER_SECCOMP_PROFILE=false just test-npm
+just test-npm
+just test-npm # note: you would need to pass --danger-disable-seccomp to gyrseek inside the test
 ```
 
 Expected: no widespread "empty trace" failures; normal fail-closed behavior only for genuine findings.
@@ -276,7 +273,7 @@ Expected: scan results and behavior are identical with or without AppArmor.
 
 If scans regress:
 
-1. Remove custom seccomp (`GYRSEEK_DOCKER_SECCOMP_PROFILE=false`) and retest.
+1. Remove custom seccomp (`--danger-disable-seccomp`) and retest.
 2. Remove custom AppArmor profile and retest.
 3. Keep only `no-new-privileges` + `SYS_PTRACE` + resource limits until a narrower policy is validated.
 
@@ -286,7 +283,7 @@ If scans regress:
 |---|---|---|
 | `GYRSEEK_SANDBOX` | `docker` | Sandbox mode: `docker`, `host`, or `microvm`. |
 | `GYRSEEK_MICROVM_RUNTIME` | `kata-runtime` | Docker runtime for microvm mode. |
-| `GYRSEEK_DOCKER_SECCOMP_PROFILE` | `true` | Boolean toggle for embedded seccomp profile. |
+
 | `GYRSEEK_DOCKER_APPARMOR_PROFILE` | `false` | Boolean toggle for embedded AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on Linux. Defaults to `false` because prerequisites are not always met. |
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES` | `false` | Enable prebuilt fast path for all managers. |
 | `GYRSEEK_NPM_SCANNER_PREBUILT` | `false` | Prebuilt override for npm/pnpm. |

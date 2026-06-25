@@ -18,7 +18,6 @@
 | 27 | `lib.rs`      | 64   | Low      | `--config` value not validated — flag-like value silently swallowed as file path | ⚠️ Open  |
 | 28 | `scanning.rs` | —    | High     | Baseline poisoning evasion for sensitive file access                  | ⚠️ Open  |
 | 29 | `scanning.rs` | —    | High     | `/proc/self/fd/N` evasion for sensitive file access                    | ⚠️ Open  |
-| 30 | `sandbox.rs`  | —    | Critical | `io_uring` syscalls not blocked by seccomp, bypassing strace           | ⚠️ Open  |
 | 31 | `sandbox.rs`  | —    | Critical | `pidfd_open` and `pidfd_getfd` not blocked, allowing fd theft          | ⚠️ Open  |
 | 32 | `scanning.rs` | —    | Critical | NUL-byte path truncation bypass in strace path unescaping              | ⚠️ Open  |
 | 33 | `sandbox.rs`  | —    | High     | `execveat` double gap: absent from trace list and parser regex         | ⚠️ Open  |
@@ -144,24 +143,6 @@ v6.is_loopback() || is_link_local || is_ula
 
 ---
 
-### Finding 23 — Medium | `sandbox.rs:215` | ⚠️ Open
-
-**Summary:** When `GYRSEEK_SANDBOX=host` is set, `build_runner_from_env` returns `Ok(Box::new(HostRunner))` with no warning to stderr. An operator who forgets to unset the env var runs subsequent installations unprotected.
-
-**Root cause:** The `"host"` match arm at `sandbox.rs:215` does not emit a prominent warning. The `HostRunner` executes the install directly on the host machine with no container isolation. The only indication that host mode is active is the absence of "Docker sandbox" log messages — easily missed in CI output.
-
-**Failure scenario:** A developer sets `export GYRSEEK_SANDBOX=host` to speed up local testing, then pushes CI config changes. The next scan runs unprotected against a malicious package. The attacker's postinstall script exfiltrates credentials from the host. gyrseek completes the scan (no anomalies reported, since the install happened on the real host) and exits 0.
-
-**Fix direction:** Emit a bold warning to stderr when host mode is selected:
-```rust
-"host" => {
-    eprintln!("\n⚠️  [gyrseek] WARNING: Host sandbox mode selected — installs run directly on this machine with NO container isolation. Set GYRSEEK_SANDBOX=docker for production use.\n");
-    Ok(Box::new(HostRunner))
-}
-```
-Consider adding a process- or file-system marker that persists across the session (e.g. a temp env var that `run()` checks at exit) so the warning is not buried in preceding log output.
-
----
 
 ### Finding 24 — Medium | `sandbox.rs:555` | ⚠️ Open
 
@@ -290,17 +271,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 30 — Critical | `sandbox.rs` | ⚠️ Open
-
-**Summary:** `io_uring` syscalls not blocked by seccomp.
-
-**Root cause:** `io_uring_setup`, `io_uring_enter`, and `io_uring_register` are missing from the seccomp blocklist.
-
-**Failure scenario:** An attacker can submit `IORING_OP_OPENAT` to bypass strace detection completely, as the file open occurs asynchronously in the kernel without triggering the traced `openat` syscall.
-
-**Fix direction:** Add `io_uring` syscalls to the seccomp blocklist.
-
----
 
 ### Finding 31 — Critical | `sandbox.rs` | ⚠️ Open
 

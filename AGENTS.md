@@ -146,7 +146,7 @@ not the entire codebase.
   - An empty/whitespace sandbox trace is now a hard error (block the whole batch) rather than an empty-but-clean pass: trace_install_docker_matrix_with_runtime returns Err on a blank matrix log + failed single-probe fallback, and the single-probe fallback checks docker exit status. Previously unwrap_or_default() returned "" → empty TraceSignals → allowed:true on any strace failure (was FIXED_FINDINGS.md #1)
   - strace's own stderr is captured per-probe to `/out/gyrseek_err_N.log` instead of `>/dev/null 2>&1`; `|| true` is kept only so one failing install does not abort sibling probes — a genuine attach failure leaves a blank trace which the empty-trace check turns into a block (was FIXED_FINDINGS.md #4; deliberately did NOT use `set -e` to abort on strace exit, since strace returns the tracee's exit code and a legitimately failing baseline install would otherwise DoS the whole batch)
   - Docker sandbox security (see [`docs/DOCKER_SECURITY.md`](docs/DOCKER_SECURITY.md) for full reference): embedded seccomp + AppArmor profiles in `src/sandbox.rs`; `--cap-add SYS_PTRACE` for cross-UID strace; `--security-opt no-new-privileges`; unprivileged payload via `strace -u gyrseek` with root-owned trace logs; probe batching in single container sessions; strace stderr captured per-probe; empty-trace fail-closed
-  - Seccomp: enabled by default (`GYRSEEK_DOCKER_SECCOMP_PROFILE`, default `true`); conservative profile that avoids denying networking syscalls (fixed regression that broke DNS/apt)
+  - Seccomp: enabled by default (disable with `--danger-disable-seccomp`); conservative profile that avoids denying networking syscalls but strictly blocks `io_uring` syscalls to prevent async file I/O bypass of strace monitoring
   - AppArmor: disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`); loaded via `apparmor_parser --cache-loc <tmpdir>`; requires `apparmor-utils` + prebuilt scanner image on Linux; falls back with warning on macOS. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection.
   - Capabilities not fully dropped; read-only rootfs not enabled (both blocked by runtime apt setup; prebuilt images unblock tighter defaults)
   - Network access enabled for registry access during probes; egress controls planned for future phases
@@ -164,7 +164,7 @@ After every code or behavior change in this repository:
 6. Ensure these updates happen in the same change set whenever possible.
 7. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, docs/ROADMAP.md, and docs/DOCKER_SECURITY.md.
 8. If test structure or coverage changes significantly, update docs/TESTS.md.
-9. If a new finding is identified, add it to docs/OPEN_FINDINGS.md. When a finding is fixed, move it from OPEN_FINDINGS.md to docs/FIXED_FINDINGS.md. If it is excluded from fixing, move it to docs/WONT_FIX_FINDINGS.md.
+9. If a new finding is identified, add it to docs/OPEN_FINDINGS.md. When a finding is fixed, move it from OPEN_FINDINGS.md to docs/FIXED_FINDINGS.md. If it is excluded from fixing, move it to docs/WONT_FIX_FINDINGS.md. Remember to update the tables too.
 10. Load `understand-code` skill for end-of-session teaching and verification.
 
 ## Quick Post-Change Checklist

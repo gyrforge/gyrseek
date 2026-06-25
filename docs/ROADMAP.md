@@ -21,8 +21,9 @@
 - Domain-aware IP diff using FCrDNS — resolves each IP at the domain level rather than the IP level, silently discarding CDN edge IPs whose domain was already seen in baseline traffic. No hardcoded registry domain list needed.
 - Strace-based DNS interceptor fallback: `extract_dns_map` / `parse_dns_response` / `decode_dns_name` parse raw DNS wire-format from strace `recvfrom` output (requires strace `-xx` flag). When FCrDNS fails for a PTR-less IP (e.g. Fastly, Cloudflare), the container's own DNS responses are consulted; host-side `lookup_host` verifies the binding before trusting it. Circular pointer protection (5-hop limit) prevents crafted DNS packets from hanging the scanner.
 - `-xx` strace flag added for deterministic hex-escape output; `extract_process_exec_signatures` unescapes hex-escaped argv so `is_harness_command` filtering continues to work correctly.
-
 ## Near Term
+- Change baseline comparison to be strict by default: aggressively fail closed if the registry does not contain enough historical versions to satisfy `baseline_count`, instead of silently falling back to a smaller baseline pool.
+- Fetch and analyze registry metadata (npm and Python package indices) prior to executing the sandbox to fast-fail on obvious static anomalies (e.g. newly introduced suspicious dependencies or scripts).
 - Add richer requirements and constraints parsing coverage, especially environment markers and line continuations.
 - Add end-to-end command-path tests for pinned forwarding and lockfile-flow verbatim forwarding with a stub manager.
 - Add focused tests for Docker matrix batching behavior so multi-package and multi-version paths are pinned by executable validation, not just inline helpers.
@@ -50,3 +51,9 @@
 - Improve baseline selection strategy when fewer historical versions exist.
 - Add structured logging mode for CI and machine parsing.
 - Add configurable timeout and retry controls for registry lookups and slow probe execution.
+
+## Long Term
+
+### Hardening & Infrastructure
+
+- **Migrate to default-deny seccomp architecture** — Currently, the sandbox uses a default-allow architecture (`SCMP_ACT_ALLOW`) which requires playing whack-a-mole with dangerous syscalls. Transition the seccomp profile to `SCMP_ACT_ERRNO` by default, combined with an exhaustive allowlist of POSIX syscalls required for typical package manager execution (based on Docker's default ~350 syscall allowlist). This will close any blind spots from future kernel additions or obscure exotic syscalls.

@@ -25,41 +25,41 @@ lint:
 
 # End-to-end tests for npm
 [working-directory: 'tests/npm']
-test-npm: build
-    "{{bin}}" npm install lodash
-    "{{bin}}" npm update
-    "{{bin}}" npm i
+test-npm +args='': build
+    "{{bin}}" {{args}} npm install lodash
+    "{{bin}}" {{args}} npm update
+    "{{bin}}" {{args}} npm i
 
 # End-to-end tests for pnpm
 [working-directory: 'tests/pnpm']
-test-pnpm: build
-    "{{bin}}" pnpm add lodash
-    "{{bin}}" pnpm update
-    "{{bin}}" pnpm i
+test-pnpm +args='': build
+    "{{bin}}" {{args}} pnpm add lodash
+    "{{bin}}" {{args}} pnpm update
+    "{{bin}}" {{args}} pnpm i
 
 # End-to-end tests for pip
 [working-directory: 'tests/pip']
-test-pip: build
+test-pip +args='': build
     python3 -m venv .venv
-    PATH="{{pip_venv_bin}}:$PATH" "{{bin}}" pip3 install black
-    PATH="{{pip_venv_bin}}:$PATH" "{{bin}}" pip3 install -r ./requirements.txt
-    PATH="{{pip_venv_bin}}:$PATH" "{{bin}}" pip3 install --upgrade pip
+    PATH="{{pip_venv_bin}}:$PATH" "{{bin}}" {{args}} pip3 install black
+    PATH="{{pip_venv_bin}}:$PATH" "{{bin}}" {{args}} pip3 install -r ./requirements.txt
+    PATH="{{pip_venv_bin}}:$PATH" "{{bin}}" {{args}} pip3 install --upgrade pip
 
 # End-to-end tests for poetry
 [working-directory: 'tests/poetry']
-test-poetry: build
-    "{{bin}}" poetry add black
-    "{{bin}}" poetry install --no-root
-    "{{bin}}" poetry update
-    "{{bin}}" poetry lock
+test-poetry +args='': build
+    "{{bin}}" {{args}} poetry add black
+    "{{bin}}" {{args}} poetry install --no-root
+    "{{bin}}" {{args}} poetry update
+    "{{bin}}" {{args}} poetry lock
 
 # End-to-end tests for uv
 [working-directory: 'tests/uv']
-test-uv: build
-    "{{bin}}" uv add black
-    "{{bin}}" uv pip install -r ./pyproject.toml
-    "{{bin}}" uv sync
-    "{{bin}}" uv lock
+test-uv +args='': build
+    "{{bin}}" {{args}} uv add black
+    "{{bin}}" {{args}} uv pip install -r ./pyproject.toml
+    "{{bin}}" {{args}} uv sync
+    "{{bin}}" {{args}} uv lock
 
 # Install to local machine
 install:
