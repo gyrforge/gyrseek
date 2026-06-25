@@ -16,7 +16,7 @@ use crate::sandbox::SandboxRunner;
 pub(crate) struct PolicyConfig {
     pub ip_allowlist: HashSet<String>,
     pub domain_allowlist: HashSet<String>,
-    pub git_clone_allowlist: HashSet<String>,
+    pub git_clone_allowlist: HashMap<String, HashSet<String>>,
     pub baseline_overrides: HashMap<String, (Option<String>, Option<String>)>,
     pub baseline_count: usize,
     pub min_baseline_age_hours_by_package: HashMap<String, usize>,
@@ -31,12 +31,12 @@ pub(crate) struct PolicyConfig {
     pub minimum_release_age_package: Option<usize>,
     /// Watched-process signatures (`bun|run|build`) or bare executables (`bun`)
     /// that are explicitly allowed even when newly introduced.
-    pub process_exec_allowlist: HashSet<String>,
+    pub process_exec_allowlist: HashMap<String, HashSet<String>>,
     /// Artifact finding strings (or `type|path` prefixes) that are explicitly
     /// allowed even when newly introduced. For example `binary|/work/bin/tool`
     /// allows that binary regardless of the `file -b` output.
-    pub artifact_allowlist: HashSet<String>,
-    pub sensitive_file_access_allowlist: HashSet<String>,
+    pub artifact_allowlist: HashMap<String, HashSet<String>>,
+    pub sensitive_file_access_allowlist: HashMap<String, HashSet<String>>,
 }
 
 impl Default for PolicyConfig {
@@ -44,7 +44,7 @@ impl Default for PolicyConfig {
         Self {
             ip_allowlist: HashSet::new(),
             domain_allowlist: HashSet::new(),
-            git_clone_allowlist: HashSet::new(),
+            git_clone_allowlist: HashMap::new(),
             baseline_overrides: HashMap::new(),
             baseline_count: 2,
             min_baseline_age_hours_by_package: HashMap::new(),
@@ -53,9 +53,9 @@ impl Default for PolicyConfig {
             release_burst_threshold: None,
             release_burst_window_hours: 24,
             minimum_release_age_package: None,
-            process_exec_allowlist: HashSet::new(),
-            artifact_allowlist: HashSet::new(),
-            sensitive_file_access_allowlist: HashSet::new(),
+            process_exec_allowlist: HashMap::new(),
+            artifact_allowlist: HashMap::new(),
+            sensitive_file_access_allowlist: HashMap::new(),
         }
     }
 }
@@ -1362,8 +1362,12 @@ fn find_new_sensitive_reads(current: &HashSet<String>, baseline: &HashSet<String
 
 fn filter_allowlisted_sensitive_reads(
     reads: Vec<String>,
-    allowlist: &HashSet<String>,
+    package_name: &str,
+    allowlist_map: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
+    let empty_set = HashSet::new();
+    let allowlist = allowlist_map.get(package_name).unwrap_or(&empty_set);
+
     reads.into_iter().partition(|read| {
         !allowlist.iter().any(|allowed| {
             let t = allowed.trim();
@@ -1403,14 +1407,14 @@ fn find_new_process_exec_signatures(
 /// allowlisted if the policy lists either the exact signature (`bun|run|build`)
 /// or just the executable basename (`bun`), both compared case-insensitively.
 fn filter_allowlisted_process_exec_signatures(
+    package_name: &str,
     signatures: Vec<String>,
-    process_exec_allowlist: &HashSet<String>,
+    process_exec_allowlist: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
-    let normalized_allowlist: HashSet<String> = process_exec_allowlist
-        .iter()
-        .map(|v| v.trim().to_ascii_lowercase())
-        .filter(|v| !v.is_empty())
-        .collect();
+    let empty_set = HashSet::new();
+    let normalized_allowlist = process_exec_allowlist
+        .get(package_name)
+        .unwrap_or(&empty_set);
 
     signatures.into_iter().partition(|signature| {
         let lower = signature.to_ascii_lowercase();
@@ -1425,14 +1429,12 @@ fn filter_allowlisted_process_exec_signatures(
 /// (e.g. `binary|/path`), so changes in the trailing type/size/content column
 /// do not break the allowlist.
 fn filter_allowlisted_artifact_findings(
+    package_name: &str,
     findings: Vec<String>,
-    artifact_allowlist: &HashSet<String>,
+    artifact_allowlist: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
-    let normalized_allowlist: HashSet<String> = artifact_allowlist
-        .iter()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .collect();
+    let empty_set = HashSet::new();
+    let normalized_allowlist = artifact_allowlist.get(package_name).unwrap_or(&empty_set);
 
     findings.into_iter().partition(|finding| {
         let prefix = {
@@ -1448,14 +1450,12 @@ fn filter_allowlisted_artifact_findings(
 }
 
 fn filter_allowlisted_git_clone_signatures(
+    package_name: &str,
     signatures: Vec<String>,
-    git_clone_allowlist: &HashSet<String>,
+    git_clone_allowlist: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
-    let normalized_allowlist: HashSet<String> = git_clone_allowlist
-        .iter()
-        .map(|v| v.trim().to_ascii_lowercase())
-        .filter(|v| !v.is_empty())
-        .collect();
+    let empty_set = HashSet::new();
+    let normalized_allowlist = git_clone_allowlist.get(package_name).unwrap_or(&empty_set);
 
     signatures.into_iter().partition(|signature| {
         let target = signature
@@ -1925,6 +1925,7 @@ pub(crate) async fn scan_packages_versions(
             find_new_process_exec_signatures(&proc_curr, &baseline_process_exec_signatures);
         let (new_process_exec_signatures, allowlisted_process_exec_signatures) =
             filter_allowlisted_process_exec_signatures(
+                &plan.package,
                 new_process_exec_signatures,
                 &policy.process_exec_allowlist,
             );
@@ -1966,6 +1967,7 @@ pub(crate) async fn scan_packages_versions(
         let (blocked_sensitive_reads, _allowed_sensitive_reads) =
             filter_allowlisted_sensitive_reads(
                 new_sensitive_reads,
+                &plan.package,
                 &policy.sensitive_file_access_allowlist,
             );
 
@@ -1999,7 +2001,11 @@ pub(crate) async fn scan_packages_versions(
             .cloned()
             .collect::<Vec<_>>();
         let (new_artifact_findings, allowlisted_artifact_findings) =
-            filter_allowlisted_artifact_findings(new_artifact_findings, &policy.artifact_allowlist);
+            filter_allowlisted_artifact_findings(
+                &plan.package,
+                new_artifact_findings,
+                &policy.artifact_allowlist,
+            );
 
         if !allowlisted_artifact_findings.is_empty() {
             println!(
@@ -2035,6 +2041,7 @@ pub(crate) async fn scan_packages_versions(
             find_new_git_clone_signatures(&git_curr, &baseline_git_clone_signatures);
         let (new_git_clone_signatures, allowlisted_git_clone_signatures) =
             filter_allowlisted_git_clone_signatures(
+                &plan.package,
                 new_git_clone_signatures,
                 &policy.git_clone_allowlist,
             );
@@ -2379,7 +2386,11 @@ openat(AT_FDCWD, "\x2f\x6f\x70\x74\x2f\x61\x70\x70\x2f\x69\x6e\x64\x65\x78\x2e\x
         // wildcard suffix match
         allowlist.insert("*.env".to_string());
 
-        let (blocked, allowed) = filter_allowlisted_sensitive_reads(reads, &allowlist);
+        let mut allowlist_map = std::collections::HashMap::new();
+        allowlist_map.insert("test-pkg".to_string(), allowlist);
+
+        let (blocked, allowed) =
+            filter_allowlisted_sensitive_reads(reads, "test-pkg", &allowlist_map);
 
         assert_eq!(blocked, vec!["/home/user/.aws/credentials".to_string()]);
         assert!(allowed.contains(&"/etc/passwd".to_string()));
@@ -2856,17 +2867,39 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         let sigs = vec!["bun|run|build".to_string(), "deno|run|task.ts".to_string()];
 
         // Exact-signature allowlist clears only that one.
-        let allow_exact: HashSet<String> = ["bun|run|build".to_string()].into_iter().collect();
+        let allow_exact_set: HashSet<String> = ["bun|run|build".to_string()].into_iter().collect();
+        let mut allow_exact = HashMap::new();
+        allow_exact.insert("test-pkg".to_string(), allow_exact_set);
         let (remaining, allowed) =
-            filter_allowlisted_process_exec_signatures(sigs.clone(), &allow_exact);
+            filter_allowlisted_process_exec_signatures("test-pkg", sigs.clone(), &allow_exact);
         assert_eq!(allowed, vec!["bun|run|build".to_string()]);
         assert_eq!(remaining, vec!["deno|run|task.ts".to_string()]);
 
         // Bare-executable allowlist clears every invocation of that executable.
-        let allow_exe: HashSet<String> = ["bun".to_string()].into_iter().collect();
-        let (remaining, allowed) = filter_allowlisted_process_exec_signatures(sigs, &allow_exe);
+        let allow_exe_set: HashSet<String> = ["bun".to_string()].into_iter().collect();
+        let mut allow_exe = HashMap::new();
+        allow_exe.insert("test-pkg".to_string(), allow_exe_set);
+        let (remaining, allowed) =
+            filter_allowlisted_process_exec_signatures("test-pkg", sigs, &allow_exe);
         assert_eq!(allowed, vec!["bun|run|build".to_string()]);
         assert_eq!(remaining, vec!["deno|run|task.ts".to_string()]);
+    }
+
+    #[test]
+    fn process_exec_allowlist_does_not_leak_across_packages() {
+        let sigs = vec!["bun|run|build".to_string()];
+        let allow_exact_set: HashSet<String> = ["bun|run|build".to_string()].into_iter().collect();
+        let mut allow_exact = HashMap::new();
+        allow_exact.insert("other-pkg".to_string(), allow_exact_set);
+
+        // Pass "target-pkg" which has no allowlist
+        let (remaining, allowed) =
+            filter_allowlisted_process_exec_signatures("target-pkg", sigs.clone(), &allow_exact);
+        assert!(
+            allowed.is_empty(),
+            "Allowlist must not leak across packages"
+        );
+        assert_eq!(remaining, sigs);
     }
 
     #[test]
@@ -2877,11 +2910,14 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         ];
 
         // Exact-signature allowlist.
-        let exact: HashSet<String> =
+        let exact_set: HashSet<String> =
             ["binary|/work/bin/tool|ELF 64-bit LSB executable".to_string()]
                 .into_iter()
                 .collect();
-        let (remaining, allowed) = filter_allowlisted_artifact_findings(findings.clone(), &exact);
+        let mut exact = HashMap::new();
+        exact.insert("test-pkg".to_string(), exact_set);
+        let (remaining, allowed) =
+            filter_allowlisted_artifact_findings("test-pkg", findings.clone(), &exact);
         assert_eq!(
             allowed,
             vec!["binary|/work/bin/tool|ELF 64-bit LSB executable"]
@@ -2890,16 +2926,37 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         assert!(remaining[0].starts_with("suspicious_pth"));
 
         // Prefix (type|path) allowlist — ignores trailing type/content column.
-        let prefix: HashSet<String> = ["suspicious_pth|/work/helper.pth".to_string()]
+        let prefix_set: HashSet<String> = ["suspicious_pth|/work/helper.pth".to_string()]
             .into_iter()
             .collect();
-        let (remaining, allowed) = filter_allowlisted_artifact_findings(findings, &prefix);
+        let mut prefix = HashMap::new();
+        prefix.insert("test-pkg".to_string(), prefix_set);
+        let (remaining, allowed) =
+            filter_allowlisted_artifact_findings("test-pkg", findings, &prefix);
         assert_eq!(
             allowed,
             vec!["suspicious_pth|/work/helper.pth|import urllib"]
         );
         assert_eq!(remaining.len(), 1);
         assert!(remaining[0].starts_with("binary"));
+    }
+
+    #[test]
+    fn artifact_allowlist_does_not_leak_across_packages() {
+        let findings = vec!["binary|/work/bin/tool|ELF".to_string()];
+        let exact_set: HashSet<String> = ["binary|/work/bin/tool|ELF".to_string()]
+            .into_iter()
+            .collect();
+        let mut allow_exact = HashMap::new();
+        allow_exact.insert("other-pkg".to_string(), exact_set);
+
+        let (remaining, allowed) =
+            filter_allowlisted_artifact_findings("target-pkg", findings.clone(), &allow_exact);
+        assert!(
+            allowed.is_empty(),
+            "Allowlist must not leak across packages"
+        );
+        assert_eq!(remaining, findings);
     }
 
     #[test]
@@ -4216,7 +4273,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     fn policy_with_baseline_and_process_allowlist(
         package: &str,
         baseline: &str,
-        process_exec_allowlist: HashSet<String>,
+        process_exec_allowlist: HashMap<String, HashSet<String>>,
     ) -> PolicyConfig {
         PolicyConfig {
             baseline_count: 1,
@@ -4232,8 +4289,8 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     fn policy_with_baseline_and_git_allowlist(
         package: &str,
         baseline: &str,
-        git_clone_allowlist: HashSet<String>,
-        process_exec_allowlist: HashSet<String>,
+        git_clone_allowlist: HashMap<String, HashSet<String>>,
+        process_exec_allowlist: HashMap<String, HashSet<String>>,
     ) -> PolicyConfig {
         PolicyConfig {
             baseline_count: 1,
@@ -4267,7 +4324,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &runner,
             "npm",
             &[("evil-pkg".to_string(), "1.3.0".to_string())],
-            &policy_with_baseline_and_process_allowlist("evil-pkg", "1.2.0", HashSet::new()),
+            &policy_with_baseline_and_process_allowlist("evil-pkg", "1.2.0", HashMap::new()),
         )
         .await;
         assert_eq!(
@@ -4291,7 +4348,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &runner,
             "npm",
             &[("buildy".to_string(), "2.1.0".to_string())],
-            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new()),
+            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashMap::new()),
         )
         .await;
         assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(false));
@@ -4312,7 +4369,7 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &runner,
             "npm",
             &[("buildy".to_string(), "2.1.0".to_string())],
-            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashSet::new()),
+            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", HashMap::new()),
         )
         .await;
         assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(true));
@@ -4336,11 +4393,13 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         };
         let allowlist: HashSet<String> =
             ["bun|run|approved-task".to_string()].into_iter().collect();
+        let mut allowlist_map = HashMap::new();
+        allowlist_map.insert("buildy".to_string(), allowlist);
         let results = scan_packages_versions(
             &runner,
             "npm",
             &[("buildy".to_string(), "2.1.0".to_string())],
-            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", allowlist),
+            &policy_with_baseline_and_process_allowlist("buildy", "2.0.0", allowlist_map),
         )
         .await;
         assert_eq!(results.get("buildy|2.1.0").map(|r| r.allowed), Some(true));
@@ -4368,8 +4427,8 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy_with_baseline_and_git_allowlist(
                 "pkg-a",
                 "1.2.0",
-                HashSet::new(),
-                HashSet::new(),
+                HashMap::new(),
+                HashMap::new(),
             ),
         )
         .await;
@@ -4393,8 +4452,8 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             &policy_with_baseline_and_git_allowlist(
                 "pkg-b",
                 "1.2.0",
-                HashSet::new(),
-                HashSet::new(),
+                HashMap::new(),
+                HashMap::new(),
             ),
         )
         .await;
@@ -4412,14 +4471,17 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
                  "execve(\"/usr/bin/sh\", [\"sh\", \"-c\", \"echo ok\"], 0x7ff) = 0\n".to_string()),
             ]),
         };
-        let git_clone_allowlist: HashSet<String> =
-            ["https://github.com/acme/approved.git".to_string()]
-                .into_iter()
-                .collect();
-        let process_exec_allowlist: HashSet<String> =
+        let allowlist_set: HashSet<String> = ["https://github.com/acme/approved.git".to_string()]
+            .into_iter()
+            .collect();
+        let mut git_clone_allowlist = HashMap::new();
+        git_clone_allowlist.insert("pkg-c".to_string(), allowlist_set);
+        let process_exec_allowlist_set: HashSet<String> =
             ["git|clone|https://github.com/acme/approved.git".to_string()]
                 .into_iter()
                 .collect();
+        let mut process_exec_allowlist = HashMap::new();
+        process_exec_allowlist.insert("pkg-c".to_string(), process_exec_allowlist_set);
         let results = scan_packages_versions(
             &runner,
             "npm",
@@ -4443,11 +4505,13 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         // must be extracted before comparison so the recursive flag does not prevent
         // the allowlisted URL from matching.
         let signatures = vec!["https://github.com/acme/repo.git|recursive".to_string()];
-        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
+        let allowlist_set: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
             .into_iter()
             .collect();
+        let mut allowlist = HashMap::new();
+        allowlist.insert("test-pkg".to_string(), allowlist_set);
         let (remaining, allowlisted) =
-            filter_allowlisted_git_clone_signatures(signatures, &allowlist);
+            filter_allowlisted_git_clone_signatures("test-pkg", signatures, &allowlist);
         assert!(
             remaining.is_empty(),
             "recursive clone of an allowed URL must be allowlisted"
@@ -4461,11 +4525,13 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn git_clone_allowlist_matches_non_recursive_clone_of_allowed_url() {
         let signatures = vec!["https://github.com/acme/repo.git|non-recursive".to_string()];
-        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
+        let allowlist_set: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
             .into_iter()
             .collect();
+        let mut allowlist = HashMap::new();
+        allowlist.insert("test-pkg".to_string(), allowlist_set);
         let (remaining, allowlisted) =
-            filter_allowlisted_git_clone_signatures(signatures, &allowlist);
+            filter_allowlisted_git_clone_signatures("test-pkg", signatures, &allowlist);
         assert!(remaining.is_empty());
         assert_eq!(allowlisted.len(), 1);
     }
@@ -4473,13 +4539,33 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn git_clone_allowlist_does_not_match_different_url() {
         let signatures = vec!["https://github.com/evil/repo.git|non-recursive".to_string()];
-        let allowlist: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
+        let allowlist_set: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
             .into_iter()
             .collect();
+        let mut allowlist = HashMap::new();
+        allowlist.insert("test-pkg".to_string(), allowlist_set);
         let (remaining, allowlisted) =
-            filter_allowlisted_git_clone_signatures(signatures, &allowlist);
+            filter_allowlisted_git_clone_signatures("test-pkg", signatures, &allowlist);
         assert_eq!(remaining.len(), 1);
         assert!(allowlisted.is_empty());
+    }
+
+    #[test]
+    fn git_clone_allowlist_does_not_leak_across_packages() {
+        let signatures = vec!["https://github.com/acme/repo.git|non-recursive".to_string()];
+        let allowlist_set: HashSet<String> = ["https://github.com/acme/repo.git".to_string()]
+            .into_iter()
+            .collect();
+        let mut allowlist = HashMap::new();
+        allowlist.insert("other-pkg".to_string(), allowlist_set);
+
+        let (remaining, allowlisted) =
+            filter_allowlisted_git_clone_signatures("target-pkg", signatures.clone(), &allowlist);
+        assert!(
+            allowlisted.is_empty(),
+            "Allowlist must not leak across packages"
+        );
+        assert_eq!(remaining, signatures);
     }
 
     // --- gap #14: select_effective_baselines — override version equal to current ---
@@ -5113,11 +5199,16 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             ]),
         };
 
+        let artifact_allowlist_set: HashSet<String> =
+            ["suspicious_pth|/work/site-packages/evil.pth".to_string()]
+                .into_iter()
+                .collect();
+        let mut artifact_allowlist = HashMap::new();
+        artifact_allowlist.insert("evil-pkg".to_string(), artifact_allowlist_set);
+
         let policy = PolicyConfig {
             baseline_count: 1,
-            artifact_allowlist: ["suspicious_pth|/work/site-packages/evil.pth".to_string()]
-                .into_iter()
-                .collect(),
+            artifact_allowlist,
             baseline_overrides: HashMap::from([(
                 "evil-pkg".to_string(),
                 (Some("1.9.0".to_string()), None),
@@ -5520,7 +5611,11 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         let mut allowlist = std::collections::HashSet::new();
         allowlist.insert("*.env".to_string());
 
-        let (blocked, allowed) = filter_allowlisted_sensitive_reads(reads, &allowlist);
+        let mut allowlist_map = std::collections::HashMap::new();
+        allowlist_map.insert("test-pkg".to_string(), allowlist);
+
+        let (blocked, allowed) =
+            filter_allowlisted_sensitive_reads(reads, "test-pkg", &allowlist_map);
 
         // /.env and /path/to/.env should be allowed
         assert!(allowed.contains(&"/.env".to_string()));
