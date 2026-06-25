@@ -23,6 +23,10 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP9 | `scanning.rs`              | `false-positive` | Race condition in insufficient_baselines check ordering.                                 | 🚫 Won't Fix |
 | FP10| `.github/workflows/`       | `false-positive` | Prompt Injection / Runner Compromise exfiltrating deployment secrets.                    | 🚫 Won't Fix |
 | FP11| `.github/workflows/`       | `false-positive` | Autonomous Agent execution via `--dangerously-skip-permissions`.                         | 🚫 Won't Fix |
+| FP12| `.github/workflows/ci.yml` | `accepted-risk`  | `timeout-minutes: 10` with no partial-output trap.                                       | 🚫 Won't Fix |
+| FP13| `.github/workflows/ci.yml` | `accepted-risk`  | `max-parallel: 3` vector for CI inference budget exhaustion.                             | 🚫 Won't Fix |
+| FP14| `AGENTS.md`                | `false-positive` | `AGENTS.md` CI description omits operational details (model name, SHA hash).             | 🚫 Won't Fix |
+| FP15| `.github/workflows/ci.yml` | `false-positive` | Redundant OpenCode installation script in dependent consolidation job.                   | 🚫 Won't Fix |
 
 ---
 
@@ -208,3 +212,35 @@ We accept the risk of prompt injection weaponizing the autonomous agent because 
 2. **Ephemeral Environment:** The runner is destroyed immediately after execution.
 3. **No Private Data Exfiltration:** As an open-source project, the source code is public. Even if an attacker tricks the autonomous agent into reading source files and `POST`ing them to an external server via web tools, no confidential intellectual property is lost.
 4. **Prompt-Level Directives:** We have explicitly instructed the agent in its system prompt that it is "strictly forbidden from downloading files or executing commands," providing a first layer of defense against generic autonomous abuse.
+
+---
+
+### Finding FP12 — `accepted-risk` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** `timeout-minutes: 10` with no partial-output trap (ci.yml:134,232). Timeout produces zero output; no trap/signal handler to dump partial results.
+
+**Reason for Not Fixing:** The AI review output is inherently structured markdown; a partial or truncated LLM output stream is generally corrupted and impossible to parse reliably by downstream consolidation logic. Failing cleanly with zero output is preferred over injecting malformed context.
+
+---
+
+### Finding FP13 — `accepted-risk` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** `max-parallel: 3` on 5-reviewer matrix (ci.yml:62). Up to 30 concurrent minutes of AI inference per run; CI budget exhaustion vector via repeated PRs.
+
+**Reason for Not Fixing:** The matrix strategy is intentionally designed to trade inference budget for parallel speed. Throttling this via concurrency limits or serializing the reviewers would degrade developer experience and increase PR latency. Cost/budget controls should be enforced at the API key limit level, not via workflow throttling.
+
+---
+
+### Finding FP14 — `false-positive` | `AGENTS.md` | 🚫 Won't Fix
+
+**Summary:** AGENTS.md CI description omits operational details (AGENTS.md:53-54). High-level summary drops model name, install verification SHA, artifact flow. Developers cannot trace CI behavior from AGENTS.md alone.
+
+**Reason for Not Fixing:** `AGENTS.md` is an architectural memory file, not a line-by-line technical specification. Hardcoding volatile operational details (like the OpenCode version SHA or the exact model name) into the documentation creates unnecessary maintenance churn. The single source of truth for execution mechanics is `ci.yml`.
+
+---
+
+### Finding FP15 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** Redundant OpenCode installation (ci.yml:207-219). Full `curl | sha256sum | bash` chain re-runs in `post-review-comments` job despite same cache key as `code-review` job.
+
+**Reason for Not Fixing:** The static analysis tool incorrectly flags this block because it fails to account for GitHub Actions caching logic. The installation script is wrapped in an `if: steps.cache-opencode.outputs.cache-hit != 'true'` conditional. Because the consolidation job strictly depends on (`needs:`) the review job, the cache is guaranteed to be populated. The installation script is skipped at runtime, making this a true false positive.

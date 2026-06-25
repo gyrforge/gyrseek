@@ -28,7 +28,7 @@
 | 38 | `scanning.rs` | —    | Medium   | `*` prefix allowlist warns but silently blocks everything              | ⚠️ Open  |
 | 39 | `scanning.rs` | —    | Medium   | `.env` variant blind spot (misses `.env.production`, etc.)             | ⚠️ Open  |
 | 40 | `scanning.rs` | —    | High     | `/proc/self/fd/N` relative path traversal bypasses fd resolution       | ⚠️ Open  |
-| 41 | `.github/workflows/ci.yml` | — | Low | `actions/checkout@v7` moving tag not SHA-pinned | ⚠️ Open  |
+| 41 | `.github/workflows/` | — | Low | Third-party actions moving tags are not SHA-pinned | ⚠️ Open  |
 | 42 | `scanning.rs` | —    | Low      | Test duplication across anomaly-counting tests                         | ⚠️ Open  |
 | 43 | `scanning.rs` | —    | Low      | `lexical_clean_path` reinvents stdlib path normalization               | ⚠️ Open  |
 | 44 | `scanning.rs` | —    | Low      | Test coverage regression: `unescape_trailing_backslash`               | ⚠️ Open  |
@@ -401,18 +401,19 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 41 — Low | `.github/workflows/ci.yml` | ⚠️ Open
+### Finding 41 — Low | `.github/workflows/` | ⚠️ Open
 
-**Summary:** `actions/checkout@v7` moving tag not SHA-pinned.
+**Summary:** Third-party actions use moving tags instead of being SHA-pinned.
 
-**Root cause:** All other actions use pinned SHAs, but `actions/checkout` relies on a moving major version tag.
+**Root cause:** The workflows (`ci.yml`, `post_review.yml`) use mutable version tags (e.g., `@v4`, `@stable`) for third-party actions instead of immutable commit SHAs.
 
-**Failure scenario:** A compromised release to the `v7` ref propagates to all CI jobs without detection.
+**Failure scenario:** A compromised third-party repository could maliciously move the version tag to point to a compromised release, which would then automatically propagate to all CI jobs without detection and execute untrusted code in the pipeline.
 
-**Fix direction:** Pin the action to a specific commit SHA.
+**Fix direction:** Pin all third-party actions to a specific commit SHA.
 
 **Enhancements:**
-- **No CI Verification:** There is no CI verification step that the `actions/checkout@v7` SHA matches an expected release. The moving tag could be force-pushed at any time. Fix: Add a step that resolves and pins the SHA automatically or audit it periodically.
+- **Expanded Scope:** This risk is not limited to `actions/checkout`. It extends to ALL third-party actions in the repository: `upload-artifact@v4`, `download-artifact@v4`, `cache@v4`, `extractions/setup-just@v4`, `astral-sh/setup-uv@v5`, `actions/setup-python@v5`, `actions/setup-node@v6`, `pnpm/action-setup@v6`, `dtolnay/rust-toolchain@stable`, `rustsec/audit-check@v2.0.0`, `hadolint/hadolint-action@v3.1.0`, `Swatinem/rust-cache@v2`, and `abatilo/actions-poetry@v4`.
+- **No CI Verification:** There is no CI verification step or tool (like Dependabot or Renovate) configured to automatically manage or audit these SHAs periodically.
 
 ---
 
