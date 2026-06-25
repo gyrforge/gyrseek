@@ -177,7 +177,7 @@ The codebase has evolved significantly since the initial domain-aware IP diff te
   - `git_clone` (10+ tests): Install-time git clone behavior diffing, recursive vs. non-recursive, and `git_clone_allowlist`.
   - `sensitive_files` (15+ tests): Strace log parsing for `open`/`openat`/`symlinkat` attempts on high-risk files (`~/.aws/credentials`, `~/.npmrc`), absolute path resolution from `fdcwd`, and `sensitive_file_access_allowlist` prefix filtering.
 - **Artifact Scanning**: (15+ tests) End-to-end trace artifact extraction, binary classification (ELF/Mach-O), `suspicious_pth`, `unexpected_runtime`, null-byte (` `) delimiter injection prevention, and `artifact_allowlist` unblocking.
-- **Version Ordering & Overrides**: (30+ tests) PEP 440 vs Semver version resolution, `latest` pin resolution, minimum release age, burst threshold windows, and config overrides (`baseline_overrides`, `internal_package_exemptions`, `new_package_exemptions`).
+- **Version Ordering & Overrides**: (33+ tests) PEP 440 vs Semver version resolution, `latest` pin resolution, minimum release age, burst threshold windows, config overrides (`baseline_overrides`, `internal_package_exemptions`, `new_package_exemptions`), and strict baseline count enforcement (`scan_fails_closed_when_insufficient_baselines_in_registry` and related edge cases).
 
 ### `src/sandbox.rs` (27 tests)
 - **Container Constraints**: `docker_enforces_sandbox_constraints` integration test validating seccomp blocking of `process_vm_writev`.
