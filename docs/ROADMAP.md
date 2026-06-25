@@ -21,6 +21,7 @@
 - Domain-aware IP diff using FCrDNS — resolves each IP at the domain level rather than the IP level, silently discarding CDN edge IPs whose domain was already seen in baseline traffic. No hardcoded registry domain list needed.
 - Strace-based DNS interceptor fallback: `extract_dns_map` / `parse_dns_response` / `decode_dns_name` parse raw DNS wire-format from strace `recvfrom` output (requires strace `-xx` flag). When FCrDNS fails for a PTR-less IP (e.g. Fastly, Cloudflare), the container's own DNS responses are consulted; host-side `lookup_host` verifies the binding before trusting it. Circular pointer protection (5-hop limit) prevents crafted DNS packets from hanging the scanner.
 - `-xx` strace flag added for deterministic hex-escape output; `extract_process_exec_signatures` unescapes hex-escaped argv so `is_harness_command` filtering continues to work correctly.
+
 ## Near Term
 - Change baseline comparison to be strict by default: aggressively fail closed if the registry does not contain enough historical versions to satisfy `baseline_count`, instead of silently falling back to a smaller baseline pool.
 - Fetch and analyze registry metadata (npm and Python package indices) prior to executing the sandbox to fast-fail on obvious static anomalies (e.g. newly introduced suspicious dependencies or scripts).

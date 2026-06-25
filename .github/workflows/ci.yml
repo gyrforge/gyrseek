@@ -695,6 +695,59 @@ jobs:
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-pnpm
 
+  macos-host-uv-test:
+    name: (MacOS) (Host) Test CLI with (uv)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: brew update && brew install pkg-config libressl
+
+      - name: Install latest version of uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Just test uv (Host Mode)
+        env:
+          GYRSEEK_SANDBOX: host
+        run: just test-uv
+
+  windows-host-uv-test:
+    name: (Windows) (Host) Test CLI with (uv)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install latest version of uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Just test uv (Host Mode)
+        env:
+          GYRSEEK_SANDBOX: host
+        run: just test-uv
+
   cargo-audit:
     name: Dependency advisory scan
     runs-on: ubuntu-latest

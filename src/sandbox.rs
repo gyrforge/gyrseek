@@ -646,7 +646,6 @@ fn build_single_script(manager: &str, package: &str, version: &str, prebuilt: bo
 
     steps.join("; ")
 }
-
 /// Builds the `docker run` argument vector. When `out_dir_path` is non-empty it
 /// is bind-mounted at /out (root-owned) to receive trace logs.
 fn build_docker_run_args(
@@ -663,14 +662,18 @@ fn build_docker_run_args(
         "bridge".to_string(),
         "--security-opt".to_string(),
         "no-new-privileges".to_string(),
-        // strace runs as root but drops the traced install to the unprivileged
-        // `gyrseek` user (`strace -u`). Attaching to a process of a different UID
-        // requires CAP_SYS_PTRACE, which is NOT in Docker's default capability
-        // set — without it `PTRACE_SEIZE` fails with EPERM and no trace is ever
-        // produced. The capability is scoped to this container's PID namespace,
-        // so it cannot trace host processes.
-        "--cap-add".to_string(),
-        "SYS_PTRACE".to_string(),
+    ];
+
+    // strace runs as root but drops the traced install to the unprivileged
+    // `gyrseek` user (`strace -u`). Attaching to a process of a different UID
+    // requires CAP_SYS_PTRACE, which is NOT in Docker's default capability
+    // set — without it `PTRACE_SEIZE` fails with EPERM and no trace is ever
+    // produced. The capability is scoped to this container's PID namespace,
+    // so it cannot trace host processes.
+    args.push("--cap-add".to_string());
+    args.push("SYS_PTRACE".to_string());
+
+    args.extend(vec![
         "--pids-limit".to_string(),
         "256".to_string(),
         "--memory".to_string(),
@@ -683,7 +686,7 @@ fn build_docker_run_args(
         "/tmp:rw,noexec,nosuid,size=128m".to_string(),
         "--tmpfs".to_string(),
         "/work:rw,noexec,nosuid,size=512m".to_string(),
-    ];
+    ]);
     if !danger_disable_seccomp {
         let profile_path = embedded_seccomp_profile_path()?;
         args.push("--security-opt".to_string());
@@ -963,8 +966,8 @@ mod tests {
     use super::{
         EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
         EMBEDDED_SECCOMP_PROFILE_JSON, SCANNER_USER, build_artifact_scan_steps,
-        build_docker_run_args, build_matrix_script, build_single_script,
-        docker_apparmor_enabled_from_env, docker_apparmor_profile_name, strace_install_command,
+        build_docker_run_args, build_matrix_script, build_single_script, docker_apparmor_enabled_from_env, docker_apparmor_profile_name,
+        strace_install_command,
     };
     use std::sync::{Mutex, OnceLock};
 
@@ -1095,6 +1098,7 @@ mod tests {
 
         let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
             .expect("docker args should build");
+
         let pos = args
             .iter()
             .position(|a| a == "--cap-add")
