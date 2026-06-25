@@ -21,6 +21,8 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP7 | `docs/common_prompts.md` | `false-positive` | Raw CI prompt committed into documentation directory. | 🚫 Won't Fix |
 | FP8 | `sandbox.rs`               | `false-positive` | `process_vm_readv` is permitted in the seccomp profile.                                  | 🚫 Won't Fix |
 | FP9 | `scanning.rs`              | `false-positive` | Race condition in insufficient_baselines check ordering.                                 | 🚫 Won't Fix |
+| FP10| `.github/workflows/`       | `false-positive` | Prompt Injection / Runner Compromise exfiltrating deployment secrets.                    | 🚫 Won't Fix |
+| FP11| `.github/workflows/`       | `false-positive` | Autonomous Agent execution via `--dangerously-skip-permissions`.                         | 🚫 Won't Fix |
 
 ---
 
@@ -172,3 +174,37 @@ Furthermore, a malicious process can only use `process_vm_readv` for *read-only*
 **Reason for Not Fixing:** This is a false positive. While the count check (`baselines.len() < policy.baseline_count` at line 1753) occurs textually before the override logic block (line 1772), `select_effective_baselines` (called prior to this flow) already explicitly filters out `v_curr` from the baselines. Thus, the count at line 1753 correctly reflects the effective baselines, excluding any self-referencing overrides. Unit tests (e.g., `override_equal_to_current_is_excluded_from_baselines`) already confirm this behavior.
 
 *Note:* This "Won't Fix" dismissal is scoped strictly to the sequential text ordering concern. The separate issue regarding the async cache race (`scan_with_cache` concurrent cache population) is tracked as a distinct legitimate vulnerability in `OPEN_FINDINGS.md` (Finding 84).
+
+---
+
+### Finding FP10 — `false-positive` (Accepted Architectural Risk) | `.github/workflows/` | 🚫 Won't Fix
+
+**Summary:** AI Reviewer prompt injection or runner compromise could lead to secret exfiltration or supply chain attacks.
+
+**Suggested Fix:** Implement strict, hyper-isolated runner environments or avoid AI execution on PRs.
+
+**Reason for Not Fixing:** This is an explicitly accepted architectural risk based on the specific threat model of this repository. We have implemented Job Separation (untrusted AI runs with `contents: read` and passes an artifact to a trusted publisher), which protects the `GITHUB_TOKEN` from being used maliciously by the AI.
+
+However, we explicitly accept the residual risks of runner compromise (e.g., if a malicious code change escapes the AI sandbox) for the following reasons:
+1. **No Deployment Secrets:** This is a CLI tool that is not published to `crates.io` or any other external registry via CI. There are technically no long-lived deployment secrets in this repository.
+2. **Ephemeral Tokens Only:** The only secret in the environment is the dynamically generated `GITHUB_TOKEN`, which is short-lived and dies immediately after the runner finishes.
+3. **Curated Contributors:** We only accept contributions from developers we know and explicitly trust, significantly reducing the likelihood of a targeted, malicious PR.
+4. **Managed Infrastructure:** All workflows run on GitHub-hosted runners. A significant portion of the runner-isolation risk is transferred to GitHub's infrastructure.
+
+Because the blast radius is strictly limited to the repository itself during the short window of the CI run, and the risk of a malicious contributor is exceptionally low, further architectural complexity for runner isolation is deemed unnecessary.
+
+---
+
+### Finding FP11 — `false-positive` (Accepted Architectural Risk) | `.github/workflows/` | 🚫 Won't Fix
+
+**Summary:** Using `--dangerously-skip-permissions` allows the AI code reviewer to autonomously execute tools (file reads, web searches) without human oversight, creating a vector for prompt injection to weaponize the agent's capabilities.
+
+**Suggested Fix:** Require human approval (interactive mode) for all agent tool executions, or strictly sandbox network and file access.
+
+**Reason for Not Fixing:** This is an explicitly accepted architectural risk required to run an agentic review system headlessly in CI. Without `--dangerously-skip-permissions`, the agent cannot use its tools and would crash or hang when attempting to read the repository context.
+
+We accept the risk of prompt injection weaponizing the autonomous agent because the blast radius is fundamentally constrained by the CI Job Separation architecture:
+1. **Read-Only Sandbox:** The agent executes within `ci.yml`, which is strictly locked to `contents: read`. Even if the agent is tricked into using its tools maliciously, it cannot push commits, merge PRs, or modify repository configurations.
+2. **Ephemeral Environment:** The runner is destroyed immediately after execution.
+3. **No Private Data Exfiltration:** As an open-source project, the source code is public. Even if an attacker tricks the autonomous agent into reading source files and `POST`ing them to an external server via web tools, no confidential intellectual property is lost.
+4. **Prompt-Level Directives:** We have explicitly instructed the agent in its system prompt that it is "strictly forbidden from downloading files or executing commands," providing a first layer of defense against generic autonomous abuse.

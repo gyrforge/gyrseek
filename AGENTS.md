@@ -49,7 +49,9 @@ not the entire codebase.
   - src/parsing.rs (parsing helpers)
   - src/scanning.rs (registry lookup and anomaly scanning)
   - src/sandbox.rs (sandbox runner backends and mode selection)
-- CI: `.github/workflows/ci.yml` — `rust-checks` (hadolint + yamllint + just lint + just test + opencode AI code review via the default Big Pickle model, no API key needed; review posted as PR comment using `GITHUB_TOKEN`), `linux-docker-uv-test` (test-uv with seccomp disabled), `linux-docker-seccomp-uv-test` (test-uv with seccomp enabled), `linux-docker-apparmor-seccomp-{uv,pip,poetry,npm,pnpm}-test` (test each manager with AppArmor + prebuilt scanner images), `cargo-audit` (dependency advisory scan). Installs just 1.52.0 via `extractions/setup-just@v4` for `[working-directory]` support. OpenCode install uses `sha256sum --check` against a pinned checksum (`fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e` for v1.17.7) — when bumping the opencode version, update checksum by running `curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v<VERSION>/install | sha256sum`. The AI code review prompt is inline in the workflow and includes the git diff of the PR to scope the review to changed code only.
+- CI:
+  - `.github/workflows/ci.yml` — Runs all untrusted PR code with strictly `contents: read` permissions. Includes `rust-checks` (lint, test, and read-only AI code review via opencode generating an artifact), and test matrices (`linux-docker-uv-test`, etc.).
+  - `.github/workflows/post_review.yml` — Triggered via `workflow_run`. Runs in a trusted context with `pull-requests: write` to safely download the AI review artifact and post it to the PR. **Rule:** Any new jobs requiring write permissions MUST be placed in a separate `workflow_run` file like this, NEVER in `ci.yml`.
 - Build and scripts:
   - Justfile is the task runner entrypoint; run `just --list` to see recipes
   - just build — release build (cargo build --release)
