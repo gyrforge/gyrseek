@@ -32,10 +32,10 @@
 | 42 | `scanning.rs` | —    | Low      | Test duplication across anomaly-counting tests                         | ⚠️ Open  |
 | 43 | `scanning.rs` | —    | Low      | `lexical_clean_path` reinvents stdlib path normalization               | ⚠️ Open  |
 | 44 | `scanning.rs` | —    | Low      | Test coverage regression: `unescape_trailing_backslash`               | ⚠️ Open  |
-| 45 | `.github/workflows/ci.yml` | — | High | CI prompt injection via unsanitized `review_ledger.md`           | ⚠️ Open  |
+| 45 | `.github/workflows/ci.yml` | — | High | CI prompt injection via unsanitized `review_ledger.md`, skill files, findings files, AGENTS.md, and graphify output | ⚠️ Open  |
 | 46 | `scanning.rs` | —    | Medium   | `is_harness_command` `uv` check coupling with sandbox script           | ⚠️ Open  |
 | 47 | `scanning.rs` | —    | Medium   | `extract_sensitive_file_reads` requires decomposition                  | ⚠️ Open  |
-| 48 | `.github/workflows/ci.yml` | — | Medium | CI `gh run download` silently swallows errors                    | ⚠️ Open  |
+| 48 | `.github/workflows/ci.yml` | — | Medium | CI `gh run download`, `gh run list`, and fallback `cat` silently swallow errors | ⚠️ Open  |
 | 49 | `.github/workflows/ci.yml` | — | Medium | CI `GH_TOKEN` in environment for consolidation step increases blast radius | ⚠️ Open  |
 | 50 | `README.md`   | —    | Medium   | `sensitive_file_access_allowlist` example is dangerous and non-functional | ⚠️ Open  |
 | 51 | `.github/workflows/ci.yml` | — | Medium | Ledger delimiter collision can corrupt review history            | ⚠️ Open  |
@@ -470,6 +470,9 @@ if next.starts_with('-') {
 - **Broader Injection Surface:** The injection surface is 3×, not 1×. `docs/WONT_FIX_FINDINGS.md` and `docs/OPEN_FINDINGS.md` are also injected unsanitized. A PR author modifying these files can inject arbitrary instructions. Fix: Redact closing tags from these files as well.
 - **Artifact Name Confusion:** `gh run download` uses only `--name review-ledger` without `--run-id` or `--repo`. A compromised fork could upload an identically named artifact picked up by consolidation, allowing cross-run prompt injection.
 - **Ledger Integrity:** The downloaded `review_ledger.md` has no SHA-256 checksum verification. Any artifact named `review-ledger` is accepted. Fix: Upload a `review_ledger.sha256` artifact and verify with `sha256sum --check` before use.
+- **Skill File Injection Vector:** The new skill file injection block (added to fix dead skill references) cats `.github/skills/*/SKILL.md` into `prompt.txt` outside `<untrusted_diff>` without digest verification or tag-escaping. A PR modifying `code-security/SKILL.md`, `llm-security/SKILL.md`, `ponytail/SKILL.md`, or `ponytail-review/SKILL.md` can embed arbitrary instructions ("Ignore all vulnerabilities") that are implicitly trusted as authoritative security guidance. Fix: Apply `</tag> → <REDACTED>` escaping to skill content before injection; digest-pin skill file contents or restrict `.github/skills/` write access via CODEOWNERS.
+- **Review Ledger Tag-Escaping Gap:** The `<previous_review>` content (ci.yml) is catted raw without the `</previous_review> → <REDACTED>` escaping applied to `<untrusted_diff>` and `<untrusted_inputs>`. A compromised previous review containing `</previous_review>` plus injected instructions would break the prompt XML structure, allowing the attacker's instructions to be interpreted as system directives. The ledger is also an unsanitized accumulator — raw AI output is appended without stripping injection markers, persisting across capped runs. Fix: Apply the same closing-tag redaction (`python3 -c "import sys; print(sys.stdin.read().replace('</previous_review>', '<REDACTED>'))"`) before injecting the ledger into the prompt. Strip injection markers from ledger entries at append time.
+- **Unsanitized File Content in XML Tags:** `AGENTS.md` (in `<agents_rules>`), `WONT_FIX_FINDINGS.md` (in `<wont_fix_findings>`), `OPEN_FINDINGS.md` (in `<open_findings>`), and `graphify-out/GRAPH_REPORT.md` (in `<graph_context>`) are all catted into `prompt.txt` inside XML tags without the same `</tag> → <REDACTED>` escaping applied to the diff and reviewer inputs. Any PR modifying these files can inject arbitrary instructions by embedding a closing tag. Fix: Apply closing-tag redaction to every file catted into an XML context — `AGENTS.md`, all findings files, and graphify output — not just the diff and reviewer inputs.
 
 ---
 
@@ -499,13 +502,13 @@ if next.starts_with('-') {
 
 ### Finding 48 — Medium | `.github/workflows/ci.yml` | ⚠️ Open
 
-**Summary:** CI `gh run download` and `gh run list` silently swallow errors and lack integrity checks.
+**Summary:** CI `gh run download`, `gh run list`, and consolidation fallback `cat` calls silently swallow errors and lack integrity checks.
 
-**Root cause:** The `|| true` on both the `gh run download` and `gh run list` commands hides auth failures, missing artifacts, and network blips. Furthermore, the download path lacks a SHA-256 integrity check.
+**Root cause:** The `|| true` on both the `gh run download` and `gh run list` commands hides auth failures, missing artifacts, and network blips. Furthermore, the download path lacks a SHA-256 integrity check. The same `|| true` pattern at the consolidation fallback `cat all_reviewer_inputs.md >> ... 2>/dev/null || true` silently swallows missing-file and I/O errors, allowing a review to silently disappear.
 
-**Failure scenario:** Failed downloads or listing fail silently, and the downstream `if [ -f ... ]` check gives no diagnostic feedback. Without SHA-256, tampered artifacts are accepted.
+**Failure scenario:** Failed downloads or listing fail silently, and the downstream `if [ -f ... ]` check gives no diagnostic feedback. Without SHA-256, tampered artifacts are accepted. A missing `all_reviewer_inputs.md` during consolidation fallback produces an empty or partial review with no diagnostic, and the comment-posting step posts a misleading "falling back" message with no actual reviewer data.
 
-**Fix direction:** Log stderr before `|| true`, or explicitly check and log the exit code. Implement SHA-256 artifact verification.
+**Fix direction:** Log stderr before `|| true`, or explicitly check and log the exit code. Implement SHA-256 artifact verification. For the consolidation fallback `cat`, add a presence check (`test -f`) before `cat` and emit a distinct stderr warning when the file is missing.
 
 ---
 

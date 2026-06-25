@@ -137,6 +137,7 @@ jobs:
           REVIEW_OUTPUT: ${{ matrix.reviewer.output }}
           REVIEWER_NAME: ${{ matrix.reviewer.name }}
         run: |
+          set -euo pipefail
           if [ ! -f "$REVIEW_PROMPT_FILE" ]; then
             echo "::error::Review prompt file $REVIEW_PROMPT_FILE not found"
             exit 1
@@ -152,6 +153,59 @@ jobs:
           <agents_rules>
           EOF
           cat AGENTS.md >> prompt.txt 2>/dev/null || echo "No AGENTS.md found." >> prompt.txt
+
+          if [ "$REVIEWER_NAME" = "Application Security Engineer" ]; then
+            echo "Injecting code-security and llm-security skill files for AppSec review..." >&2
+            cat << 'SKILLEOF' >> prompt.txt
+
+          <code_security_skill>
+          SKILLEOF
+            if [ -s .github/skills/code-security/SKILL.md ]; then
+              cat .github/skills/code-security/SKILL.md >> prompt.txt
+            else
+              echo "No code-security skill found." >> prompt.txt
+            fi
+            cat << 'SKILLEOF' >> prompt.txt
+          </code_security_skill>
+
+          <llm_security_skill>
+          SKILLEOF
+            if [ -s .github/skills/llm-security/SKILL.md ]; then
+              cat .github/skills/llm-security/SKILL.md >> prompt.txt
+            else
+              echo "No llm-security skill found." >> prompt.txt
+            fi
+            cat << 'SKILLEOF' >> prompt.txt
+          </llm_security_skill>
+          SKILLEOF
+          elif [ "$REVIEWER_NAME" = "Senior Developer" ]; then
+            echo "Injecting ponytail and ponytail-review skill files for Senior Developer review..." >&2
+            cat << 'SKILLEOF' >> prompt.txt
+
+          <ponytail_skill>
+          SKILLEOF
+            if [ -s .github/skills/ponytail/SKILL.md ]; then
+              cat .github/skills/ponytail/SKILL.md >> prompt.txt
+            else
+              echo "No ponytail skill found." >> prompt.txt
+            fi
+            cat << 'SKILLEOF' >> prompt.txt
+          </ponytail_skill>
+
+          <ponytail_review_skill>
+          SKILLEOF
+            if [ -s .github/skills/ponytail-review/SKILL.md ]; then
+              cat .github/skills/ponytail-review/SKILL.md >> prompt.txt
+            else
+              echo "No ponytail-review skill found." >> prompt.txt
+            fi
+            cat << 'SKILLEOF' >> prompt.txt
+          </ponytail_review_skill>
+          SKILLEOF
+          else
+            echo "Warning: No skill injection configured for reviewer '$REVIEWER_NAME'" >&2
+          fi
+
           cat << 'EOF' >> prompt.txt
           </agents_rules>
 
@@ -385,19 +439,19 @@ jobs:
             echo "# Consolidated Review" > consolidated_gyrseek_review.md
             echo "OpenCode consolidation failed; falling back to raw reviewer inputs." >> consolidated_gyrseek_review.md
             echo >> consolidated_gyrseek_review.md
-            cat all_reviewer_inputs.md >> consolidated_gyrseek_review.md
+            cat all_reviewer_inputs.md >> consolidated_gyrseek_review.md 2>/dev/null || true
           }
 
           if [ ! -s consolidated_gyrseek_review.md ] && [ -s opencode_out.txt ]; then
             cp opencode_out.txt consolidated_gyrseek_review.md
           fi
 
-          if ! grep -q "^# Consolidated Review" consolidated_gyrseek_review.md; then
+          if ! grep -qi "^# consolidated review" consolidated_gyrseek_review.md 2>/dev/null; then
              echo "Consolidated review output is missing expected header. Falling back."
              echo "# Consolidated Review" > consolidated_gyrseek_review.md
              echo "OpenCode consolidation generated invalid format; falling back to raw reviewer inputs." >> consolidated_gyrseek_review.md
              echo >> consolidated_gyrseek_review.md
-             cat all_reviewer_inputs.md >> consolidated_gyrseek_review.md
+             cat all_reviewer_inputs.md >> consolidated_gyrseek_review.md 2>/dev/null || true
           fi
 
           # Update the ledger with the new review

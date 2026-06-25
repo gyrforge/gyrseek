@@ -1,0 +1,10 @@
+# Review prompt files set system instructions for AI code reviewers.
+# Changes can weaken review criteria (e.g., removing zero-trust directives),
+# enabling slow-poison attacks. Require explicit approval from code owners.
+.github/review-prompts/ @SouthernMine4957 @david-craggs
+
+# Skill files (code-security, llm-security, ponytail, etc.) are injected into
+# LLM review prompts as trusted context. A PR modifying these can embed
+# arbitrary instructions ("Ignore all vulnerabilities") that propagate to
+# every subsequent review. Require explicit approval from code owners.
+.github/skills/ @SouthernMine4957 @david-craggs
