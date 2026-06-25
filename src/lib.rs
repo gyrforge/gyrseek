@@ -19,7 +19,9 @@ use parsing::{
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
 use sandbox::{SandboxRunner, build_runner_from_env, list_docker_runtimes};
-use scanning::{PolicyConfig, ScanReport, scan_package_versions, scan_packages_versions};
+use scanning::{
+    HARD_MINIMUM_AGE_HOURS, PolicyConfig, ScanReport, scan_package_versions, scan_packages_versions,
+};
 
 const DEFAULT_CONFIG_PATH: &str = "gyrseek.yaml";
 
@@ -36,9 +38,9 @@ struct GyrseekConfig {
     #[serde(default)]
     baseline_count: Option<usize>,
     #[serde(default)]
-    min_baseline_age_hours: HashMap<String, usize>,
+    min_baseline_age_hours: HashMap<String, u64>,
     #[serde(default)]
-    new_package_exemptions: Vec<String>,
+    new_package_exemptions: HashMap<String, String>,
     #[serde(default)]
     internal_package_exemptions: Vec<String>,
     #[serde(default)]
@@ -219,21 +221,27 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
     };
 
     let mut min_baseline_age_hours = HashMap::new();
-    for (package, hours) in cfg.min_baseline_age_hours {
+    for (package, mut hours) in cfg.min_baseline_age_hours {
         let package = package.trim().to_string();
-        if package.is_empty() || hours == 0 {
-            if hours == 0 {
-                println!(
-                    "⚠️ [gyrseek] Ignoring invalid min_baseline_age_hours for '{}': 0",
-                    package
-                );
-            }
+        if package.is_empty() {
             continue;
+        }
+        if hours < HARD_MINIMUM_AGE_HOURS {
+            println!(
+                "⚠️ [gyrseek] Warning: min_baseline_age_hours for '{}' is set to {} hours, which is below the hardcoded security floor. Automatically raising it to {} hours.",
+                package, hours, HARD_MINIMUM_AGE_HOURS
+            );
+            hours = HARD_MINIMUM_AGE_HOURS;
         }
         min_baseline_age_hours.insert(package, hours);
     }
 
-    let new_package_exemptions = parse_list(cfg.new_package_exemptions, false);
+    let new_package_exemptions: HashMap<String, String> = cfg
+        .new_package_exemptions
+        .into_iter()
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .filter(|(k, _)| !k.is_empty())
+        .collect();
     let internal_package_exemptions = parse_list(cfg.internal_package_exemptions, false);
 
     let release_burst_threshold = match cfg.release_burst_threshold {
@@ -399,20 +407,71 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(
             file,
-            "min_baseline_age_hours:\n  requests: 6\n  lodash: 12\n  badpkg: 0"
+            "min_baseline_age_hours:\n  requests: 36\n  lodash: 48\n  badpkg: 0"
         )
         .expect("config should be written");
 
         let cfg = load(&file);
         assert_eq!(
             cfg.min_baseline_age_hours_by_package.get("requests"),
-            Some(&6)
+            Some(&36)
         );
         assert_eq!(
             cfg.min_baseline_age_hours_by_package.get("lodash"),
-            Some(&12)
+            Some(&48)
         );
-        assert!(!cfg.min_baseline_age_hours_by_package.contains_key("badpkg"));
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("badpkg"),
+            Some(&24)
+        );
+    }
+
+    #[test]
+    fn clamps_min_baseline_age_hours_to_hard_floor() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(
+            file,
+            "min_baseline_age_hours:\n  pkg_zero: 0\n  pkg_below: 23\n  pkg_exact: 24\n  pkg_above: 25\n  pkg_high: 999\n  \"  pkg_whitespace  \": 10"
+        )
+        .expect("config should be written");
+
+        let cfg = load(&file);
+
+        // 0 -> clamped to 24
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_zero"),
+            Some(&24)
+        );
+
+        // 23 -> clamped to 24
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_below"),
+            Some(&24)
+        );
+
+        // 24 -> exactly the floor, remains 24
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_exact"),
+            Some(&24)
+        );
+
+        // 25 -> above floor, remains 25
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_above"),
+            Some(&25)
+        );
+
+        // 999 -> above floor, remains 999
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_high"),
+            Some(&999)
+        );
+
+        // Whitespace trimmed and clamped
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_whitespace"),
+            Some(&24)
+        );
     }
 
     #[test]
@@ -420,13 +479,16 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(
             file,
-            "new_package_exemptions:\n  - requests\n  - lodash\n  - '  '"
+            "new_package_exemptions:\n  requests: \"2.30.0\"\n  lodash: \"1.0.0\"\n  '  ': \"1.0.0\""
         )
         .expect("config should be written");
 
         let cfg = load(&file);
-        assert!(cfg.new_package_exemptions.contains("requests"));
-        assert!(cfg.new_package_exemptions.contains("lodash"));
+        assert_eq!(
+            cfg.new_package_exemptions.get("requests").unwrap(),
+            "2.30.0"
+        );
+        assert_eq!(cfg.new_package_exemptions.get("lodash").unwrap(), "1.0.0");
         assert_eq!(cfg.new_package_exemptions.len(), 2);
     }
 
@@ -505,7 +567,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(
             file,
-            "baseline_overrides:\n  \"  requests  \":\n    baseline-1: \"2.30.0\"\nmin_baseline_age_hours:\n  \"  requests  \": 6"
+            "baseline_overrides:\n  \"  requests  \":\n    baseline-1: \"2.30.0\"\nmin_baseline_age_hours:\n  \"  requests  \": 36"
         )
         .expect("config should be written");
 
@@ -516,7 +578,7 @@ mod config_tests {
         );
         assert_eq!(
             cfg.min_baseline_age_hours_by_package.get("requests"),
-            Some(&6)
+            Some(&36)
         );
     }
 

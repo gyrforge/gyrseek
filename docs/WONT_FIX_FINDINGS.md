@@ -20,6 +20,8 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP6 | `AGENTS.md`                | `false-positive` | Graphify skill referenced but skill file does not exist.                 | 🚫 Won't Fix |
 | FP7 | `docs/common_prompts.md` | `false-positive` | Raw CI prompt committed into documentation directory. | 🚫 Won't Fix |
 | FP8 | `sandbox.rs`               | `false-positive` | `process_vm_readv` is permitted in the seccomp profile.                                  | 🚫 Won't Fix |
+| FP9 | `scanning.rs`              | `false-positive` | Baseline override poisoning allows bypassing anomaly detection.                          | 🚫 Won't Fix |
+| FP10| `scanning.rs`              | `false-positive` | Slow-release baseline poisoning (long-term aging) evades detection.                      | 🚫 Won't Fix |
 
 ---
 
@@ -159,3 +161,19 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 **Reason for Not Fixing:** This is a won't fix because `strace` intrinsically requires `process_vm_readv` to function. `strace` relies on this syscall to read strings and data structures (like arguments to `execve` or file paths in `open`) from the target process's memory space. Blocking it would render `strace` unable to capture the rich behavioral telemetry that Gyrseek relies on for its anomaly detection. 
 
 Furthermore, a malicious process can only use `process_vm_readv` for *read-only* access to sibling memory. To actively corrupt logs or interfere with sibling execution, an attacker would need `process_vm_writev`. Because we have explicitly blocked `process_vm_writev`, the memory corruption vector is neutralized. The read-only access does not pose a threat to the integrity of the trace logs, making `process_vm_readv` safe to leave permitted.
+
+### Finding FP9 — `false-positive` (Baseline Override Poisoning) | `scanning.rs` | 🚫 Won't Fix
+
+**Summary:** An attacker who observes that an old version had a particular network endpoint can set `baseline_overrides` to point at that old version and add the endpoint's IP to the allowlist. Even if the current version connects to a new C2 endpoint, the diff against the overridden baseline produces zero diffs, framing a known-good old version as the comparison point to bypass detection.
+
+**Suggested Fix:** Validate that override versions were published recently, or compute a behavioral signature union/intersection across fetched and override baselines to flag behaviors not present in recent versions.
+
+**Reason for Not Fixing:** This will remain a limitation of gyrseek for the foreseeable future. Baseline overrides are explicitly designed as a heavy-handed configuration escape hatch for users to force a specific baseline when natural resolution fails or is inappropriate. Implementing recency validation or intersection logic would significantly complicate the override mechanism and undermine its purpose as an unconditional user-directed override. It is accepted that malicious or compromised configuration changes within the repository (`gyrseek.yaml`) can bypass anomaly detection, as configuration is assumed to be trusted.
+
+### Finding FP10 — `false-positive` (Slow-Release Baseline Poisoning) | `scanning.rs` | 🚫 Won't Fix
+
+**Summary:** An attacker who controls a package can introduce a malicious behavior (e.g., establishing a C2 connection or reading a sensitive file) very slowly to evade detection. They could introduce the behavior in a seemingly benign way, wait several months and multiple version releases for that behavior to become part of the accepted baselines, and then weaponize it in a future update. Because the behavior is already present in the accepted baselines, the subsequent update won't be flagged as an anomaly.
+
+**Suggested Fix:** Implement long-term behavioral drift analysis, or flag behaviors based on their absolute threat level rather than purely relative differences against baselines.
+
+**Reason for Not Fixing:** This is a fundamental limitation of any differential/baseline-based anomaly detection system. Gyrseek's core philosophy is to detect *changes* in behavior between versions, operating under the assumption that long-standing behaviors are implicitly trusted by the ecosystem. Detecting a slow-rolling attack requires absolute semantic understanding of the code's intent (e.g., knowing *why* a connection is being made), which is outside the scope of a behavioral diffing tool. We mitigate this somewhat through static artifact scanning (e.g., flagging unexpected executables or `.pth` files unconditionally), but purely behavioral poisoning over long timeframes will remain an accepted architectural risk.

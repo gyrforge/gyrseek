@@ -86,3 +86,21 @@ fn minimum_release_age_package_runs_before_burst_threshold() {
     assert!(stdout.contains("minimum_release_age_package triggered"));
     assert!(!stdout.contains("Release burst threshold triggered"));
 }
+
+#[test]
+fn exits_with_code_1_and_rejects_versions_newer_than_72_hours_by_default() {
+    let output = run_with_config_and_env(
+        "", // Empty config so default min_baseline_age_hours=72 applies
+        &[
+            // Provide candidates that are 2 hours old.
+            // They should be filtered out by the 72h default gate.
+            ("GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS", "2,2,2"),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Registry does not contain enough historical versions"));
+    assert!(stdout.contains("(found 0)"));
+}

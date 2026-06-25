@@ -19,8 +19,8 @@ pub(crate) struct PolicyConfig {
     pub git_clone_allowlist: HashMap<String, HashSet<String>>,
     pub baseline_overrides: HashMap<String, (Option<String>, Option<String>)>,
     pub baseline_count: usize,
-    pub min_baseline_age_hours_by_package: HashMap<String, usize>,
-    pub new_package_exemptions: HashSet<String>,
+    pub min_baseline_age_hours_by_package: HashMap<String, u64>,
+    pub new_package_exemptions: HashMap<String, String>,
     /// Packages that are skipped entirely — no registry history fetch, no
     /// sandbox install, no diff. Intended for first-party / internal packages
     /// served from a private index (e.g. Nexus) that gyrseek's open-source
@@ -48,7 +48,7 @@ impl Default for PolicyConfig {
             baseline_overrides: HashMap::new(),
             baseline_count: 2,
             min_baseline_age_hours_by_package: HashMap::new(),
-            new_package_exemptions: HashSet::new(),
+            new_package_exemptions: HashMap::new(),
             internal_package_exemptions: HashSet::new(),
             release_burst_threshold: None,
             release_burst_window_hours: 24,
@@ -125,7 +125,7 @@ struct VersionPlan {
     target_version: String,
     current: String,
     baselines: Vec<String>,
-    eligible_baseline_versions: usize,
+    policy_baseline_count: usize,
     new_package_exempt: bool,
 }
 
@@ -147,7 +147,8 @@ struct NpmResponse {
     time: std::collections::HashMap<String, String>,
 }
 
-const DEFAULT_MIN_BASELINE_AGE_HOURS: i64 = 2;
+pub const HARD_MINIMUM_AGE_HOURS: u64 = 24;
+pub const DEFAULT_MIN_BASELINE_AGE_HOURS: u64 = 72;
 
 /// The cloud instance metadata endpoint (link-local by address, but a real
 /// SSRF / credential-theft target). We never filter it as "local noise" so a
@@ -519,6 +520,34 @@ fn extract_dns_map(trace: &str) -> HashMap<String, Vec<IpAddr>> {
     map
 }
 
+fn check_override_ages(
+    package: &str,
+    overrides: Option<&(Option<String>, Option<String>)>,
+    published_at: &std::collections::HashMap<String, DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Some((m1, m2)) = overrides {
+        for ov in [m1, m2].iter().filter_map(|m| m.as_deref()) {
+            if let Some(ts) = published_at.get(ov) {
+                let age_hours = (now - *ts).num_hours();
+                if age_hours < HARD_MINIMUM_AGE_HOURS as i64 {
+                    warnings.push(format!(
+                        "⚠️ [gyrseek] Warning: baseline override '{}' for package '{}' is only {} hours old (minimum recommended is {}). Using it anyway as per configuration.",
+                        ov, package, age_hours, HARD_MINIMUM_AGE_HOURS
+                    ));
+                }
+            } else {
+                warnings.push(format!(
+                    "⚠️ [gyrseek] Warning: baseline override '{}' for package '{}' could not be found in the registry history.",
+                    ov, package
+                ));
+            }
+        }
+    }
+    warnings
+}
+
 pub(crate) async fn fetch_history_with_baselines(
     manager: &str,
     package: &str,
@@ -526,7 +555,24 @@ pub(crate) async fn fetch_history_with_baselines(
     baseline_count: usize,
     min_baseline_age_hours: i64,
     release_burst_window_hours: i64,
+    overrides: Option<&(Option<String>, Option<String>)>,
 ) -> (String, Vec<String>, usize, Option<i64>) {
+    if let Ok(ages_str) = std::env::var("GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS") {
+        let ages: Vec<i64> = ages_str.split(',').filter_map(|s| s.parse().ok()).collect();
+        let now = Utc::now();
+        let mut published_at = std::collections::HashMap::new();
+        let mut candidates = Vec::new();
+        for (i, age) in ages.iter().enumerate() {
+            let v = format!("0.{}.0", i);
+            candidates.push(v.clone());
+            published_at.insert(v, now - chrono::Duration::hours(*age));
+        }
+        let cutoff = now - chrono::Duration::hours(min_baseline_age_hours.max(0));
+        let baselines =
+            select_age_eligible_baselines(candidates, &published_at, cutoff, baseline_count);
+        return (target_v.to_string(), baselines, 0, None);
+    }
+
     let forced_releases_last_24h = std::env::var("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H")
         .ok()
         .and_then(|v| v.parse::<usize>().ok());
@@ -540,6 +586,18 @@ pub(crate) async fn fetch_history_with_baselines(
             Vec::new(),
             forced_releases_last_24h.unwrap_or(0),
             forced_current_release_age_days,
+        );
+    }
+
+    if std::env::var("GYRSEEK_TEST_ECHO_MIN_BASELINE_AGE_HOURS").is_ok() {
+        return (
+            target_v.to_string(),
+            vec![
+                format!("{}_echo1", min_baseline_age_hours),
+                format!("{}_echo2", min_baseline_age_hours),
+            ],
+            0,
+            None,
         );
     }
 
@@ -572,6 +630,9 @@ pub(crate) async fn fetch_history_with_baselines(
                 let cutoff = now - Duration::hours(min_baseline_age_hours.max(0));
                 let version_keys: HashSet<String> = data.versions.keys().cloned().collect();
                 let published_at = npm_published_times(&data.time, &version_keys);
+                for warning in check_override_ages(package, overrides, &published_at, now) {
+                    println!("{}", warning);
+                }
                 let releases_last_24h = count_releases_in_window(
                     &published_at,
                     now - Duration::hours(release_burst_window_hours.max(1)),
@@ -635,6 +696,9 @@ pub(crate) async fn fetch_history_with_baselines(
                     if let Some(ts) = earliest {
                         published_at.insert(version, ts);
                     }
+                }
+                for warning in check_override_ages(package, overrides, &published_at, now) {
+                    println!("{}", warning);
                 }
                 let releases_last_24h = count_releases_in_window(
                     &published_at,
@@ -1608,16 +1672,6 @@ fn minimum_release_age_policy_warning(
     None
 }
 
-fn exemption_behavior(new_package_exempt: bool, eligible_baseline_versions: usize) -> (bool, bool) {
-    if !new_package_exempt {
-        return (false, false);
-    }
-    if eligible_baseline_versions < 2 {
-        return (true, false);
-    }
-    (false, true)
-}
-
 fn warn_and_block(
     results: &mut HashMap<String, ScanReport>,
     key: &str,
@@ -1679,8 +1733,7 @@ pub(crate) async fn scan_packages_versions(
             .min_baseline_age_hours_by_package
             .get(pkg_name)
             .copied()
-            .unwrap_or(DEFAULT_MIN_BASELINE_AGE_HOURS as usize)
-            as i64;
+            .unwrap_or(DEFAULT_MIN_BASELINE_AGE_HOURS) as i64;
 
         let fetch_count = policy.baseline_count.max(2);
         let (v_curr, fetched_baselines, releases_last_24h, current_release_age_days) =
@@ -1691,6 +1744,7 @@ pub(crate) async fn scan_packages_versions(
                 fetch_count,
                 min_baseline_age_hours,
                 policy.release_burst_window_hours as i64,
+                policy.baseline_overrides.get(pkg_name),
             )
             .await;
 
@@ -1731,8 +1785,6 @@ pub(crate) async fn scan_packages_versions(
             continue;
         }
 
-        let eligible_baseline_versions = fetched_baselines.len();
-
         let baselines = select_effective_baselines(
             &v_curr,
             fetched_baselines,
@@ -1740,14 +1792,23 @@ pub(crate) async fn scan_packages_versions(
             policy.baseline_count,
         );
 
-        let new_package_exempt = policy.new_package_exemptions.contains(pkg_name);
-        let (_, should_warn_exemption) =
-            exemption_behavior(new_package_exempt, eligible_baseline_versions);
-        if should_warn_exemption {
-            println!(
-                "⚠️ [gyrseek] Package '{}' is listed in new_package_exemptions but now has {} eligible baseline versions; consider removing the exemption.",
-                pkg_name, eligible_baseline_versions
-            );
+        let mut new_package_exempt = false;
+        if let Some(exempt_version) = policy.new_package_exemptions.get(pkg_name) {
+            if exempt_version == tgt_version || exempt_version == &v_curr {
+                new_package_exempt = true;
+            }
+
+            if baselines.len() >= policy.baseline_count {
+                println!(
+                    "ℹ️ [gyrseek] You have an exemption for '{}' pinned to version '{}'. Since the package now has sufficient baselines, you can safely remove it from your configuration.",
+                    pkg_name, exempt_version
+                );
+            } else if !new_package_exempt {
+                println!(
+                    "ℹ️ [gyrseek] Exemption for '{}' is pinned to version '{}', ignoring for current version '{}'.",
+                    pkg_name, exempt_version, v_curr
+                );
+            }
         }
 
         if baselines.len() < policy.baseline_count && !new_package_exempt {
@@ -1792,7 +1853,7 @@ pub(crate) async fn scan_packages_versions(
             target_version: tgt_version.clone(),
             current: v_curr,
             baselines,
-            eligible_baseline_versions,
+            policy_baseline_count: policy.baseline_count,
             new_package_exempt,
         });
     }
@@ -1903,12 +1964,12 @@ pub(crate) async fn scan_packages_versions(
             continue;
         }
 
-        let (skip_due_to_exemption, _) =
-            exemption_behavior(plan.new_package_exempt, plan.eligible_baseline_versions);
-        if skip_due_to_exemption {
+        if plan.new_package_exempt && plan.baselines.len() < plan.policy_baseline_count {
             println!(
-                "⚠️ [gyrseek] New package exemption applied for '{}': only {} eligible baseline version(s) available (<2). Skipping anomaly block for now.",
-                plan.package, plan.eligible_baseline_versions
+                "⚠️ [gyrseek] New package exemption applied for '{}': only {} eligible baseline version(s) available (<{}). Skipping anomaly block for now.",
+                plan.package,
+                plan.baselines.len(),
+                plan.policy_baseline_count
             );
             results.insert(
                 key,
@@ -2176,7 +2237,7 @@ mod tests {
 
     use super::{
         PolicyConfig, burst_policy_warning, classify_inventory_lines, compare_version_strings,
-        count_releases_in_window, decode_dns_name, exemption_behavior, extract_artifact_findings,
+        count_releases_in_window, decode_dns_name, extract_artifact_findings,
         extract_connection_ips, extract_dns_map, extract_process_exec_signatures,
         extract_sensitive_file_reads, filter_allowlisted_artifact_findings,
         filter_allowlisted_git_clone_signatures, filter_allowlisted_new_connections,
@@ -3105,14 +3166,6 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
         let selected = select_age_eligible_baselines(candidates, &published, cutoff, 2);
         assert_eq!(selected, vec!["2.9.0".to_string(), "2.8.0".to_string()]);
-    }
-
-    #[test]
-    fn exemption_applies_only_when_less_than_two_baselines() {
-        assert_eq!(exemption_behavior(true, 0), (true, false));
-        assert_eq!(exemption_behavior(true, 1), (true, false));
-        assert_eq!(exemption_behavior(true, 2), (false, true));
-        assert_eq!(exemption_behavior(false, 0), (false, false));
     }
 
     #[test]
@@ -5496,7 +5549,9 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
         let policy = PolicyConfig {
             baseline_count: 2,
-            new_package_exemptions: ["new-pkg".to_string()].into_iter().collect(),
+            new_package_exemptions: [("new-pkg".to_string(), "1.0.0".to_string())]
+                .into_iter()
+                .collect(),
             ..PolicyConfig::default()
         };
 
@@ -5512,6 +5567,107 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             results.get("new-pkg|1.0.0").map(|r| r.allowed),
             Some(true),
             "new package with artifact findings must be exempt"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_package_exemption_ignored_if_version_mismatch() {
+        // Exemption is pinned to 1.0.0, but we are installing 1.0.1.
+        // It should be ignored and block because it lacks baselines.
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+
+        let runner = MockRunner {
+            traces: HashMap::from([(
+                ("new-pkg".to_string(), "1.0.1".to_string()),
+                "".to_string(), // Empty trace, no anomalies, just lack of baselines
+            )]),
+        };
+
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            new_package_exemptions: [("new-pkg".to_string(), "1.0.0".to_string())]
+                .into_iter()
+                .collect(),
+            ..PolicyConfig::default()
+        };
+
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("new-pkg".to_string(), "1.0.1".to_string())],
+            &policy,
+        )
+        .await;
+
+        let report = results.get("new-pkg|1.0.1").unwrap();
+        assert!(
+            !report.allowed,
+            "exemption should be ignored and package blocked"
+        );
+        assert_eq!(
+            report.blocked_reasons,
+            vec!["insufficient_baselines".to_string()],
+            "must be blocked early due to lack of baselines"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_package_exemption_warns_and_scans_if_sufficient_baselines() {
+        // Exemption is pinned and matches, but the package actually has enough baselines.
+        // It should print a warning and then undergo standard scan (and fail if there's an anomaly).
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+
+        let runner = MockRunner {
+            traces: HashMap::from([
+                (
+                    ("new-pkg".to_string(), "1.0.0".to_string()),
+                    format!(
+                        "sin_addr=inet_addr(\"1.2.3.4\")\n{}/work/site-packages/evil.pth\x00150\x00ASCII text\x00import socket",
+                        crate::scanning::ARTIFACT_DELIMITER
+                    ),
+                ),
+                (
+                    ("new-pkg".to_string(), "0.9.0".to_string()),
+                    "sin_addr=inet_addr(\"1.2.3.4\")".to_string(),
+                ),
+                (
+                    ("new-pkg".to_string(), "0.8.0".to_string()),
+                    "sin_addr=inet_addr(\"1.2.3.4\")".to_string(),
+                ),
+            ]),
+        };
+
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            baseline_overrides: HashMap::from([(
+                "new-pkg".to_string(),
+                (Some("0.9.0".to_string()), Some("0.8.0".to_string())),
+            )]),
+            new_package_exemptions: [("new-pkg".to_string(), "1.0.0".to_string())]
+                .into_iter()
+                .collect(),
+            ..PolicyConfig::default()
+        };
+
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("new-pkg".to_string(), "1.0.0".to_string())],
+            &policy,
+        )
+        .await;
+
+        let report = results.get("new-pkg|1.0.0").unwrap();
+        assert!(
+            !report.allowed,
+            "must be blocked due to the artifact anomaly, because the exemption is ignored when baselines are sufficient"
+        );
+        assert!(
+            report
+                .blocked_reasons
+                .iter()
+                .any(|r| r.contains("Suspicious artifact(s)")),
+            "must flag the suspicious_pth anomaly"
         );
     }
 
@@ -5623,5 +5779,78 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
         // /path/to/backup.env should be blocked because the suffix is .env but it's not preceded by a slash
         assert!(blocked.contains(&"/path/to/backup.env".to_string()));
+    }
+
+    #[test]
+    fn check_override_ages_warnings() {
+        use chrono::TimeZone;
+        let now = Utc.with_ymd_and_hms(2023, 1, 5, 12, 0, 0).unwrap();
+        let mut published_at = std::collections::HashMap::new();
+        // 10 hours old
+        published_at.insert("1.0.0".to_string(), now - chrono::Duration::hours(10));
+        // 48 hours old
+        published_at.insert("1.1.0".to_string(), now - chrono::Duration::hours(48));
+
+        let overrides = (Some("1.0.0".to_string()), Some("1.1.0".to_string()));
+
+        let warnings = super::check_override_ages("pkg", Some(&overrides), &published_at, now);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("is only 10 hours old (minimum recommended is 24)"));
+
+        let missing = (Some("9.9.9".to_string()), None);
+        let warnings2 = super::check_override_ages("pkg", Some(&missing), &published_at, now);
+        assert_eq!(warnings2.len(), 1);
+        assert!(warnings2[0].contains("could not be found in the registry history"));
+
+        let ok_overrides = (Some("1.1.0".to_string()), None);
+        let warnings3 = super::check_override_ages("pkg", Some(&ok_overrides), &published_at, now);
+        assert!(warnings3.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scan_packages_versions_uses_default_min_baseline_age_hours_when_empty() {
+        let mut traces = std::collections::HashMap::new();
+        // Since baselines returned will be ["72_echo1", "72_echo2"], we need to mock these to avoid missing trace
+        traces.insert(
+            ("dummy".to_string(), "1.0".to_string()),
+            "execve(\"/bin/ls\", [\"ls\"], 0x7ffd5340 /* 10 vars */) = 0".to_string(),
+        );
+        traces.insert(
+            (
+                "dummy".to_string(),
+                format!("{}_echo1", super::DEFAULT_MIN_BASELINE_AGE_HOURS),
+            ),
+            "execve(\"/bin/ls\", [\"ls\"], 0x7ffd5340 /* 10 vars */) = 0".to_string(),
+        );
+        traces.insert(
+            (
+                "dummy".to_string(),
+                format!("{}_echo2", super::DEFAULT_MIN_BASELINE_AGE_HOURS),
+            ),
+            "execve(\"/bin/ls\", [\"ls\"], 0x7ffd5340 /* 10 vars */) = 0".to_string(),
+        );
+
+        let runner = MockRunner { traces };
+        let policy = crate::PolicyConfig {
+            min_baseline_age_hours_by_package: std::collections::HashMap::new(),
+            ..crate::PolicyConfig::default()
+        };
+
+        // Enable our echo bypass to reflect the passed min_baseline_age_hours as fake baselines
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_ECHO_MIN_BASELINE_AGE_HOURS", "1");
+
+        let mut results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("dummy".to_string(), "1.0".to_string())],
+            &policy,
+        )
+        .await;
+
+        let report = results.remove("dummy|1.0").expect("Report should exist");
+        assert!(
+            report.allowed,
+            "Should be allowed; if it blocked for missing_baseline_trace, it means the echoed baseline age did not match the expected default."
+        );
     }
 }

@@ -431,8 +431,8 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 | `sensitive_file_access_allowlist` | empty         | Sensitive file reads to ignore **per package** (map of package name to list of allowed paths). Supports suffix matching via `*` prefix. E.g. `*.env` matches `/work/.env`. |
 | `baseline_overrides`          | none          | Pin baseline versions **per package** via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines.                                                                                                                                       |
 | `baseline_count`              | `2`           | How many historical baselines to compare against.                                                                                                                                                                                                              |
-| `min_baseline_age_hours`      | `2`           | **Per-package** minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default.                                                                                                                                               |
-| `new_package_exemptions`      | none          | Exempt specific new packages when fewer than 2 eligible baselines exist. `gyrseek` warns once 2+ baselines exist so you can remove the exemption.                                                                                                              |
+| `min_baseline_age_hours`      | `72`          | **Per-package** minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default.                                                                                                                                               |
+| `new_package_exemptions`      | none          | Map of package names to their specifically vetted version (e.g. `requests: "1.0.0"`). Exempts the pinned version when fewer than 2 eligible baselines exist. Helps prevent exemption-list rot since newer versions naturally ignore the pinned exemption. |
 | `internal_package_exemptions` | none          | Skip specific packages **entirely** — no registry history fetch, no sandbox install, no diff. For first-party / internal packages served from a private index (e.g. Nexus) that `gyrseek`'s public-registry lookups can't resolve, so scanning only yields noise. The package is forwarded unscanned at its requested version.            |
 | `minimum_release_age_package` | off           | Minimum release age in **days**. When set, runs before burst/anomaly checks and fails closed if the current release is younger.                                                                                                                                |
 | `release_burst_threshold`     | off           | Fails closed if a package published at least this many versions within the burst window.                                                                                                                                                                       |
@@ -478,7 +478,7 @@ min_baseline_age_hours:
   requests: 6
   lodash: 12
 new_package_exemptions:
-  - newly-published-package
+  newly-published-package: "1.0.0"
 internal_package_exemptions:
   - internal-pkg-logger          # first-party package served from a private Nexus index
 minimum_release_age_package: 3
