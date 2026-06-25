@@ -287,6 +287,17 @@ It captures **every** `execve` system call inside the sandbox, extracts the exec
 #### How it works
 If an installation script unexpectedly reads highly sensitive files (e.g., `~/.aws/credentials`, `~/.ssh/id_rsa`, `~/.npmrc`, `~/.env`, `/etc/passwd`), `gyrseek` captures the hex-escaped path via `strace` and unescapes it for analysis. The accessed files are then diffed against baseline versions. If a new package version accesses sensitive files that older versions never touched, the install is immediately blocked.
 
+#### Why Baseline Diffing is Essential Here
+It might seem safer to unconditionally block *any* sensitive file access (ignoring baselines entirely), but this is impractical for a scanner that wraps the entire install process:
+- **Package Managers**: The `strace` trace captures the behavior of the package manager itself. `npm` and `yarn` **always** read `~/.npmrc` to find registry URLs and auth tokens. `pip` often reads `/etc/passwd` to resolve the user's home directory.
+- **Private Git Dependencies**: If a package has a private git dependency (e.g., `"git+ssh://git@github.com/..."`), the package manager will spawn `git clone`, which legitimately reads `~/.ssh/id_rsa` or `~/.git-credentials` to authenticate.
+- **Private Registries**: Companies using AWS CodeArtifact for their private package registry may trigger an AWS credential helper under the hood, which legitimately reads `~/.aws/credentials` during the install.
+- **Legitimate Build Tools**: Some packages legitimately read `.env` files during `postinstall` to generate client code (e.g., Prisma).
+
+If `gyrseek` blocked sensitive file reads unconditionally, almost every `npm install` would fail simply because `npm` read `~/.npmrc`, and any project with a private git dependency would break. The baseline diff solves this: if a package has always relied on a private git dependency, the baseline version's installation *also* read `~/.ssh/id_rsa`. `gyrseek` sees no *new* sensitive reads, allowing the install to proceed. However, if a normal utility like `lodash` suddenly tries to read `~/.ssh/id_rsa` in a compromised version, the diff catches the brand new read attempt and blocks it instantly.
+
+> **Note on SDKs (e.g., AWS SDK):** Legitimate SDKs (like `boto3` or `@aws-sdk/client-s3`) **do not** read credentials like `~/.aws/credentials` during installation. They only read them at runtime when imported by your application. Therefore, a clean install of the AWS SDK will not trigger an alert. If an installation *does* try to read them, it is almost certainly a malicious script.
+
 ### Post-Install Artifact Behavior Detection
 
 `gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, file type, first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
@@ -415,17 +426,18 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 | ----------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ip_allowlist`                | empty         | IPs to ignore before anomaly blocking. Canonicalized (equivalent IPv6 forms match); invalid entries are skipped with a warning.                                                                                                                                |
 | `domain_allowlist`            | empty         | Domains to ignore. Lowercased, trailing `.` stripped. Subdomains match parents (`cdn.example.com` matches `example.com`). Only **forward-confirmed** PTR hostnames (FCrDNS) are matched, so a spoofed reverse-DNS record cannot bypass the allowlist.          |
-| `artifact_allowlist`          | empty         | Artifact findings to allow (exact `type|path|details` or prefix `type|path`). New artifacts not in baselines and not allowlisted fail closed. Example: `binary|/work/bin/tool`.               |
-| `git_clone_allowlist`         | empty         | Git clone targets to allow when new install-time clone behavior appears (case-insensitive exact URL match).                                                                                                                                                    |
-| `baseline_overrides`          | none          | Pin baseline versions per package via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines.                                                                                                                                       |
+| `artifact_allowlist`          | empty         | Artifact findings to allow **per package** (map of package name to list of allowed artifacts; exact `type\|path\|details` or prefix `type\|path`). New artifacts not in baselines and not allowlisted fail closed. Example: `binary\|/work/bin/tool`.               |
+| `git_clone_allowlist`         | empty         | Git clone targets to allow **per package** when new install-time clone behavior appears (case-insensitive exact URL match).                                                                                                                                                    |
+| `sensitive_file_access_allowlist` | empty         | Sensitive file reads to ignore **per package** (map of package name to list of allowed paths). Supports suffix matching via `*` prefix. E.g. `*.env` matches `/work/.env`. |
+| `baseline_overrides`          | none          | Pin baseline versions **per package** via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines.                                                                                                                                       |
 | `baseline_count`              | `2`           | How many historical baselines to compare against.                                                                                                                                                                                                              |
-| `min_baseline_age_hours`      | `2`           | Per-package minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default.                                                                                                                                               |
+| `min_baseline_age_hours`      | `2`           | **Per-package** minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default.                                                                                                                                               |
 | `new_package_exemptions`      | none          | Exempt specific new packages when fewer than 2 eligible baselines exist. `gyrseek` warns once 2+ baselines exist so you can remove the exemption.                                                                                                              |
 | `internal_package_exemptions` | none          | Skip specific packages **entirely** — no registry history fetch, no sandbox install, no diff. For first-party / internal packages served from a private index (e.g. Nexus) that `gyrseek`'s public-registry lookups can't resolve, so scanning only yields noise. The package is forwarded unscanned at its requested version.            |
 | `minimum_release_age_package` | off           | Minimum release age in **days**. When set, runs before burst/anomaly checks and fails closed if the current release is younger.                                                                                                                                |
 | `release_burst_threshold`     | off           | Fails closed if a package published at least this many versions within the burst window.                                                                                                                                                                       |
 | `release_burst_window_hours`  | `24`          | Lookback window (hours) for the burst checker.                                                                                                                                                                                                                 |
-| `process_exec_allowlist`      | empty         | Process-execution signatures (`bun\|run\|build`) or bare executables (`bun`) that are allowed even when newly introduced. All executables are monitored by default; only signatures in this list escape the fail-closed diff. Sandbox harness commands (`uv pip install`, `npm install`, `pnpm add`, interpreter discovery) are always excluded automatically. |
+| `process_exec_allowlist`      | empty         | Process-execution signatures (`bun\|run\|build`) or bare executables (`bun`) that are allowed **per package** even when newly introduced. All executables are monitored by default; only signatures in this list escape the fail-closed diff. Sandbox harness commands are always excluded. |
 
 ### Example config
 
@@ -437,10 +449,24 @@ domain_allowlist:
   - pypi.org
   - files.pythonhosted.org
 git_clone_allowlist:
-  - https://github.com/acme/approved-build-scripts.git
+  evil-pkg:
+    - https://github.com/acme/repo.git
+
+process_exec_allowlist:
+  buildy:
+    - bun|run|build
+    - deno
+
 artifact_allowlist:
-  - binary|/work/bin/tool
-  - large_file|/work/data/reference.csv
+  aws-sdk:
+    - binary|/work/bin/aws-helper
+    - suspicious_pth|/work/site-packages/aws.pth
+
+sensitive_file_access_allowlist:
+  my-database-tool:
+    - "*.env"
+  my-aws-tool:
+    - "*.aws/credentials"
 baseline_overrides:
   requests:
     baseline-1: "2.30.0"
@@ -463,8 +489,10 @@ process_exec_allowlist:
   - bun|run|build
   - deno
 sensitive_file_access_allowlist:
-  - .env
-  - .aws/credentials
+  my-database-tool:
+    - "*.env"
+  my-aws-tool:
+    - "*.aws/credentials"
 ```
 
 ### Config loading behavior

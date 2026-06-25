@@ -30,7 +30,7 @@ struct GyrseekConfig {
     #[serde(default)]
     domain_allowlist: Vec<String>,
     #[serde(default)]
-    git_clone_allowlist: Vec<String>,
+    git_clone_allowlist: HashMap<String, Vec<String>>,
     #[serde(default)]
     baseline_overrides: HashMap<String, BaselineOverrideConfig>,
     #[serde(default)]
@@ -48,11 +48,11 @@ struct GyrseekConfig {
     #[serde(default)]
     minimum_release_age_package: Option<usize>,
     #[serde(default)]
-    process_exec_allowlist: Vec<String>,
+    process_exec_allowlist: HashMap<String, Vec<String>>,
     #[serde(default)]
-    artifact_allowlist: Vec<String>,
+    artifact_allowlist: HashMap<String, Vec<String>>,
     #[serde(default)]
-    sensitive_file_access_allowlist: Vec<String>,
+    sensitive_file_access_allowlist: HashMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -130,6 +130,24 @@ fn parse_list(items: Vec<String>, lowercase: bool) -> HashSet<String> {
         .collect()
 }
 
+fn parse_list_map(
+    map: HashMap<String, Vec<String>>,
+    lowercase: bool,
+) -> HashMap<String, HashSet<String>> {
+    let mut result = HashMap::new();
+    for (package, items) in map {
+        let package = package.trim().to_string();
+        if package.is_empty() {
+            continue;
+        }
+        let list = parse_list(items, lowercase);
+        if !list.is_empty() {
+            result.insert(package, list);
+        }
+    }
+    result
+}
+
 fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
@@ -167,8 +185,6 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         }
         domain_set.insert(normalized);
     }
-
-    let git_clone_allowlist = parse_list(cfg.git_clone_allowlist, true);
 
     let mut baseline_overrides = HashMap::new();
     for (package, cfg) in cfg.baseline_overrides {
@@ -253,9 +269,11 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         None => None,
     };
 
-    let process_exec_allowlist = parse_list(cfg.process_exec_allowlist, true);
-    let artifact_allowlist = parse_list(cfg.artifact_allowlist, false);
-    let sensitive_file_access_allowlist = parse_list(cfg.sensitive_file_access_allowlist, false);
+    let process_exec_allowlist = parse_list_map(cfg.process_exec_allowlist, true);
+    let artifact_allowlist = parse_list_map(cfg.artifact_allowlist, false);
+    let sensitive_file_access_allowlist =
+        parse_list_map(cfg.sensitive_file_access_allowlist, false);
+    let git_clone_allowlist = parse_list_map(cfg.git_clone_allowlist, true);
 
     Ok(PolicyConfig {
         ip_allowlist,
@@ -417,14 +435,15 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(
             file,
-            "sensitive_file_access_allowlist:\n  - .env\n  - /etc/passwd\n  - '  '"
+            "sensitive_file_access_allowlist:\n  my-pkg:\n    - .env\n    - /etc/passwd\n    - '  '"
         )
         .expect("config should be written");
 
         let cfg = load(&file);
-        assert!(cfg.sensitive_file_access_allowlist.contains(".env"));
-        assert!(cfg.sensitive_file_access_allowlist.contains("/etc/passwd"));
-        assert_eq!(cfg.sensitive_file_access_allowlist.len(), 2);
+        let list = cfg.sensitive_file_access_allowlist.get("my-pkg").unwrap();
+        assert!(list.contains(".env"));
+        assert!(list.contains("/etc/passwd"));
+        assert_eq!(list.len(), 2);
     }
 
     #[test]
@@ -534,16 +553,14 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(
             file,
-            "git_clone_allowlist:\n  - https://github.com/acme/repo.git\n  - '  '"
+            "git_clone_allowlist:\n  my-pkg:\n    - https://github.com/acme/repo.git\n    - '  '"
         )
         .expect("config should be written");
 
         let cfg = load(&file);
-        assert!(
-            cfg.git_clone_allowlist
-                .contains("https://github.com/acme/repo.git")
-        );
-        assert_eq!(cfg.git_clone_allowlist.len(), 1);
+        let list = cfg.git_clone_allowlist.get("my-pkg").unwrap();
+        assert!(list.contains("https://github.com/acme/repo.git"));
+        assert_eq!(list.len(), 1);
     }
 
     // --- gap #12: parse_global_options edge cases ---
