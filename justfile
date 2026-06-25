@@ -30,6 +30,10 @@ test-npm: build
     "{{bin}}" npm update
     "{{bin}}" npm i
 
+[working-directory: 'tests/npm']
+test-live-malicious-npm-package: build
+    "{{bin}}" npm install rstreams-shard-util@1.0.1
+
 # End-to-end tests for pnpm
 [working-directory: 'tests/pnpm']
 test-pnpm: build
