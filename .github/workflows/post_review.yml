@@ -1,0 +1,71 @@
+name: Post Review Comment
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+
+permissions:
+  pull-requests: write
+  actions: read
+
+jobs:
+  post-comment:
+    name: Sanitize and Post
+    runs-on: ubuntu-latest
+    if: >
+      github.event.workflow_run.event == 'pull_request'
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: consolidated-review
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmark
+
+      - name: Sanitize and Post Consolidated Comment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "consolidated_gyrseek_review.md" ] || [ ! -f "pr_number.txt" ]; then
+            echo "Review artifacts missing. Exiting."
+            exit 0
+          fi
+
+          pr_number=$(cat pr_number.txt)
+          source_file="consolidated_gyrseek_review.md"
+          truncated_file=""
+          sanitized_file=""
+
+          cleanup() {
+            rm -f "${truncated_file:-}" "${sanitized_file:-}" "pr_number.txt"
+          }
+          trap cleanup EXIT
+
+          if [ ! -s "$source_file" ]; then
+            echo "Review output is empty; skipping comment."
+            exit 0
+          fi
+
+          # Truncate if over GitHub's 65536-char comment limit.
+          max_bytes=60000
+          actual_bytes=$(wc -c < "$source_file")
+          if [ "$actual_bytes" -gt "$max_bytes" ]; then
+            python3 -c "import os;m=60000;s='consolidated_gyrseek_review.md';a=os.path.getsize(s);t=open(s,'rb').read(m).decode('utf-8',errors='ignore');open(s+'.truncated','w').write(t+chr(10)*2+'*(Review truncated at {} bytes; full output is {} bytes.)*'.format(m,a))"
+            source_file="${source_file}.truncated"
+            truncated_file="$source_file"
+          fi
+
+          # Sanitize: securely strip dangerous links and raw HTML using cmark
+          sanitized="${source_file}.sanitized"
+          sanitized_file="$sanitized"
+          cmark --to commonmark "$source_file" > "$sanitized"
+          gh pr comment "$pr_number" \
+            --body-file "$sanitized" \
+            --repo "${{ github.repository }}"
