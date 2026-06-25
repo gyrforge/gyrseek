@@ -1750,6 +1750,25 @@ pub(crate) async fn scan_packages_versions(
             );
         }
 
+        if baselines.len() < policy.baseline_count && !new_package_exempt {
+            println!(
+                "❌ [gyrseek] Registry does not contain enough historical versions for '{}' to satisfy baseline_count={} (found {}). Failing closed.",
+                pkg_name,
+                policy.baseline_count,
+                baselines.len()
+            );
+            println!("Aborting host operation securely.");
+            results.insert(
+                format!("{}|{}", pkg_name, tgt_version),
+                ScanReport {
+                    allowed: false,
+                    resolved_version: v_curr.clone(),
+                    blocked_reasons: vec!["insufficient_baselines".to_string()],
+                },
+            );
+            continue;
+        }
+
         if let Some((m1, m2)) = policy.baseline_overrides.get(pkg_name) {
             if m1.as_deref() == Some(&v_curr) || m2.as_deref() == Some(&v_curr) {
                 println!(
@@ -4582,6 +4601,12 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             2,
         );
         assert_eq!(out, vec!["2.9.0".to_string(), "2.8.0".to_string()]);
+    }
+
+    #[test]
+    fn baseline_count_zero_does_not_fail_closed() {
+        let out = select_effective_baselines("3.0.0", vec![], None, 0);
+        assert!(out.is_empty(), "baseline_count 0 should return empty list");
     }
 
     // --- gap #15: scan_packages_versions — missing baseline trace fails closed ---
