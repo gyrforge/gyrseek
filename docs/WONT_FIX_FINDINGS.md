@@ -20,6 +20,7 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP6 | `AGENTS.md`                | `false-positive` | Graphify skill referenced but skill file does not exist.                 | 🚫 Won't Fix |
 | FP7 | `docs/common_prompts.md` | `false-positive` | Raw CI prompt committed into documentation directory. | 🚫 Won't Fix |
 | FP8 | `sandbox.rs`               | `false-positive` | `process_vm_readv` is permitted in the seccomp profile.                                  | 🚫 Won't Fix |
+| FP9 | `scanning.rs`              | `false-positive` | Race condition in insufficient_baselines check ordering.                                 | 🚫 Won't Fix |
 
 ---
 
@@ -159,3 +160,15 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 **Reason for Not Fixing:** This is a won't fix because `strace` intrinsically requires `process_vm_readv` to function. `strace` relies on this syscall to read strings and data structures (like arguments to `execve` or file paths in `open`) from the target process's memory space. Blocking it would render `strace` unable to capture the rich behavioral telemetry that Gyrseek relies on for its anomaly detection. 
 
 Furthermore, a malicious process can only use `process_vm_readv` for *read-only* access to sibling memory. To actively corrupt logs or interfere with sibling execution, an attacker would need `process_vm_writev`. Because we have explicitly blocked `process_vm_writev`, the memory corruption vector is neutralized. The read-only access does not pose a threat to the integrity of the trace logs, making `process_vm_readv` safe to leave permitted.
+
+---
+
+### Finding FP9 — `false-positive` | `scanning.rs` | 🚫 Won't Fix
+
+**Summary:** Race condition in insufficient_baselines check ordering.
+
+**Suggested Fix:** Move the baseline-count check after the self-reference override check.
+
+**Reason for Not Fixing:** This is a false positive. While the count check (`baselines.len() < policy.baseline_count` at line 1753) occurs textually before the override logic block (line 1772), `select_effective_baselines` (called prior to this flow) already explicitly filters out `v_curr` from the baselines. Thus, the count at line 1753 correctly reflects the effective baselines, excluding any self-referencing overrides. Unit tests (e.g., `override_equal_to_current_is_excluded_from_baselines`) already confirm this behavior.
+
+*Note:* This "Won't Fix" dismissal is scoped strictly to the sequential text ordering concern. The separate issue regarding the async cache race (`scan_with_cache` concurrent cache population) is tracked as a distinct legitimate vulnerability in `OPEN_FINDINGS.md` (Finding 84).
