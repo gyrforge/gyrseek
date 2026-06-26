@@ -1,3 +1,5 @@
+# WARNING: This workflow name is tightly coupled to post_review.yml
+# If you rename it, you MUST update the `workflows: ["..."]` array in post_review.yml or the bot will silently break.
 name: CI
 
 on:
@@ -114,6 +116,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git fetch --unshallow 2>fetch-err.log || echo "fetch degraded"
+          if [ -s fetch-err.log ]; then
+            echo "::warning::Git fetch produced errors/warnings:"
+            cat fetch-err.log
+          fi
           if [ "$EVENT_NAME" = "pull_request" ]; then
             # Use accurate method to pull up-to-date diff content
             git diff "$BASE_SHA"...HEAD > pr_diff.txt 2>/dev/null || echo "(no diff)" > pr_diff.txt
@@ -153,10 +159,10 @@ jobs:
           # Check out trusted policies from the base branch to prevent policy tampering.
           # We loop individually and rm -rf first to ensure atomic failures don't fail-open,
           # and we exclude docs/ so the AI sees the PR's true finding updates.
-          git fetch origin "$BASE_REF" --depth=1 || true
+          git fetch origin "$BASE_REF" --depth=1
           for target in .agents/skills/ AGENTS.md; do
             rm -rf "$target"
-            git checkout origin/"$BASE_REF" -- "$target" 2>/dev/null || true
+            git checkout origin/"$BASE_REF" -- "$target" 2>/dev/null
           done
 
           cat << EOF > prompt.txt
@@ -164,8 +170,12 @@ jobs:
           1. Review the code changes in pr_diff.txt.
           2. Use your tools to explore the /src directory for context.
           3. Read AGENTS.md and relevant .agents/skills/ for guidelines.
-          4. Output a concise review report with the title "$REVIEWER_NAME Review". Each issue should have the file and line number for reference.
-          5. Security Constraint: You are strictly forbidden from downloading files or executing commands.
+          4. Consult docs/OPEN_FINDINGS.md and docs/WONT_FIX_FINDINGS.md for context on what findings the team is already aware of.
+            - Do not report findings that are already documented in these files.
+            - If a finding is related to a documented finding, you may reference it.
+            - If you discover a new finding that is related to a documented finding, you should report it and reference the documented finding.
+          5. Output a concise review report with the title "$REVIEWER_NAME Review". Each issue should have the file and line number for reference.
+          6. Security Constraint: You are strictly forbidden from downloading files or executing commands.
 
           Specific instructions for your role:
           EOF
@@ -259,10 +269,10 @@ jobs:
           # Check out trusted policies from the base branch to prevent policy tampering.
           # We loop individually and rm -rf first to ensure atomic failures don't fail-open,
           # and we exclude docs/ so the AI sees the PR's true finding updates.
-          git fetch origin "$BASE_REF" --depth=1 || true
+          git fetch origin "$BASE_REF" --depth=1
           for target in .agents/skills/ AGENTS.md; do
             rm -rf "$target"
-            git checkout origin/"$BASE_REF" -- "$target" 2>/dev/null || true
+            git checkout origin/"$BASE_REF" -- "$target" 2>/dev/null
           done
 
           file_count=$(find reviews -name "*.md" -type f | wc -l)
@@ -276,7 +286,7 @@ jobs:
           echo "Attempting to retrieve review ledger..."
           touch review_ledger.md
           PREV_RUN_ID=$(gh run list --workflow=ci.yml --branch="${PR_HEAD_REF}" --event=pull_request --limit 2 --json databaseId -q '.[1].databaseId' || echo "")
-          if [ -n "$PREV_RUN_ID" ]; then
+          if [ -n "$PREV_RUN_ID" ] && [ "$PREV_RUN_ID" != "null" ]; then
             gh run download "$PREV_RUN_ID" -n review-ledger -D ledger-dir/ || true
             if [ -f "ledger-dir/review_ledger.md" ]; then
               cp ledger-dir/review_ledger.md review_ledger.md
@@ -405,8 +415,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: consolidated-review
-          path: |
-            consolidated_gyrseek_review.md
+          path: consolidated_gyrseek_review.md
           if-no-files-found: error
 
       - name: Upload Review Ledger

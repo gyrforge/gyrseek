@@ -32,12 +32,21 @@
 | C14 | `sandbox.rs:662-669` | `yagni` | `docker_seccomp_profile_arg` wraps one format call. | Inline `format!("seccomp={}", path?)` at call site. | ✅ Fixed |
 | C15 | `scanning.rs:1383-1391` | `shrink` | 8-line loop+flatten over two `Option<String>` refs to print warning. | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. | ✅ Fixed |
 | C17 | `scanning.rs` / `parsing.rs` / `sandbox.rs` | `shrink` | 14× `Vec::new()` + push-loop that could be iterator adaptors (`.filter_map().collect()`, `.partition()`, `.filter().take().collect()`, `.map().collect()`). Most clear-cut: `parse_requirements_packages_from_content` (`parsing.rs:321`, 5 lines → 1), `select_age_eligible_baselines` (`scanning.rs:1166`, 11 lines → 3 with `.filter().take()`), and 5 allowlist-split functions that could use `.partition()` (e.g. `filter_allowlisted_new_connections` at `scanning.rs:261`, 26 lines → 6). The double-collect to reverse stdout tail lines (`sandbox.rs:345`, `.collect::<Vec<_>>().into_iter().rev().collect()`) is a standalone allocation. | Convert to iterator adaptors. | ✅ Fixed |
+| 41 | `.github/workflows/ci.yml` | `audit-trail` | Migrated to Won't Fix as **FP21** (Third-party actions not SHA-pinned) | See `WONT_FIX_FINDINGS.md` | ✅ Migrated |
 | 71 | `docs/FIXED_FINDINGS.md` | ``documentation`` | Drops cross-finding chain documentation from original file | Restore architectural context | ✅ Fixed |
 | 73 | `docs/common_prompts.md` | ``formatting`` | Missing trailing newline | Append newline | ✅ Fixed |
 | 83 | `.github/workflows/ci.yml` | High | `graphify` runs from PR workspace, allowing arbitrary prompt injection | Regenerate on PR branch + Python `<REDACTED>` tag replacement | ✅ Fixed |
 | 87 | `.github/workflows/post_review.yml` | Critical | `post_review.yml` untrusted PR artifact spoofing ("Pwn Request") | Use GitHub API `head_sha` instead of artifact | ✅ Fixed |
 | 88 | `.github/workflows/ci.yml` | High | Fail-open checkout allows prompt injection via `AGENTS.md` | Replaced atomic checkout with robust `rm -rf` loop | ✅ Fixed |
 | 89 | `.github/workflows/ci.yml` | Low | Hardcoded `/tmp` paths susceptible to symlink race conditions | Use `${{ runner.temp }}` instead of `/tmp` | ✅ Fixed |
+| 90 | `.github/workflows/ci.yml` | Low | First-run ledger retrieval fetches literal `"null"` as run ID | Added `"null"` guard to ledger logic | ✅ Fixed |
+| 91 | `.github/review-prompts/`  | Low | Stale XML references to removed static skill-injection script | Updated prompts to mandate autonomous tool-use | ✅ Fixed |
+| 92 | `.github/workflows/ci.yml` | Low | Shallow-fetch error output written but never read | Log file is checked and emitted as `::warning::` | ✅ Fixed |
+| 93 | `.github/workflows/`       | Low | Outdated `${{ secrets.GITHUB_TOKEN }}` syntax | Replaced with modern idiomatic `${{ github.token }}` | ✅ Fixed |
+| 94 | `.github/workflows/`       | Low | Missing `timeout-minutes` on PR comment job | Added `timeout-minutes: 10` | ✅ Fixed |
+| 95 | `.github/workflows/`       | Low | Undocumented fragile `workflow_run` name coupling | Added explicit sync `WARNING` comments to both files | ✅ Fixed |
+| 96 | `.github/workflows/ci.yml` | Low | Unnecessary YAML block scalar `|` for single path | Flattened YAML formatting | ✅ Fixed |
+| 97 | `.github/workflows/ci.yml` | Low | `|| true` on `git fetch` masked legitimate network failures | Removed `|| true` to enforce fast-fail on network hangups | ✅ Fixed |
 
 ---
 ## Cross-Finding Chains (Architectural Context)
@@ -560,3 +569,109 @@ Consider adding a process- or file-system marker that persists across the sessio
 **Failure scenario:** An attacker with pre-existing local access creates a symlink at `/tmp/opencode-install.sh` pointing to `~/.ssh/authorized_keys`. The `curl` command follows the symlink and overwrites the SSH keys. 
 
 **Fix:** First, the `base-graphify-out` logic was completely removed in a prior architectural refactor of the context pipeline. Second, the remaining `opencode-install.sh` downloads were updated to use the GitHub Actions dynamically generated `${{ runner.temp }}` directory, which is uniquely isolated per workflow run, fully mitigating any potential TOCTOU races.
+
+---
+
+### Finding 90 — Low | `.github/workflows/ci.yml` | ✅ Fixed
+
+**Summary:** First-run ledger retrieval fetched literal `"null"` as the run ID, causing an opaque `gh run download` failure on new Pull Requests.
+
+**Root cause:** The `consolidate-reviews` job uses `gh run list --limit 2 --json databaseId -q '.[1].databaseId'` to get the previous workflow run ID for loop detection. When a PR is opened for the first time, only 1 run exists. The `jq` query `.[1]` on a 1-element array returns the JSON `null` type, which `gh` outputs as the literal string `"null"`. The shell variable `PREV_RUN_ID` evaluates `[ -n "null" ]` as true (since it is a non-empty string), causing the script to execute `gh run download "null"`, which fails.
+
+**Failure scenario:** Every time a new PR is opened, the CI log gets cluttered with an opaque GitHub CLI error about an invalid run ID. While it does not fail the build (due to `|| true`), it masks legitimate errors and causes operational confusion.
+
+**Fix:** Added an explicit string comparison guard `&& [ "$PREV_RUN_ID" != "null" ]` to the conditional check to correctly handle the `jq` null output on first-runs.
+
+---
+
+### Finding 91 — Low | `.github/review-prompts/` | ✅ Fixed
+
+**Summary:** Stale `<skill>` XML references in reviewer prompts confused the AI, referring to a static injection script that no longer exists.
+
+**Root cause:** Following the architectural removal of the `build_prompt.py` script (which previously injected skill contents into XML tags), the reviewer prompts (`appsec-engineer.md` and `senior-developer.md`) were never updated. They still contained instructions telling the AI to "Use the skills provided in the `<...>` sections below," which did not exist. This could cause the AI to hallucinate or skip applying the required security guidelines entirely.
+
+**Failure scenario:** The `appsec-engineer` reviewer reviews a PR but fails to apply the OWASP Top 10 for LLM guidelines because it is looking for a `<llm_security_skill>` XML tag that was never injected.
+
+**Fix:** Removed the stale XML references from the prompt templates. Replaced them with a `CRITICAL PREREQUISITE` explicitly commanding the AI to use its `view_file` tool to autonomously read the relevant `SKILL.md` files from the `.agents/skills/` directory before beginning its review.
+
+---
+
+### Finding 92 — Low | `.github/workflows/ci.yml` | ✅ Fixed
+
+**Summary:** The step responsible for generating the PR code diff captured `git fetch` errors into a log file (`fetch-err.log`), but the file was never subsequently checked, printed, or uploaded.
+
+**Root cause:** `git fetch --unshallow 2>fetch-err.log || echo "fetch degraded"` executes the fetch and redirects stderr to a file. However, no subsequent bash commands ever read that file. If the fetch failed or degraded due to missing Git metadata, the error reason was completely swallowed into a black hole.
+
+**Failure scenario:** A temporary network glitch causes the `unshallow` step to fail. The subsequent `git diff` step produces an empty `pr_diff.txt` file. The AI performs an entire review on an empty code diff and approves the PR. The developer looking at the CI logs has absolutely no idea why the diff was empty because the Git error message was discarded.
+
+**Fix:** Added an `if [ -s fetch-err.log ]; then` check immediately following the fetch. If the log contains data (errors or warnings), its contents are dumped to the GitHub Actions console using the `echo "::warning::"` annotation so developers can easily spot the degraded behavior.
+
+---
+
+### Finding 93 — Low | `.github/workflows/` | ✅ Fixed
+
+**Summary:** `post_review.yml` used the legacy `${{ secrets.GITHUB_TOKEN }}` syntax instead of the modern, idiomatic `${{ github.token }}` syntax.
+
+**Root cause:** When GitHub Actions originally launched, `secrets.GITHUB_TOKEN` was the only way to access the dynamically generated runner token. GitHub later introduced `${{ github.token }}` to structurally separate dynamic run metadata (`github.*`) from user-configured repository secrets (`secrets.*`).
+
+**Failure scenario:** No functional failure (both tokens are mathematically identical at runtime). However, using `secrets.GITHUB_TOKEN` can confuse new developers into thinking a repository secret must be manually provisioned to make the workflow run.
+
+**Fix:** Replaced all instances of `${{ secrets.GITHUB_TOKEN }}` with `${{ github.token }}` to conform to modern `actionlint` best practices.
+
+---
+
+### Finding 94 — Low | `.github/workflows/` | ✅ Fixed
+
+**Summary:** The `post-comment` job in `post_review.yml` lacked a `timeout-minutes` configuration, leaving it vulnerable to GitHub's default 6-hour execution timeout limit.
+
+**Root cause:** If the `sudo apt-get install` step stalls due to an unreachable APT mirror, or if the `gh api` CLI steps hang on network timeouts without properly closing the TCP connection, the job will hang indefinitely.
+
+**Failure scenario:** A network hang causes the job to spin for 6 hours before being forcefully terminated by GitHub. This exhausts free-tier CI minutes, costs money on private repositories, and prevents the consolidated AI review comment from ever being posted to the PR.
+
+**Fix:** Added `timeout-minutes: 10` to the job definition to enforce a fast-fail on network hangups.
+
+---
+
+### Finding 95 — Low | `.github/workflows/` | ✅ Fixed
+
+**Summary:** The `post_review.yml` workflow relied on a fragile, undocumented string match (`workflows: ["CI"]`) to the exact `name:` field of `ci.yml`, creating a hidden footgun.
+
+**Root cause:** GitHub Actions `workflow_run` triggers do not natively support file-based linkage; they exclusively trigger on literal string matches of the upstream workflow's `name` property. Because this coupling was undocumented, a developer cleaning up workflow names could easily break the pipeline without realizing it.
+
+**Failure scenario:** A developer renames `ci.yml` line 1 to `name: Continuous Integration` to be more descriptive. The `post_review.yml` workflow silently stops firing because it is still listening for the literal string `"CI"`. No errors are thrown, but the AI stops posting reviews to Pull Requests entirely.
+
+**Fix:** Added loud `# WARNING` comments directly above the `name:` field in `ci.yml` and the `workflows:` array in `post_review.yml`, explicitly alerting future developers that these two strings are tightly coupled and must be updated together.
+
+---
+
+### Finding 96 — Low | `.github/workflows/ci.yml` | ✅ Fixed
+
+**Summary:** The `upload-artifact` step in `ci.yml` used a multi-line YAML block scalar (`|`) to define a single file path.
+
+**Root cause:** The `path:` argument supported multiple files natively via block scalars. When only uploading a single file (`consolidated_gyrseek_review.md`), the block scalar was technically unnecessary and triggered strict YAML linter warnings.
+
+**Failure scenario:** No functional failure. The GitHub Actions runner natively handles block scalars regardless of the number of lines. This is purely a stylistic formatting pedanticism.
+
+**Fix:** Flattened the YAML definition from a multi-line block scalar to a standard, single-line inline string.
+
+---
+
+### Finding 41 — `audit-trail` | `.github/workflows/ci.yml` | ✅ Migrated
+
+**Summary:** This finding originally tracked the lack of cryptographic SHA-256 hash pins on third-party GitHub Actions (e.g., `actions/checkout`, `actions/download-artifact`).
+
+**Audit Trail Note:** During architectural review, the team decided to prioritize Developer Experience (DX) and ease of updating over strict cryptographic pinning for established, highly-trusted third-party actions (especially official GitHub actions). Consequently, this finding was reclassified from an active vulnerability to an explicitly accepted risk.
+
+**Resolution:** Finding 41 was closed and migrated to `WONT_FIX_FINDINGS.md` where it is now permanently tracked as **Finding FP21**.
+
+---
+
+### Finding 97 — Low | `.github/workflows/ci.yml` | ✅ Fixed
+
+**Summary:** The step responsible for retrieving the trusted policy files from the base branch used `|| true` on the `git fetch` and `git checkout` commands, which blindly swallowed legitimate network or branch-resolution failures.
+
+**Root cause:** The `|| true` operator was originally added to allow the CI to proceed if specific policy files (`AGENTS.md`, `.agents/skills/`) didn't exist in the base branch yet. However, this also masked actual `git fetch` failures caused by GitHub network degradation.
+
+**Failure scenario:** A temporary network glitch causes the `git fetch` step to fail. Because of `|| true`, the failure is ignored. The `git checkout` step then fails because the local repository doesn't have the base branch refs. The AI reviewer proceeds to review the PR without any security guidelines or instructions, completely degrading the security posture of the review. (Note: The scanner's claim of "race conditions" across matrix pods was a hallucination; matrix VMs are fully isolated and do not share a Git repository).
+
+**Fix:** Removed `|| true` from both the `git fetch` and `git checkout` commands. If the network drops or the base branch cannot be resolved, the CI job will now properly crash and turn red, alerting the developer instead of silently falling back to a zero-policy review.

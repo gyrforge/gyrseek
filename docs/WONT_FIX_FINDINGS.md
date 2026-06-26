@@ -33,6 +33,15 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP19| `.github/workflows/ci.yml` | `false-positive` | CI job fails if `gyrseek_review.md` or other artifact files are missing.                 | 🚫 Won't Fix |
 | FP20| `.github/workflows/ci.yml` | `false-positive` | Permissions fragmentation for `checks: write` across jobs.                               | 🚫 Won't Fix |
 | FP21| `.github/workflows/`       | `accepted-risk`  | Third-party actions use moving tags instead of being SHA-pinned.                         | 🚫 Won't Fix |
+| FP22| `.github/workflows/ci.yml` | `false-positive` | Truncated consolidation prompt is undetected due to lack of file size verification.      | 🚫 Won't Fix |
+| FP23| `.github/workflows/ci.yml` | `false-positive` | "Enhanced Only" template has no section for purely-new findings.                         | 🚫 Won't Fix |
+| FP24| `.github/workflows/ci.yml` | `false-positive` | No integrity verification (SHA-256) of multi-agent review outputs.                       | 🚫 Won't Fix |
+| FP25| `.github/workflows/ci.yml` | `accepted-risk`  | Per-reviewer skill injection removed, relying on autonomous discovery.                   | 🚫 Won't Fix |
+| FP26| `.github/workflows/ci.yml` | `false-positive` | Duplicated "checkout trusted policies" bash loop violates DRY.                           | 🚫 Won't Fix |
+| FP27| `.github/workflows/ci.yml` | `false-positive` | `consolidate-reviews` lacks explicit `success()` gate.                                   | 🚫 Won't Fix |
+| FP28| `.github/workflows/ci.yml` | `false-positive` | No SHA hash pin on `graphify` dependency. Duplicate of FP18.                             | 🚫 Won't Fix |
+| FP29| `.github/workflows/ci.yml` | `false-positive` | `git fetch` race conditions across concurrent matrix pods.                               | 🚫 Won't Fix |
+| FP30| `.github/workflows/ci.yml` | `false-positive` | `rm -rf graphify-out` flagged as unnecessary noise.                                      | 🚫 Won't Fix |
 
 ---
 
@@ -313,3 +322,87 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 **Suggested Fix:** Pin all third-party actions to specific commit SHAs to prevent supply chain compromise.
 
 **Reason for Not Fixing:** This is an explicitly accepted risk in favor of Developer Experience (DX). Pinning to SHAs makes workflow files significantly harder to read and requires heavy automation (like Dependabot or Renovate) just to keep actions up to date. Furthermore, the actual impact of a compromised third-party action in this repository is very low. The primary CI jobs run with strictly `contents: read` permissions and no secrets. If an attacker gains RCE via a compromised action in `ci.yml`, the absolute worst-case scenario is that they bypass the AI code review (a risk we have already accepted in Finding FP18). The operational overhead of managing SHAs heavily outweighs the theoretical risk to the read-only CI pipeline.
+
+---
+
+### Finding FP22 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The `prompt.txt` heredoc has no file size or checksum verification before execution, theoretically allowing a silently truncated prompt to drop critical security constraints.
+
+**Suggested Fix:** Add a `test -s prompt.txt && wc -c prompt.txt` guard before running the AI to mathematically verify the prompt was written entirely.
+
+**Reason for Not Fixing:** This is a false positive because it ignores how `bash` handles write failures in GitHub Actions environments. GitHub Actions `run` steps execute with `set -e` by default. If the `cat` command fails to write the full heredoc due to a `disk-full` (ENOSPC) or `OOM` error, the standard POSIX utility returns a non-zero exit code. `set -e` instantly catches this failure and aborts the entire job before the `opencode` execution line can ever be reached. Adding byte-counting logic is brittle (breaking if a single typo in the prompt is fixed) and mathematically unnecessary due to the fail-closed nature of `set -e`.
+
+---
+
+### Finding FP23 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The consolidation job's markdown template only has explicit sections for "Enhanced Open Findings" and "Enhanced Won't Fix Findings," supposedly leaving the AI with nowhere to record purely new vulnerabilities.
+
+**Suggested Fix:** Add a specific "New Open Findings" section to the consolidation output template.
+
+**Reason for Not Fixing:** This is a fundamental misunderstanding of the template structure. The top sections of the template (`## High`, `## Medium`, and `## Low`) are specifically designed to capture net-new findings. The "Enhanced" sections at the bottom exist explicitly to filter out duplicates of known issues, keeping the PR clean. If a completely new vulnerability is found, the AI correctly places it directly under the appropriate severity header at the top of the report. The template is logically complete as written.
+
+---
+
+### Finding FP24 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The consolidation job downloads review artifacts without cryptographic checksum verification (e.g., SHA-256 sidecars), allegedly allowing cross-run injection or compromised-agent spoofing.
+
+**Suggested Fix:** Generate a SHA-256 sidecar file for each artifact at upload time, and verify the hash before consuming the artifact in the consolidation job.
+
+**Reason for Not Fixing:** This finding recommends "Cryptographic Theater." First, cross-run artifact injection is natively impossible because `actions/download-artifact@v4` strictly isolates storage to the current `github.run_id`. Second, while a compromised agent *could* theoretically spoof an artifact (an accepted risk documented in FP18), requiring a SHA-256 sidecar provides zero actual security. If an attacker has RCE to forge the artifact, they can simply forge the accompanying SHA-256 sidecar as well. The downstream consolidation job would successfully verify the forged checksum against the forged artifact, providing a dangerous false sense of security.
+
+---
+
+### Finding FP25 — `accepted-risk` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The static Python prompt builder (`build_prompt.py`), which forcefully injected specific `.agents/skills/` file contents directly into the prompt string for each reviewer, was removed. The new bash `cat` heredoc in `ci.yml` relies on the AI to autonomously discover and read the relevant skill files, potentially regressing review depth if the AI fails to fetch them.
+
+**Suggested Fix:** Restore the static skill-file injection logic into the `ci.yml` bash script to mathematically force the skill text into the AI's context window.
+
+**Reason for Not Fixing:** The removal of `build_prompt.py` was an intentional architectural shift to reduce complexity and mitigate local prompt injection vulnerabilities. We explicitly choose to rely on the agent's autonomous tool-use capabilities (`view_file`) to fetch its own context rather than forcing a complex, static pre-processing step. While this introduces a risk of the AI "forgetting" or failing to fetch the skills, the trade-off for a vastly simpler, more secure CI orchestration script is accepted. *(Note: The stale `<skill>` XML references in the prompt files themselves were fixed to explicitly command the AI to use its tools).*
+
+---
+
+### Finding FP26 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The bash loop responsible for explicitly checking out trusted `AGENTS.md` and `.agents/skills/` policies from the base branch is duplicated in both the `code-review` and `consolidate-reviews` jobs.
+
+**Suggested Fix:** Extract the duplicated bash logic into a reusable GitHub Action or a centralized shell script (e.g., `.github/scripts/checkout-trusted-policies.sh`) to adhere to DRY (Don't Repeat Yourself) principles.
+
+**Reason for Not Fixing:** This is a fundamental conflict between standard software engineering (DRY) and pipeline security. Moving this security-critical checkout loop into an external shell script or local composite action creates a massive vulnerability. During a `pull_request` event, the GitHub runner checks out the untrusted PR workspace. If `ci.yml` executes `./.github/scripts/checkout-trusted-policies.sh`, it executes the *attacker's* version of that script, allowing them to trivially bypass the protection. Because the `ci.yml` file itself is the **only** file natively guaranteed to be loaded from the trusted base branch on PR events, this security boundary *must* be hardcoded directly into the workflow file, even if it requires duplication across isolated VM jobs.
+
+---
+
+### Finding FP27 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The `consolidate-reviews` job lacks an explicit `if: needs.code-review.result == 'success'` gate, allegedly allowing it to execute and produce a silent "No reviewer outputs" success even if the upstream `code-review` job fails.
+
+**Suggested Fix:** Explicitly add `if: needs.code-review.result == 'success'` to the `consolidate-reviews` job.
+
+**Reason for Not Fixing:** This finding hallucinates non-existent behavior and is factually incorrect regarding the GitHub Actions engine. By default, the `needs:` array implies a strict dependency on success. If the upstream `code-review` job fails or is skipped for any reason, the downstream `consolidate-reviews` job is automatically and instantly skipped by the Actions engine. The only way it would execute on failure is if an explicit `always()` or `failure()` condition were present, which it is not. The suggested fix is entirely redundant.
+
+---
+
+### Finding FP28 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** No SHA hash pin on `graphify` dependency.
+
+**Reason for Not Fixing:** This finding is a duplicate of **FP18**. The scanner isolated the supply-chain poisoning aspect of FP18 into its own separate finding, despite FP18 already explicitly identifying and accepting the exact same risk ("without cryptographic dependency pinning", "compromised PyPI release") and mitigation strategy.
+
+---
+
+### Finding FP29 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The static analysis scanner claims that because multiple code-review matrix pods run `git fetch origin "$BASE_REF"` concurrently, they will cause a race condition and corrupt the Git ref database.
+
+**Reason for Not Fixing:** This is fundamentally incorrect due to a hallucination regarding GitHub Actions architecture. GitHub Actions matrix jobs do not run in containers sharing a single filesystem; they spawn entirely isolated Virtual Machines (`ubuntu-latest`). Because each matrix pod has its own dedicated hard drive and its own local `.git/` database, it is physically impossible for them to collide or corrupt each other's git objects. No fix is required for the race condition (though the `|| true` masking the fetch failure was resolved separately in Finding 97).
+
+---
+
+### Finding FP30 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner flagged the `rm -rf graphify-out` pre-generation step as unnecessary noise, incorrectly assuming the directory is entirely git-ignored and therefore impossible to be pre-compromised in a PR checkout.
+
+**Reason for Not Fixing:** The `.gitignore` explicitly whitelists certain outputs (`!graphify-out/GRAPH_REPORT.md`, `!graphify-out/graph.json`). Because these files are tracked, an attacker can submit a PR containing a pre-compromised `GRAPH_REPORT.md` laden with prompt-injection instructions. If the `rm -rf` step is removed, the `graphify update` tool might append to or fail to cleanly overwrite the attacker's file, resulting in the AI consuming the malicious instructions. The `rm -rf` step is a critical defense-in-depth measure to guarantee a clean workspace.
