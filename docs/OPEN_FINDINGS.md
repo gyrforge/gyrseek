@@ -28,7 +28,6 @@
 | 38 | `scanning.rs` | —    | Medium   | `*` prefix allowlist warns but silently blocks everything              | ⚠️ Open  |
 | 39 | `scanning.rs` | —    | Medium   | `.env` variant blind spot (misses `.env.production`, etc.)             | ⚠️ Open  |
 | 40 | `scanning.rs` | —    | High     | `/proc/self/fd/N` relative path traversal bypasses fd resolution       | ⚠️ Open  |
-| 41 | `.github/workflows/` | — | Low | Third-party actions moving tags are not SHA-pinned | ⚠️ Open  |
 | 42 | `scanning.rs` | —    | Low      | Test duplication across anomaly-counting tests                         | ⚠️ Open  |
 | 43 | `scanning.rs` | —    | Low      | `lexical_clean_path` reinvents stdlib path normalization               | ⚠️ Open  |
 | 44 | `scanning.rs` | —    | Low      | Test coverage regression: `unescape_trailing_backslash`               | ⚠️ Open  |
@@ -398,22 +397,6 @@ if next.starts_with('-') {
 **Failure scenario:** An `open(\"../../proc/self/fd/3/passwd\")` never matches the regex anchor. The `is_sensitive_file_read` function fails to match it since it doesn't end with `/etc/passwd`. Additionally, this general lack of path canonicalization allows symlink bypasses: an attacker creates `ln -s /etc/passwd readme.txt` then `cat readme.txt` -> strace logs the symlink path (`readme.txt`), bypassing string matches completely.
 
 **Fix direction:** Classify paths through any known symlink by resolving with `std::fs::canonicalize` before passing to `is_sensitive_file_read`.
-
----
-
-### Finding 41 — Low | `.github/workflows/` | ⚠️ Open
-
-**Summary:** Third-party actions use moving tags instead of being SHA-pinned.
-
-**Root cause:** The workflows (`ci.yml`, `post_review.yml`) use mutable version tags (e.g., `@v4`, `@stable`) for third-party actions instead of immutable commit SHAs.
-
-**Failure scenario:** A compromised third-party repository could maliciously move the version tag to point to a compromised release, which would then automatically propagate to all CI jobs without detection and execute untrusted code in the pipeline.
-
-**Fix direction:** Pin all third-party actions to a specific commit SHA.
-
-**Enhancements:**
-- **Expanded Scope:** This risk is not limited to `actions/checkout`. It extends to ALL third-party actions in the repository: `upload-artifact@v4`, `download-artifact@v4`, `cache@v4`, `extractions/setup-just@v4`, `astral-sh/setup-uv@v5`, `actions/setup-python@v5`, `actions/setup-node@v6`, `pnpm/action-setup@v6`, `dtolnay/rust-toolchain@stable`, `rustsec/audit-check@v2.0.0`, `hadolint/hadolint-action@v3.1.0`, `Swatinem/rust-cache@v2`, and `abatilo/actions-poetry@v4`.
-- **No CI Verification:** There is no CI verification step or tool (like Dependabot or Renovate) configured to automatically manage or audit these SHAs periodically.
 
 ---
 
@@ -889,17 +872,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 83 — High | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** `graphify` runs from PR workspace, allowing arbitrary prompt injection via `.graphify.yaml` or compromised `graphify-out/` outputs.
-
-**Root cause:** `graphify update .` is executed from the PR workspace without validating the resulting `graphify-out/GRAPH_REPORT.md` against the base ref before injection into `<graph_context>`.
-
-**Failure scenario:** A malicious PR can include a custom `.graphify.yaml` or pre-compromised files in the `graphify-out/` directory, directly injecting arbitrary instructions into the LLM prompt. 
-
-**Fix direction:** Run `graphify update` strictly against the base ref codebase, or sanitize the `graphify-out` outputs to strip any XML tags/injection payloads before appending to the review context.
-
----
 
 ### Finding 84 — High | `scanning.rs` | ⚠️ Open
 

@@ -9,6 +9,6 @@
 # every subsequent review. Require explicit approval from code owners.
 .github/skills/ @SouthernMine4957 @david-craggs
 
-# Lock down the entire .github directory to prevent unauthorized changes
+# Lock down the workflow .github directory to prevent unauthorized changes
 # to CI workflows and automation scripts.
 .github/workflows/ @SouthernMine4957 @david-craggs

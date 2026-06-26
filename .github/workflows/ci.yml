@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev yamllint cmark
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev yamllint
 
       - name: Lint all Dockerfiles recursively
         uses: hadolint/hadolint-action@v3.1.0
@@ -83,8 +83,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmark
 
       - name: Install latest version of uv
         uses: astral-sh/setup-uv@v5
@@ -102,9 +100,9 @@ jobs:
       - name: Install OpenCode
         if: steps.cache-opencode.outputs.cache-hit != 'true'
         run: |
-          curl -fsSL "https://raw.githubusercontent.com/anomalyco/opencode/v${{ env.OPENCODE_VERSION }}/install" -o /tmp/opencode-install.sh
-          echo "${{ env.OPENCODE_INSTALL_SHA256 }}  /tmp/opencode-install.sh" | sha256sum --check
-          bash /tmp/opencode-install.sh --version "${{ env.OPENCODE_VERSION }}"
+          curl -fsSL "https://raw.githubusercontent.com/anomalyco/opencode/v${{ env.OPENCODE_VERSION }}/install" -o ${{ runner.temp }}/opencode-install.sh
+          echo "${{ env.OPENCODE_INSTALL_SHA256 }}  ${{ runner.temp }}/opencode-install.sh" | sha256sum --check
+          bash ${{ runner.temp }}/opencode-install.sh --version "${{ env.OPENCODE_VERSION }}"
 
       - name: Ensure OpenCode in PATH
         run: echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
@@ -148,16 +146,18 @@ jobs:
             exit 1
           fi
 
-          # Generate clean architectural context from the base branch
-          git fetch origin "$BASE_REF" --depth=1 || true
-          git checkout origin/"$BASE_REF"
-          graphify update .
-          cp -r graphify-out /tmp/base-graphify-out
-          git checkout "$HEAD_SHA"
-          rm -rf graphify-out
-          mv /tmp/base-graphify-out graphify-out
+          # Generate architectural context from the PR branch, ensuring no pre-compromised files or configs
+          rm -rf graphify-out .graphify.yaml graphify.toml .graphify.json || true
+          graphify update . >/dev/null 2>&1 || true
 
-          git checkout origin/"$BASE_REF" -- .agents/skills/ AGENTS.md docs/OPEN_FINDINGS.md docs/WONT_FIX_FINDINGS.md || true
+          # Check out trusted policies from the base branch to prevent policy tampering.
+          # We loop individually and rm -rf first to ensure atomic failures don't fail-open,
+          # and we exclude docs/ so the AI sees the PR's true finding updates.
+          git fetch origin "$BASE_REF" --depth=1 || true
+          for target in .agents/skills/ AGENTS.md; do
+            rm -rf "$target"
+            git checkout origin/"$BASE_REF" -- "$target" 2>/dev/null || true
+          done
 
           cat << EOF > prompt.txt
           You are an AI code reviewer acting as the $REVIEWER_NAME.
@@ -194,7 +194,7 @@ jobs:
         with:
           name: review-${{ matrix.reviewer.name }}
           path: ${{ matrix.reviewer.output }}
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   consolidate-reviews:
     name: Consolidate Reviews
@@ -210,8 +210,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmark
 
       - name: Install latest version of uv
         uses: astral-sh/setup-uv@v5
@@ -229,9 +227,9 @@ jobs:
       - name: Install OpenCode
         if: steps.cache-opencode.outputs.cache-hit != 'true'
         run: |
-          curl -fsSL "https://raw.githubusercontent.com/anomalyco/opencode/v${{ env.OPENCODE_VERSION }}/install" -o /tmp/opencode-install.sh
-          echo "${{ env.OPENCODE_INSTALL_SHA256 }}  /tmp/opencode-install.sh" | sha256sum --check
-          bash /tmp/opencode-install.sh --version "${{ env.OPENCODE_VERSION }}"
+          curl -fsSL "https://raw.githubusercontent.com/anomalyco/opencode/v${{ env.OPENCODE_VERSION }}/install" -o ${{ runner.temp }}/opencode-install.sh
+          echo "${{ env.OPENCODE_INSTALL_SHA256 }}  ${{ runner.temp }}/opencode-install.sh" | sha256sum --check
+          bash ${{ runner.temp }}/opencode-install.sh --version "${{ env.OPENCODE_VERSION }}"
 
       - name: Ensure OpenCode in PATH
         run: echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
@@ -254,16 +252,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Generate clean architectural context from the base branch
-          git fetch origin "$BASE_REF" --depth=1 || true
-          git checkout origin/"$BASE_REF"
-          graphify update .
-          cp -r graphify-out /tmp/base-graphify-out
-          git checkout "$HEAD_SHA"
-          rm -rf graphify-out
-          mv /tmp/base-graphify-out graphify-out
+          # Generate architectural context from the PR branch, ensuring no pre-compromised files or configs
+          rm -rf graphify-out .graphify.yaml graphify.toml .graphify.json || true
+          graphify update . >/dev/null 2>&1 || true
 
-          git checkout origin/"$BASE_REF" -- .agents/skills/ AGENTS.md docs/OPEN_FINDINGS.md docs/WONT_FIX_FINDINGS.md || true
+          # Check out trusted policies from the base branch to prevent policy tampering.
+          # We loop individually and rm -rf first to ensure atomic failures don't fail-open,
+          # and we exclude docs/ so the AI sees the PR's true finding updates.
+          git fetch origin "$BASE_REF" --depth=1 || true
+          for target in .agents/skills/ AGENTS.md; do
+            rm -rf "$target"
+            git checkout origin/"$BASE_REF" -- "$target" 2>/dev/null || true
+          done
 
           file_count=$(find reviews -name "*.md" -type f | wc -l)
           if [ "$file_count" -eq 0 ]; then
@@ -340,11 +340,11 @@ jobs:
           ## Unverified
           - [issue] — could not verify in codebase; needs manual check.
 
-          ## New or Enhanced Open Findings
-          (If the review surfaces new issues that are valid but should be tracked as OPEN instead of fixed immediately, list them here. If an incoming finding duplicates an existing OPEN finding but provides significant new details, list the enhancements here referencing the original finding number.)
+          ## Enhanced Open Findings
+          (If the review surfaces issues as incoming finding that duplicates an existing OPEN finding but provides significant new details, list the enhancements here referencing the original finding number.)
 
-          ## New or Enhanced Won't Fix Findings
-          (If the review surfaces issues that are explicitly rejected by design or are not worth fixing, list them here. If an incoming finding duplicates an existing WON'T FIX finding but provides new details, list the enhancements here referencing the original finding number.)
+          ## Enhanced Won't Fix Findings
+          (If the review surfaces issues as incoming finding that duplicates an existing WON'T FIX finding but provides new details, list the enhancements here referencing the original finding number.)
 
           ## Loop Detection Warning
           (Only output this section if a cyclical fix-revert loop is detected. Explain the competing constraints.)
@@ -407,14 +407,14 @@ jobs:
           name: consolidated-review
           path: |
             consolidated_gyrseek_review.md
-          if-no-files-found: ignore
+          if-no-files-found: error
 
       - name: Upload Review Ledger
         uses: actions/upload-artifact@v4
         with:
           name: review-ledger
           path: review_ledger.md
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   linux-docker-uv-test:
     name: (Linux) (Docker) Test CLI with (uv)
