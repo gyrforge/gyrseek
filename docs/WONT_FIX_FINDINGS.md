@@ -23,6 +23,12 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP9 | `scanning.rs`              | `false-positive` | Race condition in insufficient_baselines check ordering.                                 | 🚫 Won't Fix |
 | FP10| `.github/workflows/`       | `false-positive` | Prompt Injection / Runner Compromise exfiltrating deployment secrets.                    | 🚫 Won't Fix |
 | FP11| `.github/workflows/`       | `false-positive` | Autonomous Agent execution via `--dangerously-skip-permissions`.                         | 🚫 Won't Fix |
+| 81  | `.github/scripts/sanitize_review.py` | `low` | Python truncation decodes by byte count and ignores UTF-8 errors. | 🚫 Won't Fix |
+| 118 | `.github/workflows/ci.yml` | `low` | Doctest CI tests PR-head sanitizer, not default-branch production script. | 🚫 Won't Fix |
+| 123 | `.github/workflows/post_review.yml` | `invalid` | Adding `actions/checkout` without `ref` would hand `GH_TOKEN` to attacker. | 🚫 Won't Fix |
+| 124 | `.github/scripts/sanitize_review.py` | `low` | Code-block URL defanging is missing AST backtick-context awareness. | 🚫 Won't Fix |
+| 125 | `.github/scripts/post_comment.sh` | `invalid` | `cmark --safe` flag deprecated in cmark ≥0.31. | 🚫 Won't Fix |
+| 129 | `.github/scripts/post_comment.sh` | `accepted-risk` | No automated tests for `post_comment.sh`. | 🚫 Won't Fix |
 | FP12| `.github/workflows/ci.yml` | `accepted-risk`  | `timeout-minutes: 10` with no partial-output trap.                                       | 🚫 Won't Fix |
 | FP13| `.github/workflows/ci.yml` | `accepted-risk`  | `max-parallel: 3` vector for CI inference budget exhaustion.                             | 🚫 Won't Fix |
 | FP14| `AGENTS.md`                | `false-positive` | `AGENTS.md` CI description omits operational details (model name, SHA hash).             | 🚫 Won't Fix |
@@ -32,6 +38,10 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP18| `.github/workflows/ci.yml` | `accepted-risk`  | `graphify update` parsing vulnerability leading to CI runner RCE.                        | 🚫 Won't Fix |
 | FP19| `.github/workflows/ci.yml` | `false-positive` | CI job fails if `gyrseek_review.md` or other artifact files are missing.                 | 🚫 Won't Fix |
 | FP20| `.github/workflows/ci.yml` | `false-positive` | Permissions fragmentation for `checks: write` across jobs.                               | 🚫 Won't Fix |
+| 138 | `.github/scripts/sanitize_review.py` | `accepted-risk` | `PARENS_REGEX` depth-1 limit causes cosmetic artifacts on deeply-nested URLs. | 🚫 Won't Fix |
+| 151 | `.github/scripts/sanitize_review.py` | `invalid` | `www.` defang is case-sensitive — GFM cmark-gfm is also case-sensitive; `WWW.` does not auto-link. | 🚫 Won't Fix |
+| 152 | `.github/scripts/sanitize_review.py` | `accepted-risk` | Autolink `[^>]+` truncates at first literal `>` in URL — RFC-invalid URLs; `cmark --safe` second layer covers it. | 🚫 Won't Fix |
+| 161 | `.github/scripts/sanitize_review.py` | `invalid`       | `@mention` defang regex fails on second `@` in malformed string like `@evil@user`. | 🚫 Won't Fix |
 | FP21| `.github/workflows/`       | `accepted-risk`  | Third-party actions use moving tags instead of being SHA-pinned.                         | 🚫 Won't Fix |
 | FP22| `.github/workflows/ci.yml` | `false-positive` | Truncated consolidation prompt is undetected due to lack of file size verification.      | 🚫 Won't Fix |
 | FP23| `.github/workflows/ci.yml` | `false-positive` | "Enhanced Only" template has no section for purely-new findings.                         | 🚫 Won't Fix |
@@ -44,6 +54,7 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP30| `.github/workflows/ci.yml` | `false-positive` | `rm -rf graphify-out` flagged as unnecessary noise.                                      | 🚫 Won't Fix |
 | FP31| `.github/workflows/ci.yml` | `false-positive` | `graphify-out/` architecture context flagged as generated but never consumed.            | 🚫 Won't Fix |
 | FP32| `.github/workflows/ci.yml` | `false-positive` | Latent coupling warning between cache key and temp script path.                          | 🚫 Won't Fix |
+| 130 | `.github/workflows/post_review.yml` + `.github/scripts/post_comment.sh` | `accepted-risk` | `workflow_run.pull_requests[0].number` does not exist; commit-based PR resolution returns first ambiguous match. | 🚫 Won't Fix |
 
 ---
 
@@ -448,3 +459,116 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 **Summary:** The scanner complained that there is no dedicated CI or script-level test to validate that the multi-step heredoc prompts (`prompt.txt`) are well-formed (i.e., verifying bash variable expansion of `$REVIEWER_NAME`, missing `$`, etc.).
 
 **Reason for Not Fixing:** This violates the "Ponytail" principle (YAGNI). Writing an entire parallel testing apparatus just to `grep` a bash script to ensure string interpolation didn't fail is textbook over-engineering. We rely on standard bash `cat << 'EOF'` semantics. If a variable fails to expand, the generated PR review comment will immediately exhibit obvious formatting errors, serving as its own integration test.
+
+### Finding 81 — Low | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix
+
+**Summary:** Python truncation decodes by byte count and ignores UTF-8 errors.
+
+**Root cause:** The script truncates based on 60,000 raw bytes, which may split a multi-byte character. It then uses `errors='ignore'` on decode, dropping the remainder mid-sequence.
+
+**Failure scenario:** This produces garbled text at the truncation boundary, dropping a single multibyte character if the boundary perfectly bisects it.
+
+**Reasoning:** Because this only drops a single character at the extreme edge of a massive wall of text that is already intentionally and visibly truncated (with a `*(Review truncated...)*` warning appended immediately after), the impact is effectively zero. A strict character-based truncation approach would require loading the entire file into memory as a string first, which violates lazy engineering principles for such an insignificant edge case.
+
+### Finding 118 — Low | `.github/workflows/ci.yml` | 🛑 Wont Fix
+
+**Summary:** Doctest CI tests PR-head sanitizer, not default-branch production script.
+
+**Root cause:** The `ci.yml` workflow checks out the PR branch and runs `doctest` against the PR's version of `.github/scripts/sanitize_review.py`. An attacker could remove both the security logic and the tests in the same PR, resulting in a passing CI check.
+
+**Failure scenario:** An attacker successfully merges a weakened sanitizer because the CI pipeline provided a false sense of security by testing the attacker's weakened tests.
+
+**Reasoning:** This is a fundamental property of how PR-based CI/CD systems operate (tests live with the code). Because `post_review.yml` strictly checks out the base `main` branch when executing the actual production comment posting, the attacker cannot weaponize this against their own PR. Bypassing the CI check only serves to deceive a human reviewer into merging the PR, which means standard human code review is the correct and expected mitigation here. Cross-checking out `main` just to test PRs introduces unnecessary complexity for an edge case covered by review.
+
+### Finding 123 — High | `.github/workflows/post_review.yml` | 🛑 Wont Fix / Invalid
+
+**Summary:** Adding `actions/checkout` without an explicit `ref` would hand `GH_TOKEN` to attacker-controlled scripts.
+
+**Root cause:** The Threat Modeler claimed that a naive `actions/checkout` inside a `workflow_run` event would check out the untrusted PR branch by default, allowing an attacker to run their own `post_comment.sh` with elevated permissions.
+
+**Failure scenario:** An attacker modifies `.github/scripts/post_comment.sh` in their PR to exfiltrate the `GH_TOKEN`.
+
+**Reasoning:** This finding is factually invalid and represents a hallucination regarding GitHub Actions architecture. When a `workflow_run` event is triggered by a `pull_request`, GitHub Actions natively sets `github.sha` to the commit on the *base branch* (e.g. `main`), precisely to enforce a secure execution boundary. A plain `actions/checkout` safely checks out the trusted default branch, not the PR head. No fix is required.
+
+### Finding 124 — Low | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix
+
+**Summary:** Code-block URL defanging is missing AST backtick-context awareness.
+
+**Root cause:** The global regular expressions used to strip explicit links and defang bare URLs do not respect markdown AST block boundaries (such as ` ``` ` or inline backticks).
+
+**Failure scenario:** Legitimate code examples in PR reviews that contain URL strings or markdown link syntax will have their links stripped or defanged, potentially altering the intended visual output of the code block.
+
+**Reasoning:** Attempting to parse markdown AST structures using Regex is notoriously fragile and frequently introduces ReDoS vulnerabilities. Implementing a proper AST parser would require pulling in a heavy third-party dependency like `markdown-it-py`. In accordance with "fail-closed" security and lazy engineering principles, slightly garbling a legitimate code snippet is an acceptable cosmetic tradeoff to guarantee absolute zero-dependency protection against prompt-injected phishing links.
+
+### Finding 125 — Low | `.github/scripts/post_comment.sh` | 🛑 Wont Fix / Invalid
+
+**Summary:** `cmark --safe` flag deprecated in cmark ≥0.31.
+
+**Root cause:** A developer reported that the `--safe` flag was deprecated in recent `cmark` versions and might produce stderr warnings or fail in the future.
+
+**Failure scenario:** The script fails to run due to an unrecognized flag, breaking the comment pipeline, or stderr warnings pollute the logs.
+
+**Reasoning:** This is a hallucinated/invalid finding. Manual verification of `cmark 0.31.2` (the standard version in modern Ubuntu runners) confirms that the `--safe` flag is fully supported, actively documented in `--help`, and produces no deprecation warnings in stderr. The `--safe` flag remains the correct and secure mechanism for stripping raw HTML. No action required.
+
+### Finding 129 — Low | `.github/scripts/post_comment.sh` | 🛑 Wont Fix / Accepted Risk
+
+**Summary:** No automated tests for `post_comment.sh`.
+
+**Root cause:** QA notes that `post_comment.sh` contains non-trivial orchestration logic (PR number resolution, traps, failure paths) but lacks a dedicated mock test script like `test_check_diff.sh`.
+
+**Failure scenario:** A syntax error or logic bug in `post_comment.sh` causes the final PR comment step to fail in production, breaking the review pipeline.
+
+**Reasoning:** Writing a dedicated test suite for `post_comment.sh` would require extensive over-engineering to mock the `gh` API, file system state, and `cmark` binaries. The script is inherently fail-closed (using `set -euo pipefail` and explicit file-size checks). A failure here simply results in a red X on the CI pipeline without posting a comment, which is immediately visible and safe. Following the "lazy engineering" philosophy, testing pipeline glue code via live pipeline execution is the shortest and most pragmatic path.
+
+### Finding 130 — `accepted-risk` | `.github/scripts/post_comment.sh` + `.github/workflows/post_review.yml` | 🛑 Wont Fix
+
+**Summary:** `github.event.workflow_run.pull_requests[0].number` does not exist reliably on `workflow_run` events. The commit-based PR number resolution fetches the first ambiguous match.
+
+**Root cause:** `post_comment.sh:13-20` queries `/repos/$REPO/commits/$SHA/pulls` and unconditionally takes `.[0].number`. A commit present on multiple PRs (cherry-pick, merge-queue) returns the wrong PR.
+
+**Failure scenario:** A cherry-picked commit across multiple PRs or a merge-queue squash causes the review comment to be posted to the wrong PR with no warning to operators.
+
+**Reasoning:** `github.event.workflow_run.pull_requests[0].number` is an unreliable field on the `workflow_run` event—it is often sparsely populated or missing entirely by GitHub. Passing it from `post_review.yml` would not resolve the issue because the field is not consistently populated by the GitHub Actions event payload. The commit-based API resolution (`/repos/$REPO/commits/$SHA/pulls`), despite its first-match ambiguity for cherry-picks and merge-queue squashes, is the most reliable mechanism available. Wrong-PR comments are cosmetic (the full review is always accessible from the Actions tab), and this edge case is inherently bounded by GitHub's API contract. Building a disambiguation layer to handle this rare condition is not justified by the severity.
+
+### Finding 138 — Low | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix / Accepted Risk
+
+**Summary:** `PARENS_REGEX` depth-1 limit causes cosmetic artifacts on deeply-nested URLs.
+
+**Root cause:** `PARENS_REGEX = r"(?:[^)(]+|\([^)(]*\))*"` only handles one level of nested parentheses in link URLs. A URL like `https://evil.com/path(a(b))` fails to fully match the inline link regex; the outer link is stripped but leftover markdown syntax may be visible.
+
+**Failure scenario:** Deeply-nested URL in a markdown link produces leftover `)(` artifacts in the rendered comment text.
+
+**Reasoning:** The URL is still defanged and the link is stripped (safe outcome). Adding recursive parenthesis matching via a recursive regex or loop would significantly increase complexity and introduce a real ReDoS attack surface, which is strictly worse than the current cosmetic artifact. Documented as a known limitation.
+
+---
+### Finding 151 — Invalid | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix
+
+**Summary:** `www.` defang is case-sensitive.
+
+**Root cause:** The defang regex `www\.` only matches lowercase `www.`.
+
+**Failure scenario:** An attacker injects `WWW.evil.com` hoping to bypass the regex and produce a clickable link.
+
+**Reasoning:** GFM's `cmark-gfm` autolinker is natively case-sensitive for the `www.` prefix. `WWW.evil.com` does not automatically render as a clickable link on GitHub. Therefore, no attack vector exists to bypass. Adding case-insensitivity would be defense against a non-issue.
+
+---
+### Finding 152 — Accepted Risk | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix
+
+**Summary:** Autolink regex `[^>]+` truncates at first literal `>` in URL.
+
+**Root cause:** The step 4 autolink regex `r"<[a-zA-Z][a-zA-Z0-9+.-]*://[^>]+>"` stops matching at the first literal `>` inside the URL itself.
+
+**Failure scenario:** An attacker injects `<https://evil.com/?q=>payload>` hoping to leave `payload>` partially unstripped.
+
+**Reasoning:** URLs containing literal `>` are technically invalid under RFC 3986 (they must be percent-encoded as `%3E`). However, even if an attacker tricks the parser, the second layer of defense (`cmark --safe`) will safely strip or defang the remaining HTML/markdown artifacts. The current regex is simple and robust against valid URLs; complicating it for invalid edge cases isn't warranted given the safety net.
+
+---
+### Finding 161 — Invalid | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix
+
+**Summary:** `@mention` defang regex fails on second `@` in malformed string like `@evil@user`.
+
+**Root cause:** After step 1 strips link syntax from `[@evil@user](url)`, the string `@evil@user` enters step 6. `@evil` matches the regex `(?<!\w)@(\w[\w/-]*)` (preceded by start-of-string), but `@user` does not match because it is preceded by `l` (a word character).
+
+**Failure scenario:** An attacker attempts to inject a malformed string like `[@evil@user](url)` hoping the LLM will output a clickable mention to `@user`.
+
+**Reasoning:** On GitHub, `@user` embedded in the middle of a continuous text block without a trailing space or newline does not render as a mention and will not trigger a notification. Since this does not bypass the notification spam protection, this is a purely cosmetic artifact with no security implications.

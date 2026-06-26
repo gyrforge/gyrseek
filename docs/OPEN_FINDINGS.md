@@ -63,7 +63,7 @@
 | 78 | `.github/workflows/ci.yml` | 449 | Medium | `grep -qi "^# consolidated review"` weakens post-consolidation check | ⚠️ Open |
 | 79 | `lib.rs`      | 133  | Low    | `parse_list_map` has no inline tests | ⚠️ Open |
 | 80 | `.github/workflows/ci.yml` | 163 | Low | Symlink path for `.github/skills/` not validated before `cat` | ⚠️ Open |
-| 81 | `.github/workflows/ci.yml` | 499 | Low | Python truncation decodes by byte count and ignores UTF-8 errors | ⚠️ Open |
+
 
 ## Complexity & Over-Engineering Findings
 
@@ -845,18 +845,6 @@ if next.starts_with('-') {
 **Failure scenario:** A malicious PR or concurrent process could modify the symlink target to redirect `cat` to read arbitrary files (e.g., repository secrets stored on disk) and inject them into the LLM context.
 
 **Fix direction:** Use `.agents/skills/` directly instead of following the symlink, since the workflow has its own checkout of `.agents/skills/`.
-
----
-
-### Finding 81 — Low | `.github/workflows/ci.yml:499-501` | ⚠️ Open
-
-**Summary:** Python truncation decodes by byte count and ignores UTF-8 errors.
-
-**Root cause:** The script truncates based on 60,000 raw bytes, which may split a multi-byte character. It then uses `errors='ignore'` on decode, dropping the remainder mid-sequence.
-
-**Failure scenario:** This produces garbled text at the truncation boundary, potentially omitting important characters from the review.
-
-**Fix direction:** Use character-based truncation instead of byte-based, or use `errors='replace'` to replace invalid sequences with `U+FFFD`.
 
 ---
 
