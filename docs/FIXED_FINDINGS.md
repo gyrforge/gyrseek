@@ -57,6 +57,54 @@
 | 105 | `.github/workflows/ci.yml` | Low | Additional stale XML tag references in consolidation prompt | Replaced `<untrusted_inputs>` and `<previous_review>` with file paths | ✅ Fixed |
 | 106 | `.github/workflows/ci.yml` | High | Blind stdout fallback copied errors/injections to official review artifact | Removed stdout fallback and forced explicit file output | ✅ Fixed |
 | 107 | `docs/ARCHITECTURE.md` | Low | CI Pipeline privilege separation boundary not formally documented | Added `CI/CD Pipeline Architecture` section | ✅ Fixed |
+| 108 | `.github/workflows/post_review.yml` | High | `cmark --safe` fails to sanitize valid phishing markdown links | Extracted logic to `post_comment.sh` and `sanitize_review.py` | ✅ Fixed |
+| 109 | `.github/scripts/sanitize_review.py` | High | Empty alt-text (`![]()`) bypasses regex link stripping | Changed regex `+` to `*` to catch empty brackets | ✅ Fixed |
+| 110 | `.github/scripts/post_comment.sh` | Medium | Fails open with exit 0 if review artifact or PR number is missing | Changed `exit 0` to `exit 1` with `::error::` | ✅ Fixed |
+| 111 | `.github/scripts/sanitize_review.py` | Low | Reference link definition regex misses non-HTTP schemes | Replaced `http.*` with `\S+` to strip any protocol | ✅ Fixed |
+| 112 | `.github/scripts/sanitize_review.py` | Low | Nested parenthesis in URLs causes partial stripping | Refactored regex to properly consume balanced parentheses | ✅ Fixed |
+| 113 | `.github/scripts/sanitize_review.py` | Low | Missing CI tests for regex logic | Added `doctest` step to `ci.yml` to prevent regressions | ✅ Fixed |
+| 114 | `.github/scripts/sanitize_review.py` | Medium | Bare URLs and IPv6 literals auto-link in GitHub | Added universal defang step to replace `://` with `[://]` | ✅ Fixed |
+| 115 | `.github/scripts/post_comment.sh` | Low | Dead variable `truncated_file` | Removed dead variable and cleaned up trap | ✅ Fixed |
+| 116 | `.github/scripts/sanitize_review.py` | Low | Unnecessary `argparse` boilerplate | Replaced with native `sys.argv` matching lazy engineering | ✅ Fixed |
+| 117 | `.github/scripts/post_comment.sh` | Medium | Source file re-check gap | Added check to fail closed if `sanitized_file` is empty before posting | ✅ Fixed |
+| 119 | `.github/scripts/sanitize_review.py` | Low | Autolink regex ignores non-HTTP schemes | Replaced `https?` with RFC 3986 generic scheme regex | ✅ Fixed |
+| 120 | `.github/workflows/post_review.yml` | High | `GH_TOKEN` exposed to Python subprocess | Used `env -u GH_TOKEN` to explicitly strip the token from the Python environment | ✅ Fixed |
+| 121 | `.github/workflows/ci.yml` | Low | `doctest` passes silently with 0 tests | Enforced test execution by asserting `res.attempted > 0` | ✅ Fixed |
+| 122 | `.github/scripts/sanitize_review.py` | Low | Unnecessary nested function `defang_url` | Replaced with an inline `lambda` matching lazy engineering | ✅ Fixed |
+| 126 | `.github/scripts/sanitize_review.py` | Low | Dead flexibility in `max_bytes` parameter | Converted to a module-level constant `MAX_REVIEW_BYTES` | ✅ Fixed |
+| 127 | `.github/scripts/sanitize_review.py` | Low | Duplicated regex fragment | Extracted balanced-parenthesis regex to `PARENS_REGEX` constant | ✅ Fixed |
+| 128 | `.github/scripts/post_comment.sh` | Low | Disjointed comment numbering | Re-numbered steps chronologically and merged related comments | ✅ Fixed |
+| 130 | `.github/scripts/sanitize_review.py` | Low | `sanitize()` function has zero test coverage | Added 4 `tempfile` round-trip unit tests in `test_sanitize_review.py` | ✅ Fixed |
+| 131 | `.github/scripts/post_comment.sh` | Low | `cmark` failure emits no `::error::` diagnostic | Added explicit `\|\| { echo "::error::..." >&2; exit 1; }` trap on `cmark` | ✅ Fixed |
+| 132 | `.github/scripts/post_comment.sh` | Low | `stripped_file` emptiness not checked before `cmark` | Added `[ ! -s "$stripped_file" ]` guard to localize failure to the stripping stage | ✅ Fixed |
+| 133 | `.github/scripts/sanitize_review.py` | Medium | `www.`-prefixed bare URLs bypass GFM defanging | Extended step 5 regex to also match `www\.` bare domains; `www.evil.com` → `www[.]evil.com` | ✅ Fixed |
+| 134 | `.github/scripts/sanitize_review.py` | Medium | Inline link regex `[^\]]*` breaks on `]` in link text | Added `LINK_TEXT_REGEX` constant allowing one level of nested brackets | ✅ Fixed |
+| 135 | `.github/scripts/sanitize_review.py` | Medium | Email autolinks `<user@host>` not stripped | Added email autolink stripping in step 4; renders as `[EMAIL STRIPPED]` | ✅ Fixed |
+| 136 | `.github/scripts/test_sanitize_review.py` | Low | Temp file cleanup not panic-safe | Replaced bare `try/finally` with `@contextlib.contextmanager _tmpfiles()` helper | ✅ Fixed |
+| 137 | `.github/scripts/sanitize_review.py` | Low | IPv6 literal bare URL defanging has no test coverage | Added doctest for `http://[::1]:8080/path` | ✅ Fixed |
+| 139 | `.github/scripts/sanitize_review.py` | Low | `_defang` named inner function reintroduced | Inlined as lambda per Finding 122 guidance | ✅ Fixed |
+| 140 | `.github/scripts/post_comment.sh` | Low | Missing `\|\|` error trap on Python subprocess | Added `\|\| { echo "::error::..." >&2; exit 1; }` trap | ✅ Fixed |
+| 141 | `.github/workflows/ci.yml` | Low | `black . --check` scoped too broadly | Scoped to `.github/scripts/` only | ✅ Fixed |
+| 142 | `.github/scripts/test_sanitize_review.py` | Low | `test_sanitize_utf8_boundary` off-by-one — truncation path never exercised | Added extra bytes so `file_size > MAX_REVIEW_BYTES` is True | ✅ Fixed |
+| 143 | `.github/scripts/sanitize_review.py` | High | `LINK_TEXT_REGEX` depth-1 allows 2+ nested bracket bypass | Expanded to 3-level depth via build loop; `[a [b [c]]](url)` now stripped | ✅ Fixed |
+| 144 | `.github/scripts/test_sanitize_review.py` | Low | Tautological assertion `e.code == 1 or e.code is not None` | Replaced with strict `assert e.code == 1` | ✅ Fixed |
+| 145 | `.github/scripts/sanitize_review.py` | Low | Indented reference definitions bypass step 3 | Added `[ \t]*` leading whitespace to ref definition regex | ✅ Fixed |
+| 146 | `.github/scripts/post_comment.sh` | Low | Cleanup trap runs `rm -f "" ""` on early exit | Added `[ -n ... ] && rm -f` guards per variable | ✅ Fixed |
+| 147 | `.github/workflows/post_review.yml` | Low | Missing security comment on `workflow_run` checkout | Added `# SECURITY:` block warning against adding `ref: head_sha` | ✅ Fixed |
+| 148 | `.github/scripts/test_sanitize_review.py` | Low | Truncation test missing prefix content integrity assertion | Added `assert result.startswith(known_prefix)` | ✅ Fixed |
+| 149 | `.github/scripts/test_sanitize_review.py` | Low | No test for entirely-stripped input | Added `test_sanitize_all_links_stripped` | ✅ Fixed |
+| 150 | `.github/scripts/test_sanitize_review.py` | Low | `/tmp/out.md` hardcoded outside `_tmpfiles()` in missing-input test | Test now uses `_tmpfiles()` for both paths | ✅ Fixed |
+| 153 | `.github/scripts/sanitize_review.py` | Medium | `@mention` injection bypasses sanitization, enabling notification spam | Added step 6 to defang `@username` and `@org/team` to `@[username]` | ✅ Fixed |
+| 154 | `.github/workflows/ci.yml` | Low | `black` formatting check is over-engineered for a single file | Replaced `black` with built-in `python3 -m py_compile` syntax check | ✅ Fixed |
+| 155 | `.github/workflows/ci.yml` | Low | ShellCheck `ignore_paths` is dead configuration | Removed unused `ignore_paths` setting | ✅ Fixed |
+| 156 | `.github/scripts/post_comment.sh` | Low | Redundant `|| true` on cleanup trap `rm -f` | Removed dead `|| true` | ✅ Fixed |
+| 157 | `.github/scripts/test_sanitize_review.py` | Low | Missing test for reference-definitions-only input | Added `test_sanitize_reference_definitions_only` | ✅ Fixed |
+| 158 | `.github/scripts/test_sanitize_review.py` | Low | `.strip()` in assertion hides whitespace differences | Dropped `.strip()` from assertion | ✅ Fixed |
+| 159 | `.github/scripts/post_comment.sh` | Low | Missing `REPO_NAME` emptiness guard | Added `[ -z "$REPO_NAME" ]` guard before API call | ✅ Fixed |
+| 160 | `.github/scripts/post_comment.sh` | Low | Missing `HEAD_SHA` format validation | Added regex validation `^[0-9a-f]{40}$` before API call | ✅ Fixed |
+| 162 | `.github/scripts/post_comment.sh` | High | `GH_TOKEN` exposed to `cmark` C binary when processing untrusted input | Added `env -u GH_TOKEN` before `cmark` execution | ✅ Fixed |
+| 163 | `.github/scripts/sanitize_review.py` | Low | Bare URL defang regex greedily captures trailing punctuation | Updated bare URL regex to trim GFM trailing punctuation | ✅ Fixed |
+| 164 | `.github/scripts/test_sanitize_review.py` | Low | Missing test for zero-byte input file | Added `test_sanitize_empty_input` | ✅ Fixed |
 
 ---
 ## Cross-Finding Chains (Architectural Context)
@@ -805,3 +853,264 @@ Consider adding a process- or file-system marker that persists across the sessio
 **Failure scenario:** Future contributors might not understand the rigid security boundary between `ci.yml` and `post_review.yml`, risking regressions where trusted operations (like posting comments) are accidentally moved back into the untrusted PR execution context.
 
 **Fix:** Added a dedicated `CI/CD Pipeline Architecture` section to `ARCHITECTURE.md` formalizing the trusted/untrusted boundary, the artifact handoff, and the `cmark --safe` sanitization step. Checked off the corresponding milestone in `ROADMAP.md`.
+
+### Finding 108: `cmark --safe` Markdown Link Phishing Vulnerability
+**Severity:** High
+**Component:** `.github/workflows/post_review.yml`
+
+**Summary:** The post-review comment workflow relied solely on `cmark --safe` to sanitize the AI-generated review before posting it to the PR. While `cmark --safe` effectively neutralizes raw HTML and dangerous protocols (like `javascript:`), it intentionally permits standard markdown links (e.g., `[Click Here](https://evil.com)`).
+
+**Root cause:** Misunderstanding of the scope of `--safe`. It sanitizes against XSS, but not against Phishing or IP Deanonymization via standard HTTP/HTTPS links and image embeds.
+
+**Failure scenario:** An attacker successfully executes a prompt injection via their PR, commanding the consolidation LLM to output a phishing link or a tracking pixel. The workflow processes the output with `cmark --safe`, which passes the link untouched. The GitHub Actions bot posts the comment. The repository maintainer, trusting the bot, clicks the link and is subjected to credential theft, or their IP is deanonymized via an image embed.
+
+**Fix:** Extracted the bash logic into `.github/scripts/post_comment.sh` and introduced a dedicated Python script (`.github/scripts/sanitize_review.py`) that handles truncation and physically strips all markdown inline links, reference links, and autolinks from the LLM output *before* it is passed to `cmark`. This entirely removes the phishing vector without failing the workflow.
+
+### Finding 109: Empty Alt-Text Image Bypass in Link Stripper
+**Severity:** High
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** The regex used to strip markdown links required at least one character inside the brackets `[^\]]+`. An attacker could bypass the filter entirely by using an empty alt-text string, such as `![](https://attacker.com/pixel)`.
+
+**Root cause:** Regex `+` quantifier prevented matches on empty brackets.
+
+**Fix:** Changed `+` to `*` to match zero-length bracket contents, and added explicit image-stripping regex rules to replace image embeds with `[IMAGE STRIPPED]`.
+
+### Finding 110: Fail-Open on Missing Artifact in post-comment
+**Severity:** Medium
+**Component:** `.github/scripts/post_comment.sh`
+
+**Summary:** If the upstream artifact generation failed or the artifact expired, the script printed a warning and exited with code `0` (success). The workflow would pass green despite the critical security review not being posted.
+
+**Root cause:** Lack of `exit 1` in early-exit artifact/PR checks.
+
+**Fix:** Replaced `exit 0` with `exit 1` and added `::error::` annotations so the `workflow_run` job accurately reflects the failure.
+
+### Finding 111: Reference link definition regex misses non-HTTP schemes
+**Severity:** Low
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** The reference definition regex (`http.*$`) only stripped definitions starting with HTTP/HTTPS. A definition like `[1]: ftp://evil.com` or `[1]: //evil.com` would bypass the filter.
+**Fix:** Changed `http.*` to `\S+` to strip any protocol schema, and `.*$` to `[^\n]*$` to resolve a potential ReDoS backtracking issue.
+
+### Finding 112: Nested parenthesis causes partial URL stripping
+**Severity:** Low
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** The `\([^)]+\)` regex pattern stopped at the first closing parenthesis. A URL with nested parentheses (e.g. `[click](https://evil.com/a(b)c)`) left the trailing `c)` dangling in the output.
+**Fix:** Refactored the inline URL matching group to consume balanced parentheses: `\((?:[^)(]+|\([^)(]*\))*\)`.
+
+### Finding 113: Missing CI tests for sanitize_review.py
+**Severity:** Low
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** The script lacked test coverage, making regex regressions highly probable during future maintenance.
+**Fix:** Refactored the stripping logic into a pure function, added comprehensive `doctest` strings covering all edge cases, and added `python3 -m doctest .github/scripts/sanitize_review.py` to the `Smoke Test Pipeline Scripts` CI job.
+
+### Finding 114: Bare URLs automatically render as clickable links in GitHub
+**Severity:** Medium
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** While explicit markdown links were stripped, bare URLs (e.g. `https://evil.com`) and IPv6 literals (e.g. `http://[::1]`) were ignored. GitHub's auto-linker natively converts bare URLs into clickable links upon rendering, providing an unmitigated phishing vector.
+**Fix:** Added a universal defang step (`defang_url`) that replaces the protocol separator `://` in bare URLs with `[://]` (e.g. `https[://]evil.com`), preventing GitHub from treating the text as a valid URI. This comprehensively covers IPv4, IPv6, and all string domains without regex complexity.
+
+### Finding 115: Dead variable truncated_file
+**Severity:** Low
+**Component:** `.github/scripts/post_comment.sh`
+
+**Summary:** `truncated_file=""` was declared but never assigned because truncation was moved to python output natively.
+**Fix:** Removed the variable and cleaned up the trap.
+
+### Finding 116: Unnecessary argparse boilerplate
+**Severity:** Low
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** The script used 8 lines of `argparse` boilerplate to parse exactly two required positional arguments.
+**Fix:** Replaced with a native 3-line `sys.argv` implementation.
+
+### Finding 117: Source file re-check gap
+**Severity:** Medium
+**Component:** `.github/scripts/post_comment.sh`
+
+**Summary:** The script verified that the initial review artifact existed, but did not verify that the output of `cmark --safe` (`$sanitized_file`) was non-empty before running `gh pr comment`. If a review was entirely composed of malicious links and stripped to empty, the `gh pr comment` CLI would fail and break the pipeline unexpectedly.
+**Fix:** Added an explicit emptiness check for `$sanitized_file` to fail gracefully with `exit 1` and `::error::`.
+
+### Finding 119: Autolink regex ignores non-HTTP schemes
+**Severity:** Low
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** The `re.sub` patterns for autolinks and bare URLs hardcoded `https?://`. This allowed attackers to use alternative schemes (`ftp://`, `steam://`, `custom://`) which could potentially bypass stripping and be rendered as clickable links depending on the platform's markdown parser.
+**Fix:** Replaced the hardcoded `https?://` with the RFC 3986 generic scheme definition `[a-zA-Z][a-zA-Z0-9+.-]*://` to comprehensively catch and strip all URI schemes.
+
+### Finding 120: GH_TOKEN exposed to Python sanitizer process
+**Severity:** High
+**Component:** `.github/workflows/post_review.yml` & `.github/scripts/post_comment.sh`
+
+**Summary:** The highly privileged `GH_TOKEN` (with `pull-requests: write` permissions) was exported as an environment variable to the entire `post_comment.sh` step. This meant the Python subprocess inherently inherited the token in `os.environ`. If an attacker achieved arbitrary code execution within the Python context (e.g., via a complex ReDoS or parser exploit), they could exfiltrate the token and perform privileged repository operations.
+**Fix:** Modified the subprocess invocation in the bash script to `env -u GH_TOKEN python3 ...`. This natively strips the token from the child environment immediately before Python boots up, strictly isolating the token to the bash orchestration context and the final `gh pr comment` command.
+
+### Finding 121: `doctest` passes silently with 0 tests
+**Severity:** Low
+**Component:** `.github/workflows/ci.yml`
+
+**Summary:** The initial `python3 -m doctest` execution lacked a guard against finding zero tests. If a future refactor accidentally removed all `>>>` docstrings from `sanitize_review.py`, the command would exit `0` ("0 items passed") and silently drop the entire regression safety net.
+**Fix:** Extracted the test execution into a dedicated script `.github/scripts/test_sanitize_review.py` that uses `doctest.testmod()`, explicitly checking that `res.attempted > 0` and exiting `1` if the test suite is empty or missing.
+
+### Finding 122: Unnecessary nested function `defang_url`
+**Severity:** Low
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** `defang_url` was defined as a named inner function but used exactly once, violating lazy engineering principles by adding unnecessary boilerplate and indirection.
+**Fix:** Replaced the named function with an inline `lambda m: m.group(0).replace('://', '[://]')` within the `re.sub` invocation.
+
+### Finding 131: `cmark` failure emits no `::error::` diagnostic
+**Severity:** Low
+**Component:** `.github/scripts/post_comment.sh`
+
+**Summary:** `set -euo pipefail` causes the script to exit immediately on `cmark` failure, bypassing the `[ ! -s "$sanitized_file" ]` guard at the next line. The pipeline still fails closed, but without a `::error::` annotation visible in GitHub Actions — making failures harder to diagnose. This partially obscures the diagnostic intent of Finding 117.
+**Fix:** Added an explicit `|| { echo "::error::..." >&2; exit 1; }` trap on the `cmark` invocation. This preserves fail-closed behavior and `set -e` semantics while emitting a clean diagnostic annotation on `cmark` failure.
+
+### Finding 134: Inline link regex `[^\]]*` breaks on `]` in link text
+**Severity:** Medium
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** `[^\]]*` terminates at the first `]`, so `[click [here]](https://evil.com)` was only partially matched — the outer link was stripped but the regex failed to fully consume the nested bracket. Introduced `LINK_TEXT_REGEX = r"(?:[^\[\]]|\[[^\[\]]*\])*"` which allows one level of nested brackets in link text.
+**Fix:** Added `LINK_TEXT_REGEX` constant and replaced all `[^\]]*` occurrences in link/image patterns.
+
+### Finding 135: Email autolinks not stripped
+**Severity:** Medium
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** GFM email autolinks (`<user@host>`) pass through all 5 sanitization steps and render as clickable `mailto:` links after `cmark --safe`. The step 4 autolink regex only covered scheme-based URIs.
+**Fix:** Added `re.sub(r"<[^\s@>]+@[^\s@>]+>", "[EMAIL STRIPPED]", text)` as part of step 4.
+
+### Finding 136: Temp file cleanup not panic-safe in test_sanitize_review.py
+**Severity:** Low
+**Component:** `.github/scripts/test_sanitize_review.py`
+
+**Summary:** Three test functions used bare `try/finally` with sequential `os.unlink` calls. If the first `os.unlink` raised, the second cleanup was skipped, potentially leaking temp files.
+**Fix:** Extracted a `@contextlib.contextmanager _tmpfiles()` helper that uses `contextlib.suppress(FileNotFoundError)` for each unlink independently, guaranteeing both files are always cleaned up.
+
+### Finding 137: IPv6 literal bare URL defanging has no test coverage
+**Severity:** Low
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** The `_defang` function handles IPv6 literal URLs (e.g. `http://[::1]:8080/path`) correctly via `://` → `[://]` substitution, but had no doctest coverage.
+**Fix:** Added doctest `strip_markdown_links('IPv6 bare url http://[::1]:8080/path here')` → `'IPv6 bare url http[://][::1]:8080/path here'`.
+
+### Finding 145: Indented reference definitions bypass step 3 stripping
+**Severity:** Low (cosmetic — step 5 still defangs the URL)
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** The step 3 regex `^\[...\]:` anchored at `^` skips reference definitions with leading whitespace (e.g., `   [1]: https://evil.com`). CommonMark allows up to 3 spaces before a link label.
+**Fix:** Added optional `[ \t]*` before the label: `^[ \t]*\[...\]:`.
+
+### Finding 146: Cleanup trap runs `rm -f "" ""` on early exit
+**Severity:** Low
+**Component:** `.github/scripts/post_comment.sh`
+
+**Summary:** If the script exits before `stripped_file`/`sanitized_file` are assigned, the trap runs `rm -f "" ""`. Harmless on GNU coreutils but fragile on strict POSIX shells.
+**Fix:** Replaced with explicit guards: `[ -n "${var:-}" ] && rm -f "$var" || true`.
+
+### Finding 147: Missing comment documenting workflow_run checkout security
+**Severity:** Low
+**Component:** `.github/workflows/post_review.yml`
+
+**Summary:** The bare `actions/checkout@v7` in `post_review.yml` relies on `workflow_run` defaulting to the base-branch SHA. No comment warned future contributors not to add `ref: head_sha`, which would expose `GH_TOKEN` to attacker-controlled scripts.
+**Fix:** Added a `# SECURITY:` comment block above the checkout step explaining the invariant.
+
+### Finding 148: Truncation test missing prefix content integrity assertion
+**Severity:** Low
+**Component:** `.github/scripts/test_sanitize_review.py`
+
+**Summary:** `test_sanitize_truncation` asserted truncation warning and shorter output, but never verified that leading bytes survived uncorrupted.
+**Fix:** Added `assert result.startswith(known_prefix)`.
+
+### Finding 149: No test for entirely-stripped input
+**Severity:** Low
+**Component:** `.github/scripts/test_sanitize_review.py`
+
+**Summary:** No unit test covered the case where all content is markdown links, producing empty/whitespace-only output from `sanitize()`. Downstream bash guards catch this, but no unit-level regression test existed.
+**Fix:** Added `test_sanitize_all_links_stripped`.
+
+### Finding 150: `test_sanitize_missing_input` hardcoded `/tmp/out.md` outside `_tmpfiles()`
+**Severity:** Low
+**Component:** `.github/scripts/test_sanitize_review.py`
+
+**Summary:** The output path `/tmp/out.md` was hardcoded outside the `_tmpfiles()` context manager. If a future refactor caused `sanitize()` to write before checking the input, the stale file would persist across test runs.
+**Fix:** Changed test to use `_tmpfiles()` for both paths.
+
+### Finding 153: `@mention` injection bypasses sanitization, enabling notification spam
+**Severity:** Medium
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** An attacker who achieves prompt injection can cause the LLM to output GitHub mentions (e.g., `@username` or `@org/team`). The `github-actions[bot]` account posting the review comment would then trigger notification spam to those users. Mentions passed through all previous sanitization steps and `cmark --safe` unchanged.
+**Fix:** Added step 6 to `strip_markdown_links` using `re.sub(r"(?<!\w)@(\w[\w/-]*)", r"@[\1]", text)` to defang mentions into safe plaintext (e.g., `@[username]`).
+
+### Finding 154: `black` formatting check is over-engineered for a single file
+**Severity:** Low
+**Component:** `.github/workflows/ci.yml`
+
+**Summary:** Installing `black` via `apt-get` and running it as a CI gate for a single Python script (`sanitize_review.py`) is unnecessary over-engineering. The script already complies with style guidelines and minor formatting drift is a non-issue.
+**Fix:** Removed `black` from the apt dependencies and replaced the Black check with `python3 -m py_compile .github/scripts/*.py` to simply verify syntax correctness.
+
+### Finding 155: ShellCheck `ignore_paths` is dead configuration
+**Severity:** Low
+**Component:** `.github/workflows/ci.yml`
+
+**Summary:** The `ignore_paths: .github/scripts/*.py` configuration in the `Run ShellCheck` job was a no-op, as `ludeeus/action-shellcheck` natively only processes shell scripts and ignores `.py` files automatically.
+### Finding 156: Redundant `|| true` on cleanup trap `rm -f`
+**Severity:** Low
+**Component:** `.github/scripts/post_comment.sh`
+
+**Summary:** The `rm -f` commands in the trap handler were suffixed with `|| true`. This is dead code because `rm -f` never exits non-zero according to POSIX.1-2017, and `set -e` does not apply inside trap handlers.
+**Fix:** Removed the redundant `|| true` suffixes.
+
+### Finding 157: Missing test for reference-definitions-only input
+**Severity:** Low
+**Component:** `.github/scripts/test_sanitize_review.py`
+
+**Summary:** There was no test covering input composed entirely of reference definitions (e.g., `[1]: https://evil.com`), which should be stripped to an empty file and trigger the `[ ! -s ]` guard in the bash wrapper.
+**Fix:** Added `test_sanitize_reference_definitions_only` which verifies this edge case. While writing the test, it was discovered that the reference definition regex left trailing newlines behind. The regex in `sanitize_review.py` was updated to `^[ \t]*\[[^\]]*\]:\s*\S+[^\n]*\n?` to consume the trailing newline, ensuring completely empty output.
+
+### Finding 158: `.strip()` in assertion hides whitespace differences
+**Severity:** Low
+**Component:** `.github/scripts/test_sanitize_review.py`
+
+**Summary:** In `test_sanitize_all_links_stripped`, the assertion used `result.strip() == "evil also evil"`, which masked potential leading or trailing whitespace differences introduced by the regex logic.
+**Fix:** Removed `.strip()` to ensure strict equality.
+
+### Finding 159: Missing `REPO_NAME` emptiness guard
+**Severity:** Low
+**Component:** `.github/scripts/post_comment.sh`
+
+**Summary:** `post_comment.sh` lacked validation for the `REPO_NAME` environment variable, which could lead to a cryptic 404 from the `gh api` call if the variable was unset or empty.
+**Fix:** Added an explicit `[ -z "$REPO_NAME" ]` guard with a descriptive `::error::` output before making the API call.
+
+### Finding 160: Missing `HEAD_SHA` format validation
+**Severity:** Low
+**Component:** `.github/scripts/post_comment.sh`
+
+**Summary:** `HEAD_SHA` was passed to the GitHub API endpoint `/repos/$REPO_NAME/commits/$HEAD_SHA/pulls` without format validation. On failure, the script output `"Could not determine PR number for commit $HEAD_SHA"`, which conflated a malformed SHA with a valid 404, rate limit, or jq-null failure.
+**Fix:** Added a 40-character hex string regex validation (`echo "$HEAD_SHA" | grep -qE '^[0-9a-f]{40}$'`) with an explicit `::error::` message before executing the API call.
+
+### Finding 162: `GH_TOKEN` exposed to `cmark` C binary when processing untrusted input
+**Severity:** High
+**Component:** `.github/scripts/post_comment.sh`
+
+**Summary:** The `cmark --safe` command was executed with `GH_TOKEN` (which has `pull-requests: write` permissions) present in the environment block. While `cmark --safe` processes untrusted markdown output generated by the LLM, the `env -u GH_TOKEN` isolation pattern was missing (it was applied to the Python script in Finding 120 but overlooked for `cmark`). Since C parsers are vulnerable to memory corruption (e.g., buffer overflow, UAF), a crafted payload surviving the Python script could exploit `cmark` to achieve RCE, exfiltrate the token, and merge malicious code.
+**Fix:** Added `env -u GH_TOKEN` before the `cmark` command, ensuring the token is stripped from the environment before processing untrusted content.
+
+### Finding 163: Bare URL defang regex greedily captures trailing punctuation
+**Severity:** Low
+**Component:** `.github/scripts/sanitize_review.py`
+
+**Summary:** The regex for defanging bare URLs (`[^\s<>]+`) greedily captured trailing punctuation like `.`, `,`, `)`, and `!` (e.g. `See https://evil.com.`). While security was preserved because the URL was successfully defanged, it created cosmetic artifacts where trailing prose punctuation was pulled inside the bracketed defang string.
+**Fix:** Extracted the regex replacement logic into a helper function `_defang_url` that explicitly trims trailing punctuation characters (matching GFM rules: `?, !, ., ,, :, *, _, ~, ), ', "`) from the captured string before defanging, leaving the punctuation untouched in the surrounding text. Added a doctest to cover this case.
+
+### Finding 164: Missing test for zero-byte input file
+**Severity:** Low
+**Component:** `.github/scripts/test_sanitize_review.py`
+
+**Summary:** `sanitize_review.py` properly handled 0-byte input files by writing out a 0-byte output file (triggering the downstream bash guard), but there was no explicit unit test verifying this behavior. A future refactor could introduce a crash on empty input and go unnoticed.
+**Fix:** Added `test_sanitize_empty_input` to explicitly assert that processing a 0-byte file produces a 0-byte output file without raising an exception.

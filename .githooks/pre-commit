@@ -1,0 +1,48 @@
+#!/bin/sh
+
+set -eu
+
+if [ "$(uname)" = "Darwin" ]; then
+	for tool in yamllint black rust shellcheck shfmt; do
+		if ! command -v "$tool" >/dev/null 2>&1; then
+			echo "Installing $tool via Homebrew..."
+			brew install "$tool"
+		fi
+	done
+fi
+
+# Identify staged Rust files
+RUST_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
+
+# Identify staged Python files
+PY_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '\.py$' || true)
+
+# Identify staged YAML files
+YAML_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '\.(yml|yaml)$' || true)
+
+# Identify staged shell scripts (including pre-commit itself)
+SHELL_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '(pre-commit|\.sh)$' || true)
+
+# Only run checks if there are staged Rust files
+if [ -n "$RUST_STAGED" ]; then
+	echo "Running cargo check, cargo fmt, and just lint on staged Rust files..."
+	echo "$RUST_STAGED" | xargs -I {} cargo check --message-format=json | grep -q error && exit 1
+	echo "$RUST_STAGED" | xargs -I {} cargo fmt {}
+	just lint
+fi
+
+if [ "$YAML_STAGED" -gt 0 ]; then
+	echo "Running yamllint..."
+	yamllint .
+fi
+
+if [ "$SHELL_STAGED" -gt 0 ]; then
+	SHELL_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '(pre-commit|\.sh)$' || true)
+	echo "$SHELL_FILES" | xargs shfmt -w
+	echo "$SHELL_FILES" | xargs shellcheck
+fi
+
+if [ "$PY_STAGED" -gt 0 ]; then
+	echo "Running black..."
+	git diff --cached --name-only --diff-filter=ACM | grep '\.py$' | xargs black
+fi

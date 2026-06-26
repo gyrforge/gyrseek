@@ -28,14 +28,20 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev yamllint
 
-      - name: Lint all Dockerfiles recursively
+      - name: Run Dockerfile Linter
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: "**/Dockerfile*"
           recursive: true
 
-      - name: Run yamllint
+      - name: Run Yaml Linter
         run: yamllint .
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+
+      - name: Run Python Syntax Check
+        run: python3 -m py_compile .github/scripts/*.py
 
       - name: Install just
         uses: extractions/setup-just@v4
@@ -56,8 +62,8 @@ jobs:
       - name: Just Test
         run: just test
 
-  test-generate-diff:
-    name: Smoke Test Generate Diff
+  test-pipeline-scripts:
+    name: Smoke Test Pipeline Scripts
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
@@ -67,10 +73,13 @@ jobs:
       - name: Test Diff Logic
         run: bash .github/scripts/test_check_diff.sh
 
+      - name: Test Sanitize Review Logic
+        run: python3 .github/scripts/test_sanitize_review.py
+
   generate-diff:
     name: Generate Diff
     runs-on: ubuntu-latest
-    needs: test-generate-diff
+    needs: test-pipeline-scripts
     if: github.event_name == 'pull_request'
     outputs:
       has_diff: ${{ steps.check-diff.outputs.has_diff }}
