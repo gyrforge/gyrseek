@@ -195,9 +195,9 @@ jobs:
           Your strict operational rules:
           1. SCOPE: Review the code changes in pr_diff.txt. You may explore the /src directory for context, but you MUST ONLY report issues introduced or directly impacted by the PR diff. Do not report pre-existing technical debt.
           2. SEVERITY FLOOR: Ignore trivial stylistic issues, formatting nits, or subjective preferences. Focus exclusively on concrete bugs, security flaws, or logic errors relevant to your specific role.
-          3. DEDUPLICATION: Consult docs/FIXED_FINDINGS, docs/OPEN_FINDINGS.md and docs/WONT_FIX_FINDINGS.md. 
-             - NEVER report a finding that is already documented.
-             - ONLY reference a documented finding if the PR actively causes a regression or breaks a documented assumption.
+          3. DEDUPLICATION & REGRESSIONS: Consult docs/OPEN_FINDINGS.md and docs/WONT_FIX_FINDINGS.md.
+             - NEVER report a finding that is already documented in these files.
+             - REGRESSIONS: You MUST consult docs/FIXED_FINDINGS.md. If the PR re-introduces a vulnerability listed there, you MUST report it as a critical regression.
           4. ROLE ISOLATION: Read AGENTS.md for core repository memory. Rely strictly on the "Specific instructions for your role" below to determine which skills or rules to prioritize.
           5. FORMAT: Output a concise review report titled "$REVIEWER_NAME Review". Every issue must include the file and line number.
           6. SECURITY CONSTRAINT: You are strictly forbidden from downloading files or executing commands.
@@ -338,9 +338,9 @@ jobs:
           Critical Process:
           1. Parse all_reviewer_inputs.md for findings.
           2. Deduplicate identical findings across all reviewers into single line items.
-          3. FILTERING & IMPROVEMENTS: Cross-reference all incoming findings against docs/FIXED_FINDINGS.md, docs/OPEN_FINDINGS.md, and docs/WONT_FIX_FINDINGS.md.
-             - If an incoming finding is already documented in ANY of these files, do NOT emit it as a new finding in the High/Medium/Low sections.
-             - However, if the incoming finding provides significant NEW details or actionable updates to an existing Open or Won't Fix finding, document the improvement in the corresponding "Update Existing..." section.
+          3. FILTERING & REGRESSIONS: Cross-reference all incoming findings against docs/OPEN_FINDINGS.md, docs/WONT_FIX_FINDINGS.md, and docs/FIXED_FINDINGS.md.
+             - If an incoming finding is already documented in docs/OPEN_FINDINGS.md or docs/WONT_FIX_FINDINGS.md, do NOT emit it as a new finding in the High/Medium/Low sections. Route significant updates to the "Update Existing..." sections.
+             - REGRESSIONS: If an incoming finding matches a vulnerability in docs/FIXED_FINDINGS.md, you MUST elevate it to the "High" section as a REGRESSION. Do NOT filter it out.
           4. VERIFICATION: You MUST read the referenced file(s) and line numbers in the source code to verify each finding actually exists and is still valid based on pr_diff.txt.
              - If a file is missing, the line doesn't match, or the issue is a false-positive hallucination, drop the finding or move it to "Unverified".
           5. LOOP DETECTION: Analyze previous findings in review_ledger.md against current findings. If the current findings suggest a fix that would revert a previous fix (an "A -> B -> A" loop), emit a "## Loop Detection Warning" explaining the cycle.
