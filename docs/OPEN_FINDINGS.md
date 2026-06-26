@@ -28,7 +28,6 @@
 | 38 | `scanning.rs` | —    | Medium   | `*` prefix allowlist warns but silently blocks everything              | ⚠️ Open  |
 | 39 | `scanning.rs` | —    | Medium   | `.env` variant blind spot (misses `.env.production`, etc.)             | ⚠️ Open  |
 | 40 | `scanning.rs` | —    | High     | `/proc/self/fd/N` relative path traversal bypasses fd resolution       | ⚠️ Open  |
-| 41 | `.github/workflows/ci.yml` | — | Low | `actions/checkout@v7` moving tag not SHA-pinned | ⚠️ Open  |
 | 42 | `scanning.rs` | —    | Low      | Test duplication across anomaly-counting tests                         | ⚠️ Open  |
 | 43 | `scanning.rs` | —    | Low      | `lexical_clean_path` reinvents stdlib path normalization               | ⚠️ Open  |
 | 44 | `scanning.rs` | —    | Low      | Test coverage regression: `unescape_trailing_backslash`               | ⚠️ Open  |
@@ -398,21 +397,6 @@ if next.starts_with('-') {
 **Failure scenario:** An `open(\"../../proc/self/fd/3/passwd\")` never matches the regex anchor. The `is_sensitive_file_read` function fails to match it since it doesn't end with `/etc/passwd`. Additionally, this general lack of path canonicalization allows symlink bypasses: an attacker creates `ln -s /etc/passwd readme.txt` then `cat readme.txt` -> strace logs the symlink path (`readme.txt`), bypassing string matches completely.
 
 **Fix direction:** Classify paths through any known symlink by resolving with `std::fs::canonicalize` before passing to `is_sensitive_file_read`.
-
----
-
-### Finding 41 — Low | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** `actions/checkout@v7` moving tag not SHA-pinned.
-
-**Root cause:** All other actions use pinned SHAs, but `actions/checkout` relies on a moving major version tag.
-
-**Failure scenario:** A compromised release to the `v7` ref propagates to all CI jobs without detection.
-
-**Fix direction:** Pin the action to a specific commit SHA.
-
-**Enhancements:**
-- **No CI Verification:** There is no CI verification step that the `actions/checkout@v7` SHA matches an expected release. The moving tag could be force-pushed at any time. Fix: Add a step that resolves and pins the SHA automatically or audit it periodically.
 
 ---
 
@@ -888,17 +872,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 83 — High | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** `graphify` runs from PR workspace, allowing arbitrary prompt injection via `.graphify.yaml` or compromised `graphify-out/` outputs.
-
-**Root cause:** `graphify update .` is executed from the PR workspace without validating the resulting `graphify-out/GRAPH_REPORT.md` against the base ref before injection into `<graph_context>`.
-
-**Failure scenario:** A malicious PR can include a custom `.graphify.yaml` or pre-compromised files in the `graphify-out/` directory, directly injecting arbitrary instructions into the LLM prompt. 
-
-**Fix direction:** Run `graphify update` strictly against the base ref codebase, or sanitize the `graphify-out` outputs to strip any XML tags/injection payloads before appending to the review context.
-
----
 
 ### Finding 84 — High | `scanning.rs` | ⚠️ Open
 

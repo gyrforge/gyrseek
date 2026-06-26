@@ -21,6 +21,29 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP7 | `docs/common_prompts.md` | `false-positive` | Raw CI prompt committed into documentation directory. | 🚫 Won't Fix |
 | FP8 | `sandbox.rs`               | `false-positive` | `process_vm_readv` is permitted in the seccomp profile.                                  | 🚫 Won't Fix |
 | FP9 | `scanning.rs`              | `false-positive` | Race condition in insufficient_baselines check ordering.                                 | 🚫 Won't Fix |
+| FP10| `.github/workflows/`       | `false-positive` | Prompt Injection / Runner Compromise exfiltrating deployment secrets.                    | 🚫 Won't Fix |
+| FP11| `.github/workflows/`       | `false-positive` | Autonomous Agent execution via `--dangerously-skip-permissions`.                         | 🚫 Won't Fix |
+| FP12| `.github/workflows/ci.yml` | `accepted-risk`  | `timeout-minutes: 10` with no partial-output trap.                                       | 🚫 Won't Fix |
+| FP13| `.github/workflows/ci.yml` | `accepted-risk`  | `max-parallel: 3` vector for CI inference budget exhaustion.                             | 🚫 Won't Fix |
+| FP14| `AGENTS.md`                | `false-positive` | `AGENTS.md` CI description omits operational details (model name, SHA hash).             | 🚫 Won't Fix |
+| FP15| `.github/workflows/ci.yml` | `false-positive` | Redundant OpenCode installation script in dependent consolidation job.                   | 🚫 Won't Fix |
+| FP16| `.github/workflows/ci.yml` | `accepted-risk`  | LLM self-censoring via tool access (`--dangerously-skip-permissions`).                   | 🚫 Won't Fix |
+| FP17| `.github/workflows/ci.yml` | `accepted-risk`  | Findings documents (`OPEN_FINDINGS`, `WONT_FIX`) are not protected from PR tampering.    | 🚫 Won't Fix |
+| FP18| `.github/workflows/ci.yml` | `accepted-risk`  | `graphify update` parsing vulnerability leading to CI runner RCE.                        | 🚫 Won't Fix |
+| FP19| `.github/workflows/ci.yml` | `false-positive` | CI job fails if `gyrseek_review.md` or other artifact files are missing.                 | 🚫 Won't Fix |
+| FP20| `.github/workflows/ci.yml` | `false-positive` | Permissions fragmentation for `checks: write` across jobs.                               | 🚫 Won't Fix |
+| FP21| `.github/workflows/`       | `accepted-risk`  | Third-party actions use moving tags instead of being SHA-pinned.                         | 🚫 Won't Fix |
+| FP22| `.github/workflows/ci.yml` | `false-positive` | Truncated consolidation prompt is undetected due to lack of file size verification.      | 🚫 Won't Fix |
+| FP23| `.github/workflows/ci.yml` | `false-positive` | "Enhanced Only" template has no section for purely-new findings.                         | 🚫 Won't Fix |
+| FP24| `.github/workflows/ci.yml` | `false-positive` | No integrity verification (SHA-256) of multi-agent review outputs.                       | 🚫 Won't Fix |
+| FP25| `.github/workflows/ci.yml` | `accepted-risk`  | Per-reviewer skill injection removed, relying on autonomous discovery.                   | 🚫 Won't Fix |
+| FP26| `.github/workflows/ci.yml` | `false-positive` | Duplicated "checkout trusted policies" bash loop violates DRY.                           | 🚫 Won't Fix |
+| FP27| `.github/workflows/ci.yml` | `false-positive` | `consolidate-reviews` lacks explicit `success()` gate.                                   | 🚫 Won't Fix |
+| FP28| `.github/workflows/ci.yml` | `false-positive` | No SHA hash pin on `graphify` dependency. Duplicate of FP18.                             | 🚫 Won't Fix |
+| FP29| `.github/workflows/ci.yml` | `false-positive` | `git fetch` race conditions across concurrent matrix pods.                               | 🚫 Won't Fix |
+| FP30| `.github/workflows/ci.yml` | `false-positive` | `rm -rf graphify-out` flagged as unnecessary noise.                                      | 🚫 Won't Fix |
+| FP31| `.github/workflows/ci.yml` | `false-positive` | `graphify-out/` architecture context flagged as generated but never consumed.            | 🚫 Won't Fix |
+| FP32| `.github/workflows/ci.yml` | `false-positive` | Latent coupling warning between cache key and temp script path.                          | 🚫 Won't Fix |
 
 ---
 
@@ -172,3 +195,256 @@ Furthermore, a malicious process can only use `process_vm_readv` for *read-only*
 **Reason for Not Fixing:** This is a false positive. While the count check (`baselines.len() < policy.baseline_count` at line 1753) occurs textually before the override logic block (line 1772), `select_effective_baselines` (called prior to this flow) already explicitly filters out `v_curr` from the baselines. Thus, the count at line 1753 correctly reflects the effective baselines, excluding any self-referencing overrides. Unit tests (e.g., `override_equal_to_current_is_excluded_from_baselines`) already confirm this behavior.
 
 *Note:* This "Won't Fix" dismissal is scoped strictly to the sequential text ordering concern. The separate issue regarding the async cache race (`scan_with_cache` concurrent cache population) is tracked as a distinct legitimate vulnerability in `OPEN_FINDINGS.md` (Finding 84).
+
+---
+
+### Finding FP10 — `false-positive` (Accepted Architectural Risk) | `.github/workflows/` | 🚫 Won't Fix
+
+**Summary:** AI Reviewer prompt injection or runner compromise could lead to secret exfiltration or supply chain attacks.
+
+**Suggested Fix:** Implement strict, hyper-isolated runner environments or avoid AI execution on PRs.
+
+**Reason for Not Fixing:** This is an explicitly accepted architectural risk based on the specific threat model of this repository. We have implemented Job Separation (untrusted AI runs with `contents: read` and passes an artifact to a trusted publisher), which protects the `GITHUB_TOKEN` from being used maliciously by the AI.
+
+However, we explicitly accept the residual risks of runner compromise (e.g., if a malicious code change escapes the AI sandbox) for the following reasons:
+1. **No Deployment Secrets:** This is a CLI tool that is not published to `crates.io` or any other external registry via CI. There are technically no long-lived deployment secrets in this repository.
+2. **Ephemeral Tokens Only:** The only secret in the environment is the dynamically generated `GITHUB_TOKEN`, which is short-lived and dies immediately after the runner finishes.
+3. **Curated Contributors:** We only accept contributions from developers we know and explicitly trust, significantly reducing the likelihood of a targeted, malicious PR.
+4. **Managed Infrastructure:** All workflows run on GitHub-hosted runners. A significant portion of the runner-isolation risk is transferred to GitHub's infrastructure.
+
+Because the blast radius is strictly limited to the repository itself during the short window of the CI run, and the risk of a malicious contributor is exceptionally low, further architectural complexity for runner isolation is deemed unnecessary.
+
+---
+
+### Finding FP11 — `false-positive` (Accepted Architectural Risk) | `.github/workflows/` | 🚫 Won't Fix
+
+**Summary:** Using `--dangerously-skip-permissions` allows the AI code reviewer to autonomously execute tools (file reads, web searches) without human oversight, creating a vector for prompt injection to weaponize the agent's capabilities.
+
+**Suggested Fix:** Require human approval (interactive mode) for all agent tool executions, or strictly sandbox network and file access.
+
+**Reason for Not Fixing:** This is an explicitly accepted architectural risk required to run an agentic review system headlessly in CI. Without `--dangerously-skip-permissions`, the agent cannot use its tools and would crash or hang when attempting to read the repository context.
+
+We accept the risk of prompt injection weaponizing the autonomous agent because the blast radius is fundamentally constrained by the CI Job Separation architecture:
+1. **Read-Only Sandbox:** The agent executes within `ci.yml`, which is strictly locked to `contents: read`. Even if the agent is tricked into using its tools maliciously, it cannot push commits, merge PRs, or modify repository configurations.
+2. **Ephemeral Environment:** The runner is destroyed immediately after execution.
+3. **No Private Data Exfiltration:** As an open-source project, the source code is public. Even if an attacker tricks the autonomous agent into reading source files and `POST`ing them to an external server via web tools, no confidential intellectual property is lost.
+4. **Prompt-Level Directives:** We have explicitly instructed the agent in its system prompt that it is "strictly forbidden from downloading files or executing commands," providing a first layer of defense against generic autonomous abuse.
+
+---
+
+### Finding FP12 — `accepted-risk` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** `timeout-minutes: 10` with no partial-output trap (ci.yml:134,232). Timeout produces zero output; no trap/signal handler to dump partial results.
+
+**Reason for Not Fixing:** The AI review output is inherently structured markdown; a partial or truncated LLM output stream is generally corrupted and impossible to parse reliably by downstream consolidation logic. Failing cleanly with zero output is preferred over injecting malformed context.
+
+---
+
+### Finding FP13 — `accepted-risk` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** `max-parallel: 3` on 5-reviewer matrix (ci.yml:62). Up to 30 concurrent minutes of AI inference per run; CI budget exhaustion vector via repeated PRs.
+
+**Reason for Not Fixing:** The matrix strategy is intentionally designed to trade inference budget for parallel speed. Throttling this via concurrency limits or serializing the reviewers would degrade developer experience and increase PR latency. Cost/budget controls should be enforced at the API key limit level, not via workflow throttling.
+
+---
+
+### Finding FP14 — `false-positive` | `AGENTS.md` | 🚫 Won't Fix
+
+**Summary:** AGENTS.md CI description omits operational details (AGENTS.md:53-54). High-level summary drops model name, install verification SHA, artifact flow. Developers cannot trace CI behavior from AGENTS.md alone.
+
+**Reason for Not Fixing:** `AGENTS.md` is an architectural memory file, not a line-by-line technical specification. Hardcoding volatile operational details (like the OpenCode version SHA or the exact model name) into the documentation creates unnecessary maintenance churn. The single source of truth for execution mechanics is `ci.yml`.
+
+---
+
+### Finding FP15 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** Redundant OpenCode installation (ci.yml:207-219). Full `curl | sha256sum | bash` chain re-runs in `post-review-comments` job despite same cache key as `code-review` job.
+
+**Reason for Not Fixing:** The static analysis tool incorrectly flags this block because it fails to account for GitHub Actions caching logic. The installation script is wrapped in an `if: steps.cache-opencode.outputs.cache-hit != 'true'` conditional. Because the consolidation job strictly depends on (`needs:`) the review job, the cache is guaranteed to be populated. The installation script is skipped at runtime, making this a true false positive.
+
+---
+
+### Finding FP16 — `accepted-risk` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** LLM self-censoring via tool access (ci.yml). With `--dangerously-skip-permissions`, the agent has file-write capabilities. Under prompt injection from malicious PR code, the agent could be instructed to read its own in-progress output file or review ledger, and modify or delete findings before they are written back. This is distinct from exfiltration (FP11); this is purely self-censoring of security reviews.
+
+**Suggested Fix:** Restrict the agent's tool access to read-only tools, or remove `--dangerously-skip-permissions` and rely purely on stateless LLM execution.
+
+**Reason for Not Fixing:** This is an explicitly accepted architectural risk. The agent requires tool access to explore the codebase effectively, and it requires write access to generate and consolidate the final markdown artifacts (e.g., `consolidated_gyrseek_review.md`).
+We accept this risk because the CI pipeline is a supplementary defense layer. Human review is still required for PRs. If an attacker successfully injects a prompt to censor findings, the output will simply be clean, which degrades gracefully to the baseline level of security (standard human review). Neutering the agent's tool access would cripple its ability to conduct deep, context-aware architectural reviews, which provides more value than the theoretical risk posed by self-censoring.
+
+---
+
+### Finding FP17 — `accepted-risk` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** `docs/OPEN_FINDINGS.md` and `docs/WONT_FIX_FINDINGS.md` are not protected from tampering during CI. The workflow checks out the PR versions of these files rather than strictly enforcing the base branch versions. 
+
+**Suggested Fix:** Add `docs/OPEN_FINDINGS.md` and `docs/WONT_FIX_FINDINGS.md` to the base-branch checkout loop in `ci.yml`.
+
+**Reason for Not Fixing:** This is an explicitly accepted architectural risk designed to prevent "Context Contradiction" bugs. If we force these files back to their base branch state, the AI reviewer receives contradictory signals when reviewing a PR that legitimately fixes a vulnerability (the diff shows the bug moved to `FIXED_FINDINGS.md`, but the file on disk still says it's `OPEN`). 
+
+We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a backdoor because the AI reviewer is explicitly given the PR diff. If an attacker maliciously deletes a security policy from the documentation, the AI reviewer (and human reviewers) will see that deletion directly in the code diff and can flag it. The only files that strictly require base-branch enforcement are the immutable system instructions (`AGENTS.md` and `.agents/skills/`).
+
+---
+
+### Finding FP18 — `accepted-risk` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** `graphify update` executes source-parsing code from the PR branch without container isolation or cryptographic dependency pinning. A crafted source file exploiting a `graphify` parsing bug, or a compromised PyPI release/sub-dependency, could achieve Remote Code Execution (RCE) on the CI runner, allowing an attacker to forge the AI's review output.
+
+**Suggested Fix:** Isolate `graphify` execution to a locked-down Docker container, or pin the dependency via exact commit hash/SHA256 checksums rather than just PyPI version.
+
+**Reason for Not Fixing:** This is an explicitly accepted architectural risk. Exploiting a niche parser vulnerability just to forge an AI review is a highly complex attack vector with very low impact. As an open-source project, the repository is public and the CI workflow executes with strictly read-only permissions (`contents: read`) under our Job Separation architecture. There are no deployment secrets, write-tokens, or private data in the runner environment to exfiltrate. The absolute worst-case scenario is that the attacker successfully forges a "clean" review for their malicious PR, which degrades the security posture to exactly that of a standard human review without AI assistance. Because the impact is negligible, the operational complexity of containerizing or cryptographically pinning the `graphify` execution is not justified.
+
+---
+
+### Finding FP19 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The `upload-artifact` step in `ci.yml` uses `if-no-files-found: error`, causing the entire `code-review` job to fail if the AI reviewer does not produce an output file. 
+
+**Suggested Fix:** Change the setting back to `if-no-files-found: ignore` to prevent CI flakiness when the LLM API times out.
+
+**Reason for Not Fixing:** This is an intentional security design. Setting it to `ignore` creates a dangerous "silent failure" where an AI crash or API timeout results in a green CI build with a blank review, tricking developers into thinking the code was successfully audited and found to be safe. We intentionally enforce `if-no-files-found: error` so that if the AI review pipeline fails to generate an output, it fails loudly and blocks the PR. **Do not revert this to `ignore`.**
+
+---
+
+### Finding FP20 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** Permissions fragmentation for `checks: write`. The `checks: write` permission is not granted at the top-level of the workflow; it is only granted explicitly to the `cargo-audit` job. This prevents other jobs (like `rust-checks` or `code-review`) from posting inline check annotations.
+
+**Suggested Fix:** Move `checks: write` to the top-level `permissions` block so all jobs inherit the ability to write check annotations.
+
+**Reason for Not Fixing:** This is an intentional implementation of the Principle of Least Privilege and a major security feature, not a bug. If `checks: write` were applied globally, the `code-review` job (which executes untrusted PR code and AI models) would inherit it. An attacker achieving RCE during the review job could use that permission to forge fake "All Checks Passed!" annotations to deceive human reviewers. By intentionally fragmenting permissions and keeping the top-level default to strictly `read-only`, the pipeline successfully limits the blast radius of any potential compromise.
+
+---
+
+### Finding FP21 — `accepted-risk` | `.github/workflows/` | 🚫 Won't Fix
+
+**Summary:** Third-party actions use mutable moving tags (e.g., `@v4`) instead of being cryptographically SHA-pinned.
+
+**Suggested Fix:** Pin all third-party actions to specific commit SHAs to prevent supply chain compromise.
+
+**Reason for Not Fixing:** This is an explicitly accepted risk in favor of Developer Experience (DX). Pinning to SHAs makes workflow files significantly harder to read and requires heavy automation (like Dependabot or Renovate) just to keep actions up to date. Furthermore, the actual impact of a compromised third-party action in this repository is very low. The primary CI jobs run with strictly `contents: read` permissions and no secrets. If an attacker gains RCE via a compromised action in `ci.yml`, the absolute worst-case scenario is that they bypass the AI code review (a risk we have already accepted in Finding FP18). The operational overhead of managing SHAs heavily outweighs the theoretical risk to the read-only CI pipeline.
+
+---
+
+### Finding FP22 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The `prompt.txt` heredoc has no file size or checksum verification before execution, theoretically allowing a silently truncated prompt to drop critical security constraints.
+
+**Suggested Fix:** Add a `test -s prompt.txt && wc -c prompt.txt` guard before running the AI to mathematically verify the prompt was written entirely.
+
+**Reason for Not Fixing:** This is a false positive because it ignores how `bash` handles write failures in GitHub Actions environments. GitHub Actions `run` steps execute with `set -e` by default. If the `cat` command fails to write the full heredoc due to a `disk-full` (ENOSPC) or `OOM` error, the standard POSIX utility returns a non-zero exit code. `set -e` instantly catches this failure and aborts the entire job before the `opencode` execution line can ever be reached. Adding byte-counting logic is brittle (breaking if a single typo in the prompt is fixed) and mathematically unnecessary due to the fail-closed nature of `set -e`.
+
+---
+
+### Finding FP23 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The consolidation job's markdown template only has explicit sections for "Enhanced Open Findings" and "Enhanced Won't Fix Findings," supposedly leaving the AI with nowhere to record purely new vulnerabilities.
+
+**Suggested Fix:** Add a specific "New Open Findings" section to the consolidation output template.
+
+**Reason for Not Fixing:** This is a fundamental misunderstanding of the template structure. The top sections of the template (`## High`, `## Medium`, and `## Low`) are specifically designed to capture net-new findings. The "Enhanced" sections at the bottom exist explicitly to filter out duplicates of known issues, keeping the PR clean. If a completely new vulnerability is found, the AI correctly places it directly under the appropriate severity header at the top of the report. The template is logically complete as written.
+
+---
+
+### Finding FP24 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The consolidation job downloads review artifacts without cryptographic checksum verification (e.g., SHA-256 sidecars), allegedly allowing cross-run injection or compromised-agent spoofing.
+
+**Suggested Fix:** Generate a SHA-256 sidecar file for each artifact at upload time, and verify the hash before consuming the artifact in the consolidation job.
+
+**Reason for Not Fixing:** This finding recommends "Cryptographic Theater." First, cross-run artifact injection is natively impossible because `actions/download-artifact@v4` strictly isolates storage to the current `github.run_id`. Second, while a compromised agent *could* theoretically spoof an artifact (an accepted risk documented in FP18), requiring a SHA-256 sidecar provides zero actual security. If an attacker has RCE to forge the artifact, they can simply forge the accompanying SHA-256 sidecar as well. The downstream consolidation job would successfully verify the forged checksum against the forged artifact, providing a dangerous false sense of security.
+
+---
+
+### Finding FP25 — `accepted-risk` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The static Python prompt builder (`build_prompt.py`), which forcefully injected specific `.agents/skills/` file contents directly into the prompt string for each reviewer, was removed. The new bash `cat` heredoc in `ci.yml` relies on the AI to autonomously discover and read the relevant skill files, potentially regressing review depth if the AI fails to fetch them.
+
+**Suggested Fix:** Restore the static skill-file injection logic into the `ci.yml` bash script to mathematically force the skill text into the AI's context window.
+
+**Reason for Not Fixing:** The removal of `build_prompt.py` was an intentional architectural shift to reduce complexity and mitigate local prompt injection vulnerabilities. We explicitly choose to rely on the agent's autonomous tool-use capabilities (`view_file`) to fetch its own context rather than forcing a complex, static pre-processing step. While this introduces a risk of the AI "forgetting" or failing to fetch the skills, the trade-off for a vastly simpler, more secure CI orchestration script is accepted. *(Note: The stale `<skill>` XML references in the prompt files themselves were fixed to explicitly command the AI to use its tools).*
+
+---
+
+### Finding FP26 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The bash loop responsible for explicitly checking out trusted `AGENTS.md` and `.agents/skills/` policies from the base branch is duplicated in both the `code-review` and `consolidate-reviews` jobs.
+
+**Suggested Fix:** Extract the duplicated bash logic into a reusable GitHub Action or a centralized shell script (e.g., `.github/scripts/checkout-trusted-policies.sh`) to adhere to DRY (Don't Repeat Yourself) principles.
+
+**Reason for Not Fixing:** This is a fundamental conflict between standard software engineering (DRY) and pipeline security. Moving this security-critical checkout loop into an external shell script or local composite action creates a massive vulnerability. During a `pull_request` event, the GitHub runner checks out the untrusted PR workspace. If `ci.yml` executes `./.github/scripts/checkout-trusted-policies.sh`, it executes the *attacker's* version of that script, allowing them to trivially bypass the protection. Because the `ci.yml` file itself is the **only** file natively guaranteed to be loaded from the trusted base branch on PR events, this security boundary *must* be hardcoded directly into the workflow file, even if it requires duplication across isolated VM jobs.
+
+---
+
+### Finding FP27 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The `consolidate-reviews` job lacks an explicit `if: needs.code-review.result == 'success'` gate, allegedly allowing it to execute and produce a silent "No reviewer outputs" success even if the upstream `code-review` job fails.
+
+**Suggested Fix:** Explicitly add `if: needs.code-review.result == 'success'` to the `consolidate-reviews` job.
+
+**Reason for Not Fixing:** This finding hallucinates non-existent behavior and is factually incorrect regarding the GitHub Actions engine. By default, the `needs:` array implies a strict dependency on success. If the upstream `code-review` job fails or is skipped for any reason, the downstream `consolidate-reviews` job is automatically and instantly skipped by the Actions engine. The only way it would execute on failure is if an explicit `always()` or `failure()` condition were present, which it is not. The suggested fix is entirely redundant.
+
+---
+
+### Finding FP28 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** No SHA hash pin on `graphify` dependency.
+
+**Reason for Not Fixing:** This finding is a duplicate of **FP18**. The scanner isolated the supply-chain poisoning aspect of FP18 into its own separate finding, despite FP18 already explicitly identifying and accepting the exact same risk ("without cryptographic dependency pinning", "compromised PyPI release") and mitigation strategy.
+
+---
+
+### Finding FP29 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The static analysis scanner claims that because multiple code-review matrix pods run `git fetch origin "$BASE_REF"` concurrently, they will cause a race condition and corrupt the Git ref database.
+
+**Reason for Not Fixing:** This is fundamentally incorrect due to a hallucination regarding GitHub Actions architecture. GitHub Actions matrix jobs do not run in containers sharing a single filesystem; they spawn entirely isolated Virtual Machines (`ubuntu-latest`). Because each matrix pod has its own dedicated hard drive and its own local `.git/` database, it is physically impossible for them to collide or corrupt each other's git objects. No fix is required for the race condition (though the `|| true` masking the fetch failure was resolved separately in Finding 97).
+
+---
+
+### Finding FP30 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner flagged the `rm -rf graphify-out` pre-generation step as unnecessary noise, incorrectly assuming the directory is entirely git-ignored and therefore impossible to be pre-compromised in a PR checkout.
+
+**Reason for Not Fixing:** The `.gitignore` explicitly whitelists certain outputs (`!graphify-out/GRAPH_REPORT.md`, `!graphify-out/graph.json`). Because these files are tracked, an attacker can submit a PR containing a pre-compromised `GRAPH_REPORT.md` laden with prompt-injection instructions. If the `rm -rf` step is removed, the `graphify update` tool might append to or fail to cleanly overwrite the attacker's file, resulting in the AI consuming the malicious instructions. The `rm -rf` step is a critical defense-in-depth measure to guarantee a clean workspace.
+
+---
+
+### Finding FP31 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner flagged the `graphify update .` step as dead output, claiming that because `graphify-out/` or `GRAPH_REPORT.md` are not explicitly listed in the workflow's prompt file references, the AI never consumes the generated architecture context.
+
+**Reason for Not Fixing:** This is a false positive caused by the scanner failing to trace transitive prompt instructions. Both the `code-review` and `consolidate-reviews` jobs explicitly instruct the AI to read `AGENTS.md`. `AGENTS.md` contains an extensive, dedicated section outlining the precise rules and commands for the AI to interact with the `graphify-out/` directory and `GRAPH_REPORT.md`. Because the AI parses `AGENTS.md`, it is fully aware of and capable of consuming the generated architectural context. Explicitly duplicating the graphify references in the workflow YAML prompts is unnecessary boilerplate.
+
+---
+
+### Finding FP32 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner noticed that the OpenCode installation script path was changed from `/tmp` to `${{ runner.temp }}` (in Finding 89), but the cache key for the OpenCode binary was not changed, resulting in a latent coupling warning.
+
+**Reason for Not Fixing:** This is completely benign. The cache action targets the final installed binary directory (`~/.opencode`), not the temporary download script location (`${{ runner.temp }}`). Therefore, the cache key (`opencode-${{ env.OPENCODE_VERSION }}-...`) is functionally independent of where the installation script is staged. There are no stale cache misses or collisions possible under the current architecture, rendering the scanner's hypothetical warning unactionable.
+
+---
+
+### Finding FP33 — `false-positive` | `docs/FIXED_FINDINGS.md` | 🚫 Won't Fix
+
+**Summary:** The scanner flagged the fix description for Finding 92 as "architecturally incorrect" because it describes sanitizing `graphify-out` artifacts via Python XML-tag replacements before appending to `prompt.txt`. This references a stale architecture, as graphify output is no longer injected into `prompt.txt`.
+
+**Reason for Not Fixing:** `FIXED_FINDINGS.md` is an immutable, point-in-time audit ledger. It correctly describes exactly what the fix was *at the time Finding 92 was resolved*. Rewriting historical audit logs to reflect future architectural changes defeats the purpose of an audit trail.
+
+---
+
+### Finding FP34 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner warned that `fetch-err.log` (created during the `git fetch --unshallow` step) is never cleaned up via `rm -f`, meaning a stale log could produce false warnings on subsequent operations.
+
+**Reason for Not Fixing:** This is an overly pedantic warning that ignores the execution model. The `fetch-err.log` file is written once, read exactly once on the immediately following line, and never referenced again within the step. Furthermore, GitHub Actions runners execute in ephemeral environments that are destroyed after the job completes, making "stale log interference" impossible.
+
+---
+
+### Finding FP35 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner complained that there is no dedicated CI or script-level test to validate that the multi-step heredoc prompts (`prompt.txt`) are well-formed (i.e., verifying bash variable expansion of `$REVIEWER_NAME`, missing `$`, etc.).
+
+**Reason for Not Fixing:** This violates the "Ponytail" principle (YAGNI). Writing an entire parallel testing apparatus just to `grep` a bash script to ensure string interpolation didn't fail is textbook over-engineering. We rely on standard bash `cat << 'EOF'` semantics. If a variable fails to expand, the generated PR review comment will immediately exhibit obvious formatting errors, serving as its own integration test.
