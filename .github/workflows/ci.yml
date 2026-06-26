@@ -56,9 +56,21 @@ jobs:
       - name: Just Test
         run: just test
 
+  test-generate-diff:
+    name: Smoke Test Generate Diff
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout Script
+        uses: actions/checkout@v7
+
+      - name: Test Diff Logic
+        run: bash .github/scripts/test_check_diff.sh
+
   generate-diff:
     name: Generate Diff
     runs-on: ubuntu-latest
+    needs: test-generate-diff
     if: github.event_name == 'pull_request'
     outputs:
       has_diff: ${{ steps.check-diff.outputs.has_diff }}
@@ -69,37 +81,22 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Generate PR Code Diff
+        id: check-diff
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch --unshallow 2>fetch-err.log || echo "fetch degraded"
-          if [ -s fetch-err.log ]; then
-            echo "::warning::Git fetch produced errors/warnings:"
-            cat fetch-err.log
-          fi
-          if [ "$EVENT_NAME" = "pull_request" ]; then
-            # Use accurate method to pull up-to-date diff content
-            git diff "$BASE_SHA"...HEAD > pr_diff.txt 2>/dev/null || echo "(no diff)" > pr_diff.txt
-          else
-            git diff HEAD~1...HEAD > pr_diff.txt 2>/dev/null || echo "(no diff)" > pr_diff.txt
-          fi
-
-      - name: Check for meaningful diff
-        id: check-diff
-        run: |
-          if [ ! -s pr_diff.txt ] || [ "$(cat pr_diff.txt)" = "(no diff)" ]; then
-            echo "has_diff=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_diff=true" >> "$GITHUB_OUTPUT"
-          fi
+          HAS_DIFF=$(bash .github/scripts/check_diff.sh "$BASE_SHA" "$EVENT_NAME")
+          echo "has_diff=$HAS_DIFF" >> "$GITHUB_OUTPUT"
 
       - name: Upload PR Diff Artifact
         if: steps.check-diff.outputs.has_diff == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: pr-diff
-          path: pr_diff.txt
+          path: |
+            pr_diff.txt
+            pr_diff.sha256
           if-no-files-found: error
 
   code-review:
@@ -161,6 +158,10 @@ jobs:
         with:
           name: pr-diff
 
+      - name: Verify PR Diff Integrity
+        run: |
+          sha256sum -c pr_diff.sha256 || { echo "::error::PR diff integrity check failed"; exit 1; }
+
       - name: Review Code as ${{ matrix.reviewer.name }}
         timeout-minutes: 10
         env:
@@ -168,7 +169,6 @@ jobs:
           REVIEW_OUTPUT: ${{ matrix.reviewer.output }}
           REVIEWER_NAME: ${{ matrix.reviewer.name }}
           BASE_REF: ${{ github.base_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           if [ ! -f "$REVIEW_PROMPT_FILE" ]; then
@@ -276,6 +276,10 @@ jobs:
         with:
           name: pr-diff
 
+      - name: Verify PR Diff Integrity
+        run: |
+          sha256sum -c pr_diff.sha256 || { echo "::error::PR diff integrity check failed"; exit 1; }
+
       - name: Consolidate Reviews with OpenCode
         timeout-minutes: 10
         shell: bash
@@ -302,9 +306,8 @@ jobs:
 
           file_count=$(find reviews -name "*.md" -type f | wc -l)
           if [ "$file_count" -eq 0 ]; then
-            echo "# Consolidated Review" > consolidated_gyrseek_review.md
-            echo "No reviewer outputs were generated for this PR." >> consolidated_gyrseek_review.md
-            exit 0
+            echo "::error::No reviewer outputs were found. Failing closed to prevent unreviewed merges."
+            exit 1
           fi
 
           # Attempt to retrieve review ledger for loop detection
