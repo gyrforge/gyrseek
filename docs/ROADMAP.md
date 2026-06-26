@@ -42,6 +42,7 @@
 
 ### Hardening & Infrastructure
 
+- [x] **CI Pipeline Privilege Separation** — Split the CI code review pipeline into an untrusted generator phase (read-only) and a trusted publisher phase (`workflow_run`) to establish a hard boundary against prompt injection and supply chain attacks.
 - Prebuilt scanner images as the default path — unblocks read-only rootfs, tighter capability drops, and stronger seccomp/apparmor defaults (see [`DOCKER_SECURITY.md`](DOCKER_SECURITY.md)).
 - Improve resilience to strace output variations.
 - Optional egress mediation/proxy mode for runtime scans (after no-execution-first stable).

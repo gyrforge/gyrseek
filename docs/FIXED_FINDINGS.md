@@ -54,6 +54,9 @@
 | 102 | `.github/workflows/post_review.yml` | Medium | Missing `--safe` flag on `cmark` fails to sanitize HTML/XSS | Added `--safe` flag to omit raw HTML and dangerous URLs | ✅ Fixed |
 | 103 | `.github/workflows/ci.yml` | Low | Prompt asymmetry in consolidation template | Added explicit usage instructions for severity sections | ✅ Fixed |
 | 104 | `.github/workflows/ci.yml` | Low | Stale XML tag references in prompt caused AI hallucinations | Replaced `<open_findings>` with explicit file paths | ✅ Fixed |
+| 105 | `.github/workflows/ci.yml` | Low | Additional stale XML tag references in consolidation prompt | Replaced `<untrusted_inputs>` and `<previous_review>` with file paths | ✅ Fixed |
+| 106 | `.github/workflows/ci.yml` | High | Blind stdout fallback copied errors/injections to official review artifact | Removed stdout fallback and forced explicit file output | ✅ Fixed |
+| 107 | `docs/ARCHITECTURE.md` | Low | CI Pipeline privilege separation boundary not formally documented | Added `CI/CD Pipeline Architecture` section | ✅ Fixed |
 
 ---
 ## Cross-Finding Chains (Architectural Context)
@@ -766,3 +769,39 @@ Consider adding a process- or file-system marker that persists across the sessio
 **Failure scenario:** The AI was explicitly instructed to filter duplicates using data blocks (tags) that no longer existed in its context window. This could cause the AI to either hallucinate the contents of those tags, or fail to perform deduplication entirely, leading to redundant issue reports.
 
 **Fix:** Updated the prompt to correctly point the AI to the actual file paths (`docs/WONT_FIX_FINDINGS.md` and `docs/OPEN_FINDINGS.md`), which matches the tool-usage instructions provided later in the prompt.
+
+---
+
+### Finding 105 — Low | `.github/workflows/ci.yml` | ✅ Fixed
+
+**Summary:** The scanner caught a regression of Finding 104. The consolidation prompt still contained stale XML references (`<untrusted_inputs>` and `<previous_review>`) left over from the same architectural refactor. 
+
+**Root cause:** Incomplete migration. The prompt was giving contradictory instructions: telling the AI to read the files `all_reviewer_inputs.md` and `review_ledger.md` using its tools, but simultaneously telling it to parse the non-existent XML tags.
+
+**Failure scenario:** Similar to Finding 104, the AI could suffer hallucinations or fail to properly correlate the input files with the parsing instructions because the expected tags were missing from the context.
+
+**Fix:** Replaced `<untrusted_inputs>` and `<previous_review>` with explicit references to `all_reviewer_inputs.md` and `review_ledger.md` to align with the tool-based architecture.
+
+---
+
+### Finding 106 — High | `.github/workflows/ci.yml` | ✅ Fixed
+
+**Summary:** Both the `code-review` and `consolidate-reviews` jobs instructed the AI to "Output the raw markdown directly", meaning the AI printed to standard output. A fallback script then blindly copied this standard output (`opencode_out.txt`) into the official review artifact.
+
+**Root cause:** Defensive scripting run amok. The fallback `cp opencode_out.txt "$REVIEW_OUTPUT"` was likely added to catch cases where the AI failed to write a file, without realizing the security and quality implications of promoting raw console output.
+
+**Failure scenario:** If the AI tool crashed (emitting a Python stack trace), printed a system warning, or was compromised by an attacker into printing garbage, all of that raw console output would be silently copied into the official code review artifact. This bypassed all validation, meaning a crash log or an attacker payload would be published directly to the Pull Request.
+
+**Fix:** Updated the prompt to explicitly instruct the AI: `"Save the final markdown output directly to the file '$REVIEW_OUTPUT'."` Deleted the blind fallback `cp` command entirely. If the AI fails to write the file, the pipeline will now correctly fail-closed at the validation step, rather than publishing the error log.
+
+---
+
+### Finding 107 — Low | `docs/ARCHITECTURE.md` | ✅ Fixed
+
+**Summary:** The scanner observed that while the recent architectural split of the CI pipeline (separating the untrusted code-review generation from the trusted artifact publishing via `workflow_run`) was implemented, it was missing from the formal `ARCHITECTURE.md` and `ROADMAP.md` documents. 
+
+**Root cause:** Documentation debt following a major security refactor.
+
+**Failure scenario:** Future contributors might not understand the rigid security boundary between `ci.yml` and `post_review.yml`, risking regressions where trusted operations (like posting comments) are accidentally moved back into the untrusted PR execution context.
+
+**Fix:** Added a dedicated `CI/CD Pipeline Architecture` section to `ARCHITECTURE.md` formalizing the trusted/untrusted boundary, the artifact handoff, and the `cmark --safe` sanitization step. Checked off the corresponding milestone in `ROADMAP.md`.

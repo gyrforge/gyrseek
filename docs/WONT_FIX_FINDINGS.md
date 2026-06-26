@@ -424,3 +424,27 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 **Summary:** The scanner noticed that the OpenCode installation script path was changed from `/tmp` to `${{ runner.temp }}` (in Finding 89), but the cache key for the OpenCode binary was not changed, resulting in a latent coupling warning.
 
 **Reason for Not Fixing:** This is completely benign. The cache action targets the final installed binary directory (`~/.opencode`), not the temporary download script location (`${{ runner.temp }}`). Therefore, the cache key (`opencode-${{ env.OPENCODE_VERSION }}-...`) is functionally independent of where the installation script is staged. There are no stale cache misses or collisions possible under the current architecture, rendering the scanner's hypothetical warning unactionable.
+
+---
+
+### Finding FP33 — `false-positive` | `docs/FIXED_FINDINGS.md` | 🚫 Won't Fix
+
+**Summary:** The scanner flagged the fix description for Finding 92 as "architecturally incorrect" because it describes sanitizing `graphify-out` artifacts via Python XML-tag replacements before appending to `prompt.txt`. This references a stale architecture, as graphify output is no longer injected into `prompt.txt`.
+
+**Reason for Not Fixing:** `FIXED_FINDINGS.md` is an immutable, point-in-time audit ledger. It correctly describes exactly what the fix was *at the time Finding 92 was resolved*. Rewriting historical audit logs to reflect future architectural changes defeats the purpose of an audit trail.
+
+---
+
+### Finding FP34 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner warned that `fetch-err.log` (created during the `git fetch --unshallow` step) is never cleaned up via `rm -f`, meaning a stale log could produce false warnings on subsequent operations.
+
+**Reason for Not Fixing:** This is an overly pedantic warning that ignores the execution model. The `fetch-err.log` file is written once, read exactly once on the immediately following line, and never referenced again within the step. Furthermore, GitHub Actions runners execute in ephemeral environments that are destroyed after the job completes, making "stale log interference" impossible.
+
+---
+
+### Finding FP35 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner complained that there is no dedicated CI or script-level test to validate that the multi-step heredoc prompts (`prompt.txt`) are well-formed (i.e., verifying bash variable expansion of `$REVIEWER_NAME`, missing `$`, etc.).
+
+**Reason for Not Fixing:** This violates the "Ponytail" principle (YAGNI). Writing an entire parallel testing apparatus just to `grep` a bash script to ensure string interpolation didn't fail is textbook over-engineering. We rely on standard bash `cat << 'EOF'` semantics. If a variable fails to expand, the generated PR review comment will immediately exhibit obvious formatting errors, serving as its own integration test.
