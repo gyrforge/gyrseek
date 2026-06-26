@@ -1114,3 +1114,10 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 **Summary:** `sanitize_review.py` properly handled 0-byte input files by writing out a 0-byte output file (triggering the downstream bash guard), but there was no explicit unit test verifying this behavior. A future refactor could introduce a crash on empty input and go unnoticed.
 **Fix:** Added `test_sanitize_empty_input` to explicitly assert that processing a 0-byte file produces a 0-byte output file without raising an exception.
+
+### Finding 165: Regression of panic-unsafe try/finally cleanup in test_cap_ledger.py
+**Severity:** Low
+**Component:** `.github/scripts/test_cap_ledger.py`
+
+**Summary:** The newly added `test_cap_ledger.py` reverted to a panic-unsafe `try/finally + os.remove` pattern for temp files. If `os.remove` failed (e.g. `FileNotFoundError`), it would crash the test suite. This was the exact bug fixed in Finding 136 for `test_sanitize_review.py`.
+**Fix:** Migrated `test_cap_ledger.py` to use the established `_tmpfiles()` context manager pattern that safely wraps cleanup in `contextlib.suppress(FileNotFoundError)`.

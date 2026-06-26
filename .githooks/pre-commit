@@ -40,9 +40,14 @@ if [ "$SHELL_STAGED" -gt 0 ]; then
 	SHELL_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '(pre-commit|\.sh)$' || true)
 	echo "$SHELL_FILES" | xargs shfmt -w
 	echo "$SHELL_FILES" | xargs shellcheck
+	echo "Running shell tests..."
+	bash .github/scripts/test_check_diff.sh
 fi
 
 if [ "$PY_STAGED" -gt 0 ]; then
 	echo "Running black..."
 	git diff --cached --name-only --diff-filter=ACM | grep '\.py$' | xargs black
+	echo "Running Python tests..."
+	python3 .github/scripts/test_sanitize_review.py
+	python3 .github/scripts/test_cap_ledger.py
 fi
