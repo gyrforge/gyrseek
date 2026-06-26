@@ -153,16 +153,16 @@ jobs:
           fi
 
           # Generate architectural context from the PR branch, ensuring no pre-compromised files or configs
-          rm -rf graphify-out .graphify.yaml graphify.toml .graphify.json || true
+          rm -rf graphify-out .graphify.yaml graphify.toml .graphify.json
           graphify update . >/dev/null 2>&1 || true
 
           # Check out trusted policies from the base branch to prevent policy tampering.
           # We loop individually and rm -rf first to ensure atomic failures don't fail-open,
           # and we exclude docs/ so the AI sees the PR's true finding updates.
           git fetch origin "$BASE_REF" --depth=1
-          for target in .agents/skills/ AGENTS.md; do
+          for target in .agents/skills/ AGENTS.md .github/review-prompts/; do
             rm -rf "$target"
-            git checkout origin/"$BASE_REF" -- "$target" 2>/dev/null
+            git checkout origin/"$BASE_REF" -- "$target"
           done
 
           cat << EOF > prompt.txt
@@ -263,16 +263,16 @@ jobs:
           set -euo pipefail
 
           # Generate architectural context from the PR branch, ensuring no pre-compromised files or configs
-          rm -rf graphify-out .graphify.yaml graphify.toml .graphify.json || true
+          rm -rf graphify-out .graphify.yaml graphify.toml .graphify.json
           graphify update . >/dev/null 2>&1 || true
 
           # Check out trusted policies from the base branch to prevent policy tampering.
           # We loop individually and rm -rf first to ensure atomic failures don't fail-open,
           # and we exclude docs/ so the AI sees the PR's true finding updates.
           git fetch origin "$BASE_REF" --depth=1
-          for target in .agents/skills/ AGENTS.md; do
+          for target in .agents/skills/ AGENTS.md .github/review-prompts/; do
             rm -rf "$target"
-            git checkout origin/"$BASE_REF" -- "$target" 2>/dev/null
+            git checkout origin/"$BASE_REF" -- "$target"
           done
 
           file_count=$(find reviews -name "*.md" -type f | wc -l)
@@ -321,7 +321,7 @@ jobs:
           3. If you cannot verify a finding (file missing, line doesn't match, issue doesn't exist), move it to "Unverified".
           4. Only High/Medium/Low sections contain verified findings.
           5. Deduplicate identical findings across reviewers into one line item.
-          6. FILTERING AND DEDUPLICATION: Carefully cross-reference all incoming reviewer findings against the full lists in <wont_fix_findings> and <open_findings>.
+          6. FILTERING AND DEDUPLICATION: Carefully cross-reference all incoming reviewer findings against the full lists in docs/WONT_FIX_FINDINGS.md and docs/OPEN_FINDINGS.md.
              - If an incoming finding is already documented in EITHER of these files (even if described slightly differently), you MUST remove it entirely from the High/Medium/Low sections.
              - Do NOT emit duplicate findings. Enforce the existing findings in the ledger as the single source of truth.
              - If the duplicate finding provides significant new context or enhancement to an existing finding, document that enhancement in the "New or Enhanced Open Findings" or "New or Enhanced Won't Fix Findings" section instead of treating it as a new issue.
@@ -339,22 +339,25 @@ jobs:
           # Consolidated Review
 
           ## High
+          (List all NET-NEW verified findings with High severity here)
           - [issue] (file, line/function).
 
           ## Medium
+          (List all NET-NEW verified findings with Medium severity here)
           - [issue] (file, line/function).
 
           ## Low
+          (List all NET-NEW verified findings with Low severity here)
           - [issue] (file, line/function).
 
           ## Unverified
           - [issue] — could not verify in codebase; needs manual check.
 
           ## Enhanced Open Findings
-          (If the review surfaces issues as incoming finding that duplicates an existing OPEN finding but provides significant new details, list the enhancements here referencing the original finding number.)
+          (If the review surfaces issues as incoming finding that duplicates an existing OPEN finding in docs/OPEN_FINDINGS.md but provides significant new details, list the enhancements here referencing the original finding number.)
 
           ## Enhanced Won't Fix Findings
-          (If the review surfaces issues as incoming finding that duplicates an existing WON'T FIX finding but provides new details, list the enhancements here referencing the original finding number.)
+          (If the review surfaces issues as incoming finding that duplicates an existing WON'T FIX finding in docs/WONT_FIX_FINDINGS.md but provides new details, list the enhancements here referencing the original finding number.)
 
           ## Loop Detection Warning
           (Only output this section if a cyclical fix-revert loop is detected. Explain the competing constraints.)
@@ -662,4 +665,4 @@ jobs:
       - name: Audit dependencies
         uses: rustsec/audit-check@v2.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ github.token }}

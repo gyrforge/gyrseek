@@ -81,7 +81,7 @@ jobs:
           # Sanitize: securely strip dangerous links and raw HTML using cmark
           sanitized="${source_file}.sanitized"
           sanitized_file="$sanitized"
-          cmark --to commonmark "$source_file" > "$sanitized"
+          cmark --safe --to commonmark "$source_file" > "$sanitized"
           gh pr comment "$PR_NUMBER" \
             --body-file "$sanitized" \
             --repo "$REPO_NAME"

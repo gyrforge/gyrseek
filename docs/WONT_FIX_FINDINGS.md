@@ -42,6 +42,8 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | FP28| `.github/workflows/ci.yml` | `false-positive` | No SHA hash pin on `graphify` dependency. Duplicate of FP18.                             | 🚫 Won't Fix |
 | FP29| `.github/workflows/ci.yml` | `false-positive` | `git fetch` race conditions across concurrent matrix pods.                               | 🚫 Won't Fix |
 | FP30| `.github/workflows/ci.yml` | `false-positive` | `rm -rf graphify-out` flagged as unnecessary noise.                                      | 🚫 Won't Fix |
+| FP31| `.github/workflows/ci.yml` | `false-positive` | `graphify-out/` architecture context flagged as generated but never consumed.            | 🚫 Won't Fix |
+| FP32| `.github/workflows/ci.yml` | `false-positive` | Latent coupling warning between cache key and temp script path.                          | 🚫 Won't Fix |
 
 ---
 
@@ -406,3 +408,19 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 **Summary:** The scanner flagged the `rm -rf graphify-out` pre-generation step as unnecessary noise, incorrectly assuming the directory is entirely git-ignored and therefore impossible to be pre-compromised in a PR checkout.
 
 **Reason for Not Fixing:** The `.gitignore` explicitly whitelists certain outputs (`!graphify-out/GRAPH_REPORT.md`, `!graphify-out/graph.json`). Because these files are tracked, an attacker can submit a PR containing a pre-compromised `GRAPH_REPORT.md` laden with prompt-injection instructions. If the `rm -rf` step is removed, the `graphify update` tool might append to or fail to cleanly overwrite the attacker's file, resulting in the AI consuming the malicious instructions. The `rm -rf` step is a critical defense-in-depth measure to guarantee a clean workspace.
+
+---
+
+### Finding FP31 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner flagged the `graphify update .` step as dead output, claiming that because `graphify-out/` or `GRAPH_REPORT.md` are not explicitly listed in the workflow's prompt file references, the AI never consumes the generated architecture context.
+
+**Reason for Not Fixing:** This is a false positive caused by the scanner failing to trace transitive prompt instructions. Both the `code-review` and `consolidate-reviews` jobs explicitly instruct the AI to read `AGENTS.md`. `AGENTS.md` contains an extensive, dedicated section outlining the precise rules and commands for the AI to interact with the `graphify-out/` directory and `GRAPH_REPORT.md`. Because the AI parses `AGENTS.md`, it is fully aware of and capable of consuming the generated architectural context. Explicitly duplicating the graphify references in the workflow YAML prompts is unnecessary boilerplate.
+
+---
+
+### Finding FP32 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+
+**Summary:** The scanner noticed that the OpenCode installation script path was changed from `/tmp` to `${{ runner.temp }}` (in Finding 89), but the cache key for the OpenCode binary was not changed, resulting in a latent coupling warning.
+
+**Reason for Not Fixing:** This is completely benign. The cache action targets the final installed binary directory (`~/.opencode`), not the temporary download script location (`${{ runner.temp }}`). Therefore, the cache key (`opencode-${{ env.OPENCODE_VERSION }}-...`) is functionally independent of where the installation script is staged. There are no stale cache misses or collisions possible under the current architecture, rendering the scanner's hypothetical warning unactionable.
