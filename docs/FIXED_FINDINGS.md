@@ -105,7 +105,7 @@
 | 162 | `.github/scripts/post_comment.sh` | High | `GH_TOKEN` exposed to `cmark` C binary when processing untrusted input | Added `env -u GH_TOKEN` before `cmark` execution | ✅ Fixed |
 | 163 | `.github/scripts/sanitize_review.py` | Low | Bare URL defang regex greedily captures trailing punctuation | Updated bare URL regex to trim GFM trailing punctuation | ✅ Fixed |
 | 164 | `.github/scripts/test_sanitize_review.py` | Low | Missing test for zero-byte input file | Added `test_sanitize_empty_input` | ✅ Fixed |
-| 50 | `README.md`   | —    | Medium   | `sensitive_file_access_allowlist` example is dangerous and non-functional | ✅ Fixed  |
+| 50 | `README.md`:465 | Medium | `sensitive_file_access_allowlist` example is dangerous and non-functional | Changed to prefix matching | ✅ Fixed |
 
 ---
 ## Cross-Finding Chains (Architectural Context)

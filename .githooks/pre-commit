@@ -25,7 +25,7 @@ YAML_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '\.(yml
 # Identify staged shell scripts (including pre-commit itself)
 SHELL_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '(pre-commit|\.sh)$' || true)
 
-# Only run checks if there are staged Rust files
+# Only run Rust checks if there are staged Rust files
 if [ -n "$RUST_STAGED" ]; then
 	echo "Running cargo check, cargo fmt, and just lint on staged Rust files..."
 	cargo check
