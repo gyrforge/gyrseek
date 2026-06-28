@@ -62,14 +62,13 @@
 | 75 | `scanning.rs` | 1312 | High   | Relative path + cwd manipulation bypasses absolute string matches      | ⚠️ Open  |
 | 76 | `scanning.rs` | 1753 | High | Missing integration test for insufficient_baselines fail-closed | ⚠️ Open |
 | 77 | `scanning.rs` | 1363 | High | Missing cross-package isolation test for sensitive_file_access_allowlist | ⚠️ Open |
-| TM-2 | `scanning.rs` | — | High | `close` syscall not tracked — stale fd_table entries create `/proc/fd` bypass window | ⚠️ Open |
-| TM-4 | `ARCHITECTURE.md` | — | Medium | `process_vm_readv` accepted risk understates inter-process memory read risk | ⚠️ Open |
-| TM-6 | `ARCHITECTURE.md` | — | Medium | DNS exfiltration risk statement understates query-side data embedding | ⚠️ Open |
-| CURL-SH | `.githooks/pre-commit` | 20 | High | Pre-commit `curl | sh` without integrity verification | ⚠️ Open |
-| APPSEC-3 | `.githooks/pre-commit` | 29 | Medium | `go install ...@latest` unpinned tool version | ⚠️ Open |
-| APPSEC-4 | `.githooks/pre-commit` | 25 | Low | `sudo apt-get` in pre-commit hook without user warning | ⚠️ Open |
-| SENIOR-3 | `.githooks/pre-commit` | 29 | Low | `go install` without Go prerequisite check | ⚠️ Open |
-| DOC-1 | `ARCHITECTURE.md` | — | Medium | Import-time execution gap omitted from Threat Model | ⚠️ Open |
+| 194 | `scanning.rs` | — | High | `close` syscall not tracked — stale fd_table entries create `/proc/fd` bypass window | ⚠️ Open |
+| 195 | `ARCHITECTURE.md` | — | Medium | `process_vm_readv` accepted risk understates inter-process memory read risk | ⚠️ Open |
+| 196 | `ARCHITECTURE.md` | — | Medium | DNS exfiltration risk statement understates query-side data embedding | ⚠️ Open |
+| 170 | `ARCHITECTURE.md` | — | Medium | Import-time execution gap omitted from Threat Model | ⚠️ Open |
+| 168 | `ARCHITECTURE.md`:116 | Medium | "Context Contradiction" accepted risk understates AI tampering detectability gap | ⚠️ Open |
+
+
 
 
 
@@ -80,7 +79,7 @@
 
 | #  | File          | Tag      | What                                                                                     | Fix                                                                 | Status    |
 |----|---------------|----------|------------------------------------------------------------------------------------------|---------------------------------------------------------------------|-----------|
-| C16 | `lib.rs:1092-1173` | yagni | `bulk_scan!` macro spans 3 packaging ecosystems — a regression in one leaks to all | Replace with typed per-ecosystem functions (`bulk_scan_pip`, `bulk_scan_npm`, etc.) | ⚠️ Open  |
+| 203 | `lib.rs:1092-1173` | yagni | `bulk_scan!` macro spans 3 packaging ecosystems — a regression in one leaks to all | Replace with typed per-ecosystem functions (`bulk_scan_pip`, `bulk_scan_npm`, etc.) | ⚠️ Open  |
 
 ---
 

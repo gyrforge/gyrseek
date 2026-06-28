@@ -824,44 +824,29 @@ if next.starts_with('-') {
 ---
 
 
-### Finding TM-2 — High | `scanning.rs` | ⚠️ Open
+### Finding 194 — High | `scanning.rs` | ⚠️ Open
 
 **Summary:** `close` syscall not tracked — stale fd_table entries create `/proc/fd` bypass window.
 **Root cause:** `SYSCALL_RE` traces open, dup, fcntl but NOT close. When a fd is closed and reused, fd_table retains the stale mapping.
 **Failure scenario:** An attacker can use `/proc/self/fd/N` to reference a previously-open sensitive file through a now-reused fd number.
 **Fix direction:** Add `close` to `SYSCALL_RE` and remove entries from `fd_table` on close.
 
-### Finding TM-4 — Medium | `ARCHITECTURE.md` | ⚠️ Open
+### Finding 195 — Medium | `ARCHITECTURE.md` | ⚠️ Open
 
 **Summary:** `process_vm_readv` accepted risk understates inter-process memory read risk.
 **Root cause:** ARCHITECTURE.md states "poses no threat to the integrity". While true for integrity, it omits data confidentiality.
-**Failure scenario:** `process_vm_readv` can read sibling process address space (env vars with API tokens) in batched containers.
-**Fix direction:** Update Threat Model docs to explicitly acknowledge the confidentiality risk of `process_vm_readv`.
+**Failure scenario:** A malicious preinstall script enumerates `/proc/*/maps` to find the npm CLI process, reads its heap via `process_vm_readv` to capture `//registry.npmjs.org/:_authToken=...`, then exfiltrates via allowed registry API calls (network diff sees zero new IPs).
 
-### Finding TM-6 — Medium | `ARCHITECTURE.md` | ⚠️ Open
+**Fix direction:** Update ARCHITECTURE.md to document the confidentiality risk and UID separation model.
+
+### Finding 196 — Medium | `ARCHITECTURE.md` | ⚠️ Open
 
 **Summary:** DNS exfiltration risk statement understates query-side data embedding.
 **Root cause:** ARCHITECTURE.md narrows exfiltration to "queries sent to an allowed domain." Any DNS recursive resolver forwards queries to the attacker NS.
 **Failure scenario:** Data embedded in `[hex].exfil.example.com` arrives at attacker NS regardless of allowlists, because we only parse `recvfrom` responses.
 **Fix direction:** Update docs to acknowledge any DNS query can exfiltrate data.
 
-### Finding CURL-SH — High | `.githooks/pre-commit` | ⚠️ Open
-
-**Summary:** Pre-commit `curl | sh` without integrity verification.
-**Root cause:** Pipes directly to `sh` with `2>/dev/null || true`, defeating `set -eu` and hiding errors.
-**Failure scenario:** Supply chain compromise or silent failures during pre-commit hook installation.
-**Fix direction:** Note: This was flagged by the static analyzer but appears fixed in commit `4d5a86f`.
-
-### Finding APPSEC-3 — Medium | `.githooks/pre-commit` | ⚠️ Open
-**Summary:** `go install ...@latest` unpinned tool version.
-
-### Finding APPSEC-4 — Low | `.githooks/pre-commit` | ⚠️ Open
-**Summary:** `sudo apt-get` in pre-commit hook without user warning.
-
-### Finding SENIOR-3 — Low | `.githooks/pre-commit` | ⚠️ Open
-**Summary:** `go install` without Go prerequisite check.
-
-### Finding DOC-1 — Medium | `ARCHITECTURE.md` | ⚠️ Open
+### Finding 170 — Medium | `ARCHITECTURE.md` | ⚠️ Open
 
 **Summary:** Import-time execution gap omitted from Threat Model.
 **Root cause:** ARCHITECTURE.md accepted risks section omits the Telnyx T26 bypass (where Python module-scope code executes after sandbox exits).
@@ -871,3 +856,13 @@ if next.starts_with('-') {
 
 
 
+
+### Finding 168 — Medium | `ARCHITECTURE.md:116` | ⚠️ Open
+
+**Summary:** "Context Contradiction" accepted risk understates AI tampering detectability gap.
+
+**Root cause:** The accepted-risk entry claims "The diff provides sufficient context for human reviewers to spot tampering." This is true for human reviewers but ignores that the AI review artifact is generated before any human review, and the AI is not instructed to verify findings-set completeness against the base branch.
+
+**Failure scenario:** A malicious PR could delete a finding row from OPEN_FINDINGS.md among dozens of table changes, and the AI would not flag it as anomalous because it lacks instructions to check for stealth deletions.
+
+**Fix direction:** Update the accepted risk to explicitly acknowledge that the AI reviewer will not detect stealth deletions of findings, and that human reviewers must manually verify findings-set completeness.

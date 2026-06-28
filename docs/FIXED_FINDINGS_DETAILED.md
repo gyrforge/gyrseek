@@ -27,16 +27,16 @@
 | 20 | `sandbox.rs` / `scanning.rs`:559 / 730 | Critical | Pipe delimiter in artifact log — filename injection bypasses all artifact checks | — | ✅ Fixed |
 | 30 | `sandbox.rs` | Critical | `io_uring` syscalls not blocked by seccomp, bypassing strace | Added to blocklist | ✅ Fixed |
 | 31 | `sandbox.rs` | High | `process_vm_writev` not blocked by seccomp, allowing sibling memory corruption | Added to blocklist | ✅ Fixed |
-| C2 | `lib.rs:97-274` | `shrink` | `load_policy_config` is 177 lines of trim→filter→collect for 8 list fields. | `parse_list()` helper; 5 list fields collapsed to 1-liners. | ✅ Fixed |
-| C6 | `Cargo.toml:7` | `shrink` | `tokio` with `features = ["full"]` pulls in 30+ features. | `["rt", "rt-multi-thread", "macros"]` — 3 features instead of 30+. | ✅ Fixed |
-| C7 | `scanning.rs:76-95` | `shrink` | `compare_version_strings` repeats the same Ok/Err/Err/Ok match on both branches. | `parse_and_cmp::<T>` generic helper unifies both arms. | ✅ Fixed |
-| C8 | `scanning.rs:1009-1013` | `yagni` | `burst_triggered` has one caller (`burst_policy_warning`). | Inlined `match` at caller; tests updated to use `burst_policy_warning`. | ✅ Fixed |
-| C9 | `scanning.rs:1325-1343, 1400-1415, 1440-1473` | `shrink` | Three near-identical "CRITICAL WARNING: Behavioral anomaly flagged" blocks. | `fn warn_and_block(...)` saves ~50 lines; all 3 + artifact block consolidated. | ✅ Fixed |
-| C10 | `parsing.rs:648-714` | `shrink` | `parse_package_details` has 5-layer nested if/else per manager. | `match` with guards replaces 5-layer if/else chain. | ✅ Fixed |
-| C14 | `sandbox.rs:662-669` | `yagni` | `docker_seccomp_profile_arg` wraps one format call. | Inline `format!("seccomp={}", path?)` at call site. | ✅ Fixed |
-| C15 | `scanning.rs:1383-1391` | `shrink` | 8-line loop+flatten over two `Option<String>` refs to print warning. | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. | ✅ Fixed |
-| C17 | `scanning.rs` / `parsing.rs` / `sandbox.rs` | `shrink` | 14× `Vec::new()` + push-loop that could be iterator adaptors (`.filter_map().collect()`, `.partition()`, `.filter().take().collect()`, `.map().collect()`). Most clear-cut: `parse_requirements_packages_from_content` (`parsing.rs:321`, 5 lines → 1), `select_age_eligible_baselines` (`scanning.rs:1166`, 11 lines → 3 with `.filter().take()`), and 5 allowlist-split functions that could use `.partition()` (e.g. `filter_allowlisted_new_connections` at `scanning.rs:261`, 26 lines → 6). The double-collect to reverse stdout tail lines (`sandbox.rs:345`, `.collect::<Vec<_>>().into_iter().rev().collect()`) is a standalone allocation. | Convert to iterator adaptors. | ✅ Fixed |
-| 41 | `.github/workflows/ci.yml` | `audit-trail` | Migrated to Won't Fix as **FP21** (Third-party actions not SHA-pinned) | See `WONT_FIX_FINDINGS.md` | ✅ Migrated |
+| 214 | `lib.rs:97-274` | `shrink` | `load_policy_config` is 177 lines of trim→filter→collect for 8 list fields. | `parse_list()` helper; 5 list fields collapsed to 1-liners. | ✅ Fixed |
+| 218 | `Cargo.toml:7` | `shrink` | `tokio` with `features = ["full"]` pulls in 30+ features. | `["rt", "rt-multi-thread", "macros"]` — 3 features instead of 30+. | ✅ Fixed |
+| 219 | `scanning.rs:76-95` | `shrink` | `compare_version_strings` repeats the same Ok/Err/Err/Ok match on both branches. | `parse_and_cmp::<T>` generic helper unifies both arms. | ✅ Fixed |
+| 220 | `scanning.rs:1009-1013` | `yagni` | `burst_triggered` has one caller (`burst_policy_warning`). | Inlined `match` at caller; tests updated to use `burst_policy_warning`. | ✅ Fixed |
+| 221 | `scanning.rs:1325-1343, 1400-1415, 1440-1473` | `shrink` | Three near-identical "CRITICAL WARNING: Behavioral anomaly flagged" blocks. | `fn warn_and_block(...)` saves ~50 lines; all 3 + artifact block consolidated. | ✅ Fixed |
+| 197 | `parsing.rs:648-714` | `shrink` | `parse_package_details` has 5-layer nested if/else per manager. | `match` with guards replaces 5-layer if/else chain. | ✅ Fixed |
+| 201 | `sandbox.rs:662-669` | `yagni` | `docker_seccomp_profile_arg` wraps one format call. | Inline `format!("seccomp={}", path?)` at call site. | ✅ Fixed |
+| 202 | `scanning.rs:1383-1391` | `shrink` | 8-line loop+flatten over two `Option<String>` refs to print warning. | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. | ✅ Fixed |
+| 204 | `scanning.rs` / `parsing.rs` / `sandbox.rs` | `shrink` | 14× `Vec::new()` + push-loop that could be iterator adaptors (`.filter_map().collect()`, `.partition()`, `.filter().take().collect()`, `.map().collect()`). Most clear-cut: `parse_requirements_packages_from_content` (`parsing.rs:321`, 5 lines → 1), `select_age_eligible_baselines` (`scanning.rs:1166`, 11 lines → 3 with `.filter().take()`), and 5 allowlist-split functions that could use `.partition()` (e.g. `filter_allowlisted_new_connections` at `scanning.rs:261`, 26 lines → 6). The double-collect to reverse stdout tail lines (`sandbox.rs:345`, `.collect::<Vec<_>>().into_iter().rev().collect()`) is a standalone allocation. | Convert to iterator adaptors. | ✅ Fixed |
+| 41 | `.github/workflows/ci.yml` | `audit-trail` | Migrated to Won't Fix as **182** (Third-party actions not SHA-pinned) | See `WONT_FIX_FINDINGS.md` | ✅ Migrated |
 | 71 | `docs/FIXED_FINDINGS.md` | ``documentation`` | Drops cross-finding chain documentation from original file | Restore architectural context | ✅ Fixed |
 | 73 | `docs/common_prompts.md` | ``formatting`` | Missing trailing newline | Append newline | ✅ Fixed |
 | 83 | `.github/workflows/ci.yml` | High | `graphify` runs from PR workspace, allowing arbitrary prompt injection | Regenerate on PR branch + Python `<REDACTED>` tag replacement | ✅ Fixed |
@@ -110,14 +110,15 @@
 | 163 | `.github/scripts/sanitize_review.py` | Low | Bare URL defang regex greedily captures trailing punctuation | Updated bare URL regex to trim GFM trailing punctuation | ✅ Fixed |
 | 164 | `.github/scripts/test_sanitize_review.py` | Low | Missing test for zero-byte input file | Added `test_sanitize_empty_input` | ✅ Fixed |
 | 50 | `README.md`:465 | Medium | `sensitive_file_access_allowlist` example is dangerous and non-functional | Changed to prefix matching | ✅ Fixed |
+| 169 | `.githooks/pre-commit`:20 | High | Pre-commit `curl \| sh` without integrity verification | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
+| 165 | `.githooks/pre-commit`:29 | Medium | `go install ...@latest` unpinned tool version | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
+| 166 | `.githooks/pre-commit`:25 | Low | `sudo apt-get` in pre-commit hook without user warning | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
+| 167 | `.githooks/pre-commit`:29 | Low | `go install` without Go prerequisite check | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
+
 
 ---
 
 ---
-
-## Detailed Findings
-
-# Fixed Findings - Detailed
 
 ## Detailed Findings
 
@@ -488,7 +489,7 @@ External static review of `sandbox.rs` and `scanning.rs` for remaining sandbox-e
 
 ### Round 8 — 2026-06-16 — Architectural & coverage audit + Finding 20 fix
 
-Review of `lib.rs`, `README.md`, and the forwarding pipeline for deferred-execution coverage gaps, supply-chain hardening, and code quality. Produced findings #25–27 and C16. **Finding 20 fixed** — shell script switched to null-byte delimiters (`printf '%s\0...'`) so pipe characters in file paths cannot hijack the parser.
+Review of `lib.rs`, `README.md`, and the forwarding pipeline for deferred-execution coverage gaps, supply-chain hardening, and code quality. Produced findings #25–27 and 203. **Finding 20 fixed** — shell script switched to null-byte delimiters (`printf '%s\0...'`) so pipe characters in file paths cannot hijack the parser.
 
 - **Finding 25 (High)** — Import-time execution (Telnyx T26) not captured. Module-scope code in installed `.py` files fires after sandbox exits. Mitigation: post-install `python -c "import <pkg>"` trigger.
 - **Finding 26 (Medium)** — `Command::new(&self.manager)` uses PATH lookup; `.` or writable dirs in PATH allow relative-path hijacking. Mitigation: resolve to absolute path and validate prefix.
@@ -724,7 +725,7 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 **Audit Trail Note:** During architectural review, the team decided to prioritize Developer Experience (DX) and ease of updating over strict cryptographic pinning for established, highly-trusted third-party actions (especially official GitHub actions). Consequently, this finding was reclassified from an active vulnerability to an explicitly accepted risk.
 
-**Resolution:** Finding 41 was closed and migrated to `WONT_FIX_FINDINGS.md` where it is now permanently tracked as **Finding FP21**.
+**Resolution:** Finding 41 was closed and migrated to `WONT_FIX_FINDINGS.md` where it is now permanently tracked as **Finding 182**.
 
 ---
 
@@ -1141,3 +1142,36 @@ Consider adding a process- or file-system marker that persists across the sessio
 ---
 
 ---
+
+
+---
+
+### Finding 169 — High | `.githooks/pre-commit` | ✅ Fixed
+
+**Summary:** Pre-commit `curl | sh` without integrity verification.
+**Root cause:** Pipes directly to `sh` with `2>/dev/null || true`, defeating `set -eu` and hiding errors.
+**Failure scenario:** Supply chain compromise or silent failures during pre-commit hook installation.
+**Fix direction:** Note: This was flagged by the static analyzer but appears fixed in commit `4d5a86f`.
+
+**✅ Fix status — FIXED.** The PR rewrote the hook to a fail-closed check-and-exit pattern with zero automatic installation. The referenced vulnerable code no longer exists.
+
+---
+
+### Finding 165 — Medium | `.githooks/pre-commit` | ✅ Fixed
+**Summary:** `go install ...@latest` unpinned tool version.
+
+**✅ Fix status — FIXED.** The PR rewrote the hook to a fail-closed check-and-exit pattern with zero automatic installation. The referenced vulnerable code no longer exists.
+
+---
+
+### Finding 166 — Low | `.githooks/pre-commit` | ✅ Fixed
+**Summary:** `sudo apt-get` in pre-commit hook without user warning.
+
+**✅ Fix status — FIXED.** The PR rewrote the hook to a fail-closed check-and-exit pattern with zero automatic installation. The referenced vulnerable code no longer exists.
+
+---
+
+### Finding 167 — Low | `.githooks/pre-commit` | ✅ Fixed
+**Summary:** `go install` without Go prerequisite check.
+
+**✅ Fix status — FIXED.** The PR rewrote the hook to a fail-closed check-and-exit pattern with zero automatic installation. The referenced vulnerable code no longer exists.

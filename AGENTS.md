@@ -180,6 +180,6 @@ After every code or behavior change in this repository:
 - [ ] docs/ARCHITECTURE.md updated if needed
 - [ ] docs/DEV_GUIDE.md updated if needed
 - [ ] docs/ROADMAP.md updated if needed
-- [ ] docs/OPEN_FINDINGS.md / FIXED_FINDINGS.md / WONT_FIX_FINDINGS.md updated if needed
+- [ ] docs/OPEN_FINDINGS.md / FIXED_FINDINGS.md / WONT_FIX_FINDINGS.md (and their `_DETAILED.md` counterparts) updated if needed
 - [ ] docs/DOCKER_SECURITY.md updated if needed
 - [ ] docs/TESTS.md updated if needed
