@@ -1,0 +1,46 @@
+name: Post Review Comment
+
+on:
+  workflow_run:
+    # WARNING: This is tightly coupled to the `name:` field in ci.yml.
+    # If ci.yml is renamed, this string MUST be updated to match perfectly.
+    workflows: ["CI"]
+    types:
+      - completed
+
+permissions:
+  pull-requests: write
+  actions: read
+
+jobs:
+  post-comment:
+    name: Sanitize and Post
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >
+      github.event.workflow_run.event == 'pull_request'
+    steps:
+      # SECURITY: Do NOT add `ref: ${{ github.event.workflow_run.head_sha }}` here.
+      # In a workflow_run context, actions/checkout defaults to the base-branch SHA,
+      # not the PR head. Adding the head SHA would check out attacker-controlled code
+      # and expose the GH_TOKEN (which has pull-requests: write permission) to it.
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: consolidated-review
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmark
+
+      - name: Sanitize and Post Consolidated Comment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO_NAME: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: bash .github/scripts/post_comment.sh

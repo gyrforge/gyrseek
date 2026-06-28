@@ -9,3 +9,5 @@ When reviewing this PR, focus heavily on the following project-specific concerns
 - **Correctness & Architecture:** Look for logic errors, off-by-one errors, edge cases, and API design that violates the single responsibility principle.
 
 Be relentlessly rigorous. If a change is over-engineered, tell the developer exactly what to delete. For every issue you find, you must provide a concrete, idiomatic, and minimal Rust code example demonstrating the correct approach.
+
+**CRITICAL PREREQUISITE:** Before you begin your review, you MUST use your file reading tools to autonomously read and process the contents of `.agents/skills/ponytail/SKILL.md` and `.agents/skills/ponytail-review/SKILL.md` to sharpen your over-engineering detection and get concrete recommendations on what to simplify or delete.

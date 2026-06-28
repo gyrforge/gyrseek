@@ -1,0 +1,55 @@
+#!/bin/sh
+
+set -eu
+
+MISSING=""
+for tool in yamllint black cargo shellcheck shfmt just; do
+	command -v "$tool" >/dev/null 2>&1 || MISSING="$MISSING $tool"
+done
+
+if [ -n "$MISSING" ]; then
+	echo "Missing required tools:$MISSING" >&2
+	echo "Guidance: Please install them via your package manager (e.g. apt, brew) or cargo (e.g. cargo install just)" >&2
+	exit 1
+fi
+
+# Identify staged Rust files
+RUST_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
+
+# Identify staged Python files
+PY_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '\.py$' || true)
+
+# Identify staged YAML files
+YAML_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '\.(yml|yaml)$' || true)
+
+# Identify staged shell scripts (including pre-commit itself)
+SHELL_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '(pre-commit|\.sh)$' || true)
+
+# Only run Rust checks if there are staged Rust files
+if [ -n "$RUST_STAGED" ]; then
+	echo "Running cargo check, cargo fmt, and just lint on staged Rust files..."
+	cargo check
+	echo "$RUST_STAGED" | xargs -I {} cargo fmt {}
+	just lint
+fi
+
+if [ "$YAML_STAGED" -gt 0 ]; then
+	echo "Running yamllint..."
+	yamllint .
+fi
+
+if [ "$SHELL_STAGED" -gt 0 ]; then
+	SHELL_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '(pre-commit|\.sh)$' || true)
+	echo "$SHELL_FILES" | xargs shfmt -w
+	echo "$SHELL_FILES" | xargs shellcheck
+	echo "Running shell tests..."
+	bash .github/scripts/test_check_diff.sh
+fi
+
+if [ "$PY_STAGED" -gt 0 ]; then
+	echo "Running black..."
+	git diff --cached --name-only --diff-filter=ACM | grep '\.py$' | xargs black
+	echo "Running Python tests..."
+	python3 .github/scripts/test_sanitize_review.py
+	python3 .github/scripts/test_cap_ledger.py
+fi

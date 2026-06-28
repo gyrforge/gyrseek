@@ -49,7 +49,9 @@ not the entire codebase.
   - src/parsing.rs (parsing helpers)
   - src/scanning.rs (registry lookup and anomaly scanning)
   - src/sandbox.rs (sandbox runner backends and mode selection)
-- CI: `.github/workflows/ci.yml` — `rust-checks` (hadolint + yamllint + just lint + just test + opencode AI code review via the default Big Pickle model, no API key needed; review posted as PR comment using `GITHUB_TOKEN`), `linux-docker-uv-test` (test-uv with seccomp disabled), `linux-docker-seccomp-uv-test` (test-uv with seccomp enabled), `linux-docker-apparmor-seccomp-{uv,pip,poetry,npm,pnpm}-test` (test each manager with AppArmor + prebuilt scanner images), `cargo-audit` (dependency advisory scan). Installs just 1.52.0 via `extractions/setup-just@v4` for `[working-directory]` support. OpenCode install uses `sha256sum --check` against a pinned checksum (`fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e` for v1.17.7) — when bumping the opencode version, update checksum by running `curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v<VERSION>/install | sha256sum`. The AI code review prompt is inline in the workflow and includes the git diff of the PR to scope the review to changed code only. For the Application Security Engineer reviewer, the workflow conditionally injects both `code-security` and `llm-security` skill files (`.github/skills/{code-security,llm-security}/SKILL.md`) into `prompt.txt` so the reviewer's instruction to "use the llm-security and code-security skills" is actually actionable.
+- CI:
+  - `.github/workflows/ci.yml` — Runs all untrusted PR code with strictly `contents: read` permissions. Includes `rust-checks` (lint, test, and read-only AI code review via opencode generating an artifact), and test matrices (`linux-docker-uv-test`, etc.).
+  - `.github/workflows/post_review.yml` — Triggered via `workflow_run`. Runs in a trusted context with `pull-requests: write` to safely download the AI review artifact and post it to the PR. **Rule:** Any new jobs requiring write permissions MUST be placed in a separate `workflow_run` file like this, NEVER in `ci.yml`.
 - Build and scripts:
   - Justfile is the task runner entrypoint; run `just --list` to see recipes
   - just build — release build (cargo build --release)
@@ -164,7 +166,7 @@ After every code or behavior change in this repository:
 6. Ensure these updates happen in the same change set whenever possible.
 7. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, docs/ROADMAP.md, and docs/DOCKER_SECURITY.md.
 8. If test structure or coverage changes significantly, update docs/TESTS.md.
-9. If a new finding is identified, add it to docs/OPEN_FINDINGS.md. When a finding is fixed, move it from OPEN_FINDINGS.md to docs/FIXED_FINDINGS.md. If it is excluded from fixing, move it to docs/WONT_FIX_FINDINGS.md. Remember to update the tables too.
+ 9. If a new finding is identified, add it to `docs/OPEN_FINDINGS.md` and its detailed rationale to `docs/OPEN_FINDINGS_DETAILED.md`. When a finding is fixed, move it to `docs/FIXED_FINDINGS.md` and `docs/FIXED_FINDINGS_DETAILED.md`. If it is excluded from fixing, move it to the `WONT_FIX` equivalents. Remember to keep the summary tables synced across both the main and detailed files. All finding IDs use a single flat numeric namespace (no category prefixes). When adding new findings, choose the next available number across all three categories to avoid collisions.
 10. Load `understand-code` skill for end-of-session teaching and verification.
 
 ## Quick Post-Change Checklist
@@ -178,6 +180,6 @@ After every code or behavior change in this repository:
 - [ ] docs/ARCHITECTURE.md updated if needed
 - [ ] docs/DEV_GUIDE.md updated if needed
 - [ ] docs/ROADMAP.md updated if needed
-- [ ] docs/OPEN_FINDINGS.md / FIXED_FINDINGS.md / WONT_FIX_FINDINGS.md updated if needed
+- [ ] docs/OPEN_FINDINGS.md / FIXED_FINDINGS.md / WONT_FIX_FINDINGS.md (and their `_DETAILED.md` counterparts) updated if needed
 - [ ] docs/DOCKER_SECURITY.md updated if needed
 - [ ] docs/TESTS.md updated if needed

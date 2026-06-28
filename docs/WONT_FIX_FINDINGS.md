@@ -6,174 +6,55 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 
 | #   | File                       | Tag / Type       | What                                                                                     | Status       |
 |-----|----------------------------|------------------|------------------------------------------------------------------------------------------|--------------|
-| C1  | `lib.rs`                   | `shrink`         | 31-line manual arg-loop for `--config`/`-c`.                                             | 🚫 Won't Fix |
-| C3  | `lib.rs`                   | `yagni`          | `NoopRunner` struct with full trait impl for test bypass.                                | 🚫 Won't Fix |
-| C4  | `lib.rs`                   | `shrink`         | `ScanTimer` struct with `Instant`, `Drop`, two print branches.                           | 🚫 Won't Fix |
-| C5  | `lib.rs`                   | `yagni`          | `scan_targets` is a 1-line delegate to `scan_many_with_cache`.                           | 🚫 Won't Fix |
-| C11 | `parsing.rs`               | `shrink`         | `parse_poetry_lock_packages_from_content` has 7-param closure.                           | 🚫 Won't Fix |
-| C12 | `sandbox.rs`               | `shrink`         | `scanner_user_setup_steps` returns `vec!["..."]`, called once.                           | 🚫 Won't Fix |
-| C13 | `sandbox.rs`               | `shrink`         | `image_setup_steps` 4× `steps.push(...)` with `format!`.                                 | 🚫 Won't Fix |
-| FP1 | `scanning.rs`              | `false-positive` | Host-mode `uv pip install` leaks into exec signatures.                                   | 🚫 Won't Fix |
-| FP2 | `.github/workflows/ci.yml` | `false-positive` | `actions/checkout@v7` does not exist.                                                    | 🚫 Won't Fix |
-| FP3 | `scanning.rs`              | `false-positive` | `/.azure/` test exists but no `/.gnupg/` test.                                           | 🚫 Won't Fix |
-| FP4 | `README.md`                | `false-positive` | Exfiltration "caught at the network boundary" docs claim overstates completeness.        | 🚫 Won't Fix |
-| FP6 | `AGENTS.md`                | `false-positive` | Graphify skill referenced but skill file does not exist.                 | 🚫 Won't Fix |
-| FP7 | `docs/common_prompts.md` | `false-positive` | Raw CI prompt committed into documentation directory. | 🚫 Won't Fix |
-| FP8 | `sandbox.rs`               | `false-positive` | `process_vm_readv` is permitted in the seccomp profile.                                  | 🚫 Won't Fix |
-| FP9 | `scanning.rs`              | `false-positive` | Baseline override poisoning allows bypassing anomaly detection.                          | 🚫 Won't Fix |
-| FP10| `scanning.rs`              | `false-positive` | Slow-release baseline poisoning (long-term aging) evades detection.                      | 🚫 Won't Fix |
-
----
-
-### Finding C1 — `shrink` | `lib.rs:64-95` | 🚫 Won't Fix
-
-**Summary:** 31-line manual arg-loop for `--config`/`-c`.
-
-**Suggested Fix:** Compact `while let Some(arg)` with `strip_prefix` + `ok_or_else` → 20 lines.
-
-**Reason for Not Fixing:** The manual loop is highly readable. Refactoring to an iterator chain reduces line count but increases cognitive overhead (unnecessary churn). The current structure allows for straightforward addition of new flags without disrupting nested map chains.
-
----
-
-### Finding C3 — `yagni` | `lib.rs:572-583` | 🚫 Won't Fix
-
-**Summary:** `NoopRunner` struct with full trait impl for test bypass.
-
-**Suggested Fix:** Rust requires a concrete type for trait impl; closure can't substitute.
-
-**Reason for Not Fixing:** As stated, Rust requires a concrete type for trait implementation. Replacing it with a closure is not natively supported without boxing overhead. The `NoopRunner` struct is a clean, dependency-free way to mock out the sandbox in tests.
-
----
-
-### Finding C4 — `shrink` | `lib.rs:701-717` | 🚫 Won't Fix
-
-**Summary:** `ScanTimer` struct with `Instant`, `Drop`, two print branches.
-
-**Suggested Fix:** Inlined approach introduced maintenance footgun. RAII Drop is the correct, lazy choice for scoped cleanup.
-
-**Reason for Not Fixing:** The RAII Drop pattern ensures the timer is always printed on scope exit, preventing missed prints on early returns. Inlining it introduces a maintenance footgun.
-
----
-
-### Finding C5 — `yagni` | `lib.rs:802-810` | 🚫 Won't Fix
-
-**Summary:** `scan_targets` is a 1-line delegate to `scan_many_with_cache`.
-
-**Suggested Fix:** Inlined at 5 call sites.
-
-**Reason for Not Fixing:** Inlining a 1-line delegate at 5 call sites causes duplication and breaks the single source of truth for the scan delegation path. Keeping the delegate provides a central point if future logic (like logging or metrics) needs to be added before caching.
-
----
-
-### Finding C11 — `shrink` | `parsing.rs:79-239` | 🚫 Won't Fix
-
-**Summary:** `parse_poetry_lock_packages_from_content` has 7-param closure.
-
-**Suggested Fix:** `Pkg` struct with `finalize()` method eliminates 7-param closure; `fn` replaces closure.
-
-**Reason for Not Fixing:** Moving from a closure to a full `Pkg` struct with state management adds unnecessary boilerplate. The closure keeps the parsing logic localized and prevents structural bloat for what is ultimately a single sequential parsing pass.
-
----
-
-### Finding C12 — `shrink` | `sandbox.rs:462-477` | 🚫 Won't Fix
-
-**Summary:** `scanner_user_setup_steps` returns `vec!["..."]`, called once.
-
-**Suggested Fix:** Inlined at both call sites.
-
-**Reason for Not Fixing:** Keeping setup steps in a dedicated function improves readability and modularity, preventing the parent caller from becoming bloated. It visually segments the "what to run" from the "how to run it".
-
----
-
-### Finding C13 — `shrink` | `sandbox.rs:517-538` | 🚫 Won't Fix
-
-**Summary:** `image_setup_steps` 4× `steps.push(...)` with `format!`.
-
-**Suggested Fix:** `match manager` replaces if/else if; inlined at both call sites.
-
-**Reason for Not Fixing:** Similar to C12, keeping the step creation encapsulated makes the main runner pipeline much easier to read. `match` statements vs `if/else` here is a stylistic choice that isn't worth the code churn.
-
----
-
-### Finding FP1 — `false-positive` | `scanning.rs` | 🚫 Won't Fix
-
-**Summary:** Host-mode `uv pip install` leaks into exec signatures.
-
-**Suggested Fix:** None.
-
-**Reason for Not Fixing:** This is a false positive. `sandbox.rs:254-259` shows that `--target` and `target_path` are correctly included in the host runner args. Furthermore, `is_harness_command` accurately matches via `--target`. The reported leak cannot happen under the current code execution flow.
-
----
-
-### Finding FP2 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
-
-**Summary:** `actions/checkout@v7` does not exist.
-
-**Suggested Fix:** None.
-
-**Reason for Not Fixing:** This is a false positive. `actions/checkout` has indeed published `v7` on GitHub. The static analysis or reviewer's local cache was likely outdated, leading to the assumption that `v4` was the maximum major tag.
-
----
-
-### Finding FP3 — `false-positive` | `scanning.rs` | 🚫 Won't Fix
-
-**Summary:** `/.azure/` test exists but no `/.gnupg/` test.
-
-**Suggested Fix:** None.
-
-**Reason for Not Fixing:** This is a false positive. Both `.azure` and `.gnupg` are tested. Specifically, `scanning.rs:2193-2195` clearly covers the `.gnupg` test case. The reviewer missed these lines.
-
----
-
-### Finding FP4 — `false-positive` | `README.md` | 🚫 Won't Fix
-
-**Summary:** Exfiltration "caught at the network boundary" docs claim overstates completeness.
-
-**Suggested Fix:** None.
-
-**Reason for Not Fixing:** This is a false positive based on semantic interpretation. This is a threat modeling caveat rather than a direct code defect. The docs correctly state the theoretical coverage, but bypasses are acknowledged architectural risks. We will not change the docs because they accurately reflect the feature intent, not an infallible guarantee. Additionally, the Threat Model review clarifies that DNS tunneling exfiltration is invisible not just because DNS queries go to a sandbox-local resolver, but because `extract_dns_map` parses DNS *responses*, not queries. An attacker encoding secrets in DNS query names to a domain they control exfiltrates data without ever calling `connect()` to a new IP. Finally, there is an endpoint baseline poisoning angle: an attacker could seed their C2 domain in the baseline via benign telemetry in v1.0.0. Both are fundamental behavioral-diffing limitations that are explicitly accepted as out-of-scope.
-
-
-
-### Finding FP6 — `false-positive` | `AGENTS.md` | 🚫 Won't Fix
-
-**Summary:** Graphify skill referenced but skill file does not exist.
-
-**Suggested Fix:** Either install the missing skill file or remove the reference from `AGENTS.md`.
-
-**Reason for Not Fixing:** This is a false positive. Graphify is not an agent skill, but a Python package tool that is invoked directly via the CLI (`graphify update .`). The reference in `AGENTS.md` is correct in instructing the agent to invoke the tool, but the static analysis misunderstood it as a missing `.agents/skills` folder entry.
-
-
-### Finding FP7 — `false-positive` | `docs/common_prompts.md` | 🚫 Won't Fix
-
-**Summary:** Raw CI prompt committed into documentation directory.
-
-**Suggested Fix:** Remove the file or move it to a dedicated internal/`.github` directory with proper context headers.
-
-**Reason for Not Fixing:** The file is intentionally kept in the documentation directory for the developer's own reference during CI pipeline adjustments. It is not considered a defect.
-
-### Finding FP8 — `false-positive` (Not blocking `process_vm_readv`) | `sandbox.rs` | 🚫 Won't Fix
-
-**Summary:** `process_vm_readv` is permitted in the seccomp profile, allowing a process to read memory from its siblings.
-
-**Suggested Fix:** Block `process_vm_readv` in the default-allow seccomp profile.
-
-**Reason for Not Fixing:** This is a won't fix because `strace` intrinsically requires `process_vm_readv` to function. `strace` relies on this syscall to read strings and data structures (like arguments to `execve` or file paths in `open`) from the target process's memory space. Blocking it would render `strace` unable to capture the rich behavioral telemetry that Gyrseek relies on for its anomaly detection. 
-
-Furthermore, a malicious process can only use `process_vm_readv` for *read-only* access to sibling memory. To actively corrupt logs or interfere with sibling execution, an attacker would need `process_vm_writev`. Because we have explicitly blocked `process_vm_writev`, the memory corruption vector is neutralized. The read-only access does not pose a threat to the integrity of the trace logs, making `process_vm_readv` safe to leave permitted.
-
-### Finding FP9 — `false-positive` (Baseline Override Poisoning) | `scanning.rs` | 🚫 Won't Fix
-
-**Summary:** An attacker who observes that an old version had a particular network endpoint can set `baseline_overrides` to point at that old version and add the endpoint's IP to the allowlist. Even if the current version connects to a new C2 endpoint, the diff against the overridden baseline produces zero diffs, framing a known-good old version as the comparison point to bypass detection.
-
-**Suggested Fix:** Validate that override versions were published recently, or compute a behavioral signature union/intersection across fetched and override baselines to flag behaviors not present in recent versions.
-
-**Reason for Not Fixing:** This will remain a limitation of gyrseek for the foreseeable future. Baseline overrides are explicitly designed as a heavy-handed configuration escape hatch for users to force a specific baseline when natural resolution fails or is inappropriate. Implementing recency validation or intersection logic would significantly complicate the override mechanism and undermine its purpose as an unconditional user-directed override. It is accepted that malicious or compromised configuration changes within the repository (`gyrseek.yaml`) can bypass anomaly detection, as configuration is assumed to be trusted.
-
-### Finding FP10 — `false-positive` (Slow-Release Baseline Poisoning) | `scanning.rs` | 🚫 Won't Fix
-
-**Summary:** An attacker who controls a package can introduce a malicious behavior (e.g., establishing a C2 connection or reading a sensitive file) very slowly to evade detection. They could introduce the behavior in a seemingly benign way, wait several months and multiple version releases for that behavior to become part of the accepted baselines, and then weaponize it in a future update. Because the behavior is already present in the accepted baselines, the subsequent update won't be flagged as an anomaly.
-
-**Suggested Fix:** Implement long-term behavioral drift analysis, or flag behaviors based on their absolute threat level rather than purely relative differences against baselines.
-
-**Reason for Not Fixing:** This is a fundamental limitation of any differential/baseline-based anomaly detection system. Gyrseek's core philosophy is to detect *changes* in behavior between versions, operating under the assumption that long-standing behaviors are implicitly trusted by the ecosystem. Detecting a slow-rolling attack requires absolute semantic understanding of the code's intent (e.g., knowing *why* a connection is being made), which is outside the scope of a behavioral diffing tool. We mitigate this somewhat through static artifact scanning (e.g., flagging unexpected executables or `.pth` files unconditionally), but purely behavioral poisoning over long timeframes will remain an accepted architectural risk.
+| 190  | `lib.rs`                   | `shrink`         | 31-line manual arg-loop for `--config`/`-c`.                                             | 🚫 Won't Fix |
+| 191  | `lib.rs`                   | `yagni`          | `NoopRunner` struct with full trait impl for test bypass.                                | 🚫 Won't Fix |
+| 192  | `lib.rs`                   | `shrink`         | `ScanTimer` struct with `Instant`, `Drop`, two print branches.                           | 🚫 Won't Fix |
+| 193  | `lib.rs`                   | `yagni`          | `scan_targets` is a 1-line delegate to `scan_many_with_cache`.                           | 🚫 Won't Fix |
+| 194 | `parsing.rs`               | `shrink`         | `parse_poetry_lock_packages_from_content` has 7-param closure.                           | 🚫 Won't Fix |
+| 195 | `sandbox.rs`               | `shrink`         | `scanner_user_setup_steps` returns `vec!["..."]`, called once.                           | 🚫 Won't Fix |
+| 196 | `sandbox.rs`               | `shrink`         | `image_setup_steps` 4× `steps.push(...)` with `format!`.                                 | 🚫 Won't Fix |
+| 197 | `scanning.rs`              | `false-positive` | Host-mode `uv pip install` leaks into exec signatures.                                   | 🚫 Won't Fix |
+| 198 | `.github/workflows/ci.yml` | `false-positive` | `actions/checkout@v7` does not exist.                                                    | 🚫 Won't Fix |
+| 199 | `scanning.rs`              | `false-positive` | `/.azure/` test exists but no `/.gnupg/` test.                                           | 🚫 Won't Fix |
+| 200 | `README.md`                | `false-positive` | Exfiltration "caught at the network boundary" docs claim overstates completeness.        | 🚫 Won't Fix |
+| 201 | `AGENTS.md`                | `false-positive` | Graphify skill referenced but skill file does not exist.                 | 🚫 Won't Fix |
+| 202 | `docs/common_prompts.md` | `false-positive` | Raw CI prompt committed into documentation directory. | 🚫 Won't Fix |
+| 203 | `sandbox.rs`               | `false-positive` | `process_vm_readv` is permitted in the seccomp profile.                                  | 🚫 Won't Fix |
+| 204 | `scanning.rs`              | `false-positive` | Race condition in insufficient_baselines check ordering.                                 | 🚫 Won't Fix |
+| 205| `.github/workflows/`       | `false-positive` | Prompt Injection / Runner Compromise exfiltrating deployment secrets.                    | 🚫 Won't Fix |
+| 206| `.github/workflows/`       | `false-positive` | Autonomous Agent execution via `--dangerously-skip-permissions`.                         | 🚫 Won't Fix |
+| 81 | `.github/scripts/sanitize_review.py` | `low` | Python truncation decodes by byte count and ignores UTF-8 errors. | 🚫 Won't Fix |
+| 118 | `.github/workflows/ci.yml` | `low` | Doctest CI tests PR-head sanitizer, not default-branch production script. | 🚫 Won't Fix |
+| 123 | `.github/workflows/post_review.yml` | `invalid` | Adding `actions/checkout` without `ref` would hand `GH_TOKEN` to attacker. | 🚫 Won't Fix |
+| 124 | `.github/scripts/sanitize_review.py` | `low` | Code-block URL defanging is missing AST backtick-context awareness. | 🚫 Won't Fix |
+| 125 | `.github/scripts/post_comment.sh` | `invalid` | `cmark --safe` flag deprecated in cmark ≥0.31. | 🚫 Won't Fix |
+| 129 | `.github/scripts/post_comment.sh` | `accepted-risk` | No automated tests for `post_comment.sh`. | 🚫 Won't Fix |
+| 207| `.github/workflows/ci.yml` | `accepted-risk`  | `timeout-minutes: 10` with no partial-output trap.                                       | 🚫 Won't Fix |
+| 208| `.github/workflows/ci.yml` | `accepted-risk`  | `max-parallel: 3` vector for CI inference budget exhaustion.                             | 🚫 Won't Fix |
+| 209| `AGENTS.md`                | `false-positive` | `AGENTS.md` CI description omits operational details (model name, SHA hash).             | 🚫 Won't Fix |
+| 210| `.github/workflows/ci.yml` | `false-positive` | Redundant OpenCode installation script in dependent consolidation job.                   | 🚫 Won't Fix |
+| 211| `.github/workflows/ci.yml` | `accepted-risk`  | LLM self-censoring via tool access (`--dangerously-skip-permissions`).                   | 🚫 Won't Fix |
+| 212| `.github/workflows/ci.yml` | `accepted-risk`  | Findings documents (`OPEN_FINDINGS`, `WONT_FIX`) are not protected from PR tampering.    | 🚫 Won't Fix |
+| 213| `.github/workflows/ci.yml` | `accepted-risk`  | `graphify update` parsing vulnerability leading to CI runner RCE.                        | 🚫 Won't Fix |
+| 214| `.github/workflows/ci.yml` | `false-positive` | CI job fails if `gyrseek_review.md` or other artifact files are missing.                 | 🚫 Won't Fix |
+| 215| `.github/workflows/ci.yml` | `false-positive` | Permissions fragmentation for `checks: write` across jobs.                               | 🚫 Won't Fix |
+| 138 | `.github/scripts/sanitize_review.py` | `accepted-risk` | `PARENS_REGEX` depth-1 limit causes cosmetic artifacts on deeply-nested URLs. | 🚫 Won't Fix |
+| 151 | `.github/scripts/sanitize_review.py` | `invalid` | `www.` defang is case-sensitive — GFM cmark-gfm is also case-sensitive; `WWW.` does not auto-link. | 🚫 Won't Fix |
+| 152 | `.github/scripts/sanitize_review.py` | `accepted-risk` | Autolink `[^>]+` truncates at first literal `>` in URL — RFC-invalid URLs; `cmark --safe` second layer covers it. | 🚫 Won't Fix |
+| 161 | `.github/scripts/sanitize_review.py` | `invalid`       | `@mention` defang regex fails on second `@` in malformed string like `@evil@user`. | 🚫 Won't Fix |
+| 216| `.github/workflows/`       | `accepted-risk`  | Third-party actions use moving tags instead of being SHA-pinned.                         | 🚫 Won't Fix |
+| 217| `.github/workflows/ci.yml` | `false-positive` | Truncated consolidation prompt is undetected due to lack of file size verification.      | 🚫 Won't Fix |
+| 218| `.github/workflows/ci.yml` | `false-positive` | "Enhanced Only" template has no section for purely-new findings.                         | 🚫 Won't Fix |
+| 219| `.github/workflows/ci.yml` | `false-positive` | No integrity verification (SHA-256) of multi-agent review outputs.                       | 🚫 Won't Fix |
+| 220| `.github/workflows/ci.yml` | `accepted-risk`  | Per-reviewer skill injection removed, relying on autonomous discovery.                   | 🚫 Won't Fix |
+| 221| `.github/workflows/ci.yml` | `false-positive` | Duplicated "checkout trusted policies" bash loop violates DRY.                           | 🚫 Won't Fix |
+| 222| `.github/workflows/ci.yml` | `false-positive` | `consolidate-reviews` lacks explicit `success()` gate.                                   | 🚫 Won't Fix |
+| 223| `.github/workflows/ci.yml` | `false-positive` | No SHA hash pin on `graphify` dependency. Duplicate of 179.                             | 🚫 Won't Fix |
+| 224| `.github/workflows/ci.yml` | `false-positive` | `git fetch` race conditions across concurrent matrix pods.                               | 🚫 Won't Fix |
+| 225| `.github/workflows/ci.yml` | `false-positive` | `rm -rf graphify-out` flagged as unnecessary noise.                                      | 🚫 Won't Fix |
+| 226| `.github/workflows/ci.yml` | `false-positive` | `graphify-out/` architecture context flagged as generated but never consumed.            | 🚫 Won't Fix |
+| 227| `.github/workflows/ci.yml` | `false-positive` | Latent coupling warning between cache key and temp script path.                          | 🚫 Won't Fix |
+| 179 | `.github/workflows/post_review.yml` + `.github/scripts/post_comment.sh` | `accepted-risk` | `workflow_run.pull_requests[0].number` does not exist; commit-based PR resolution returns first ambiguous match. | 🚫 Won't Fix |
+
+
+*For detailed reasoning, see [WONT_FIX_FINDINGS_DETAILED.md](./WONT_FIX_FINDINGS_DETAILED.md).*
