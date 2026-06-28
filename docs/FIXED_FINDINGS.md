@@ -105,13 +105,7 @@
 | 162 | `.github/scripts/post_comment.sh` | High | `GH_TOKEN` exposed to `cmark` C binary when processing untrusted input | Added `env -u GH_TOKEN` before `cmark` execution | ✅ Fixed |
 | 163 | `.github/scripts/sanitize_review.py` | Low | Bare URL defang regex greedily captures trailing punctuation | Updated bare URL regex to trim GFM trailing punctuation | ✅ Fixed |
 | 164 | `.github/scripts/test_sanitize_review.py` | Low | Missing test for zero-byte input file | Added `test_sanitize_empty_input` | ✅ Fixed |
-| 29 | `scanning.rs` | —    | High     | `/proc/self/fd/N` evasion for sensitive file access                    | ✅ Fixed  |
-| 34 | `scanning.rs` | —    | High     | Cross-PID `/proc/N/fd/` resolution bypass                              | ✅ Fixed  |
-| 40 | `scanning.rs` | —    | High     | `/proc/self/fd/N` relative path traversal bypasses fd resolution       | ✅ Fixed  |
 | 50 | `README.md`   | —    | Medium   | `sensitive_file_access_allowlist` example is dangerous and non-functional | ✅ Fixed  |
-| 75 | `scanning.rs` | 1312 | High   | Relative path + cwd manipulation bypasses absolute string matches      | ✅ Fixed  |
-| 76 | `scanning.rs` | 1753 | High | Missing integration test for insufficient_baselines fail-closed | ✅ Fixed |
-| 77 | `scanning.rs` | 1363 | High | Missing cross-package isolation test for sensitive_file_access_allowlist | ✅ Fixed |
 
 ---
 ## Cross-Finding Chains (Architectural Context)

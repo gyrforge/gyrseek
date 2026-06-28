@@ -1,3 +1,15 @@
+# Fixed Findings (Detailed)
+
+*This document contains the detailed root-cause analyses for fixed findings. For the brief overview, see [FIXED_FINDINGS.md](./FIXED_FINDINGS.md).*
+
+# Fixed Findings
+
+#
+
+---
+
+## Detailed Findings
+
 # Fixed Findings - Detailed
 
 ## Detailed Findings
@@ -1009,50 +1021,6 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 ---
 
-### Finding 29 — High | `scanning.rs` | ✅ Fixed
-
-**Summary:** `/proc/self/fd/N` evasion and regex anchor bypass via relative paths.
-
-**Root cause:** The `proc_fd_re` regex anchor `^/proc/` is bypassed by `../../proc/self/fd/N` relative paths entering via `open()` (no dirfd) or `openat(AT_FDCWD, ...)`. The relative path flows through `lexical_clean_path` and `is_sensitive_file_read` which tests `ends_with` — neither resolves against `/proc/`.
-
-**Failure scenario:** An attacker opens `../../proc/self/fd/3` which bypasses both the `/proc/` regex anchor and the sensitive file string match.
-
-**Fix direction:** Make `proc_fd_re` accept leading `../` components, or re-lex the path before checking.
-
-
----
-
-
----
-
-### Finding 34 — High | `scanning.rs` | ✅ Fixed
-
-**Summary:** Cross-PID `/proc/N/fd/` resolution bypass.
-
-**Root cause:** `proc_fd_re` uses the strace line's PID to resolve the fd instead of the target PID in the `/proc/<pid>/fd/N` path.
-
-**Failure scenario:** A process reading another process's sensitive file descriptor goes undetected because the scanner looks up the fd in the wrong process's table.
-
-**Fix direction:** Extract the target PID from the path and use it for the fd_table lookup.
-
----
-
----
-
-### Finding 40 — High | `scanning.rs` | ✅ Fixed
-
-**Summary:** `/proc/self/fd/N` resolution regex requires absolute path, allowing traversal bypass.
-
-**Root cause:** Regex `^/proc/(?:self|\d+)/fd/` fails on relative paths. The path is sent through `lexical_clean_path` which preserves relative structures like `../../proc`.
-
-**Failure scenario:** An `open(\"../../proc/self/fd/3/passwd\")` never matches the regex anchor. The `is_sensitive_file_read` function fails to match it since it doesn't end with `/etc/passwd`. Additionally, this general lack of path canonicalization allows symlink bypasses: an attacker creates `ln -s /etc/passwd readme.txt` then `cat readme.txt` -> strace logs the symlink path (`readme.txt`), bypassing string matches completely.
-
-**Fix direction:** Classify paths through any known symlink by resolving with `std::fs::canonicalize` before passing to `is_sensitive_file_read`.
-
----
-
----
-
 ### Finding 50 — Medium | `README.md` | ✅ Fixed
 
 **Summary:** `sensitive_file_access_allowlist` example is dangerous and semantically wrong.
@@ -1064,45 +1032,5 @@ Consider adding a process- or file-system marker that persists across the sessio
 **Fix direction:** Change the example to use prefix matching like `*.env` and `*.aws/credentials`, and add a note explaining prefix-matching semantics vs exact-match.
 
 ---
-
----
-
-### Finding 75 — High | `scanning.rs` | ✅ Fixed
-
-**Summary:** `openat` relative path bypasses absolute suffix checks in `is_sensitive_file_read`.
-
-**Root cause:** `extract_sensitive_file_reads` resolves `openat(AT_FDCWD, "etc/passwd")` to the relative path `"etc/passwd"`. Because `is_sensitive_file_read` checks `ends_with_any` (which expects leading slashes, e.g., `/.env`) and `exact_match` (which lacks relative handling, e.g., `/etc/passwd`), relative paths fail to match.
-
-**Failure scenario:** Since no CWD tracking exists per PID (because `chdir`/`fchdir` syscalls are not intercepted), an attacker postinstall script can simply call `chdir("/")` followed by `open("etc/passwd")`. This produces the path `"etc/passwd"` in strace, completely bypassing all detection. This also applies to `open("passwd")` from cwd `/etc`.
-
-**Fix direction:** Track cwd per PID by adding `chdir`/`fchdir` to the strace trace set. For `openat(AT_FDCWD, ...)` and `open(...)` with relative paths, resolve against the tracked cwd before passing to `is_sensitive_file_read`.
-
----
-
----
-
-### Finding 76 — High | `scanning.rs:1753-1768` | ✅ Fixed
-
-**Summary:** Missing inline test for insufficient_baselines fail-closed.
-
-**Root cause:** No inline test asserts the `insufficient_baselines` blocked_reason. The related test `scan_fails_closed_when_one_baseline_trace_is_missing` tests `sandbox_trace_missing` only. 
-
-**Failure scenario:** A regression in `insufficient_baselines` means a package with 0 baselines and no `new_package_exemptions` bypass passes through, producing an empty `TraceSignals` diff (trivially passing all anomaly checks).
-
-**Fix direction:** Add explicit inline tests targeting the `insufficient_baselines` blocked reason. The tests should assert both: "0 baselines + no exemption → blocked" AND "0 baselines + wildcard exemption → allowed."
-
----
-
----
-
-### Finding 77 — High | `scanning.rs:1363-1385` | ✅ Fixed
-
-**Summary:** Missing cross-package isolation test for `sensitive_file_access_allowlist`.
-
-**Root cause:** While tests exist for `process_exec_allowlist`, `artifact_allowlist`, and `git_clone_allowlist`, there is no test for `filter_allowlisted_sensitive_reads` demonstrating that an allowlist entry for one package does not leak and allow access for another package.
-
-**Failure scenario:** A bug in the allowlist evaluation could allow any package to read a sensitive file if *any* package in the config is allowed to read it.
-
-**Fix direction:** Add tests verifying isolation and exact matching behavior for `sensitive_file_access_allowlist`.
 
 ---

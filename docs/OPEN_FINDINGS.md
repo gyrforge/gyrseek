@@ -56,6 +56,24 @@
 | 78 | `.github/workflows/ci.yml` | 449 | Medium | `grep -qi "^# consolidated review"` weakens post-consolidation check | ⚠️ Open |
 | 79 | `lib.rs`      | 133  | Low    | `parse_list_map` has no inline tests | ⚠️ Open |
 | 80 | `.github/workflows/ci.yml` | 163 | Low | Symlink path for `.github/skills/` not validated before `cat` | ⚠️ Open |
+| 29 | `scanning.rs` | —    | High     | `/proc/self/fd/N` evasion for sensitive file access                    | ⚠️ Open  |
+| 34 | `scanning.rs` | —    | High     | Cross-PID `/proc/N/fd/` resolution bypass                              | ⚠️ Open  |
+| 40 | `scanning.rs` | —    | High     | `/proc/self/fd/N` relative path traversal bypasses fd resolution       | ⚠️ Open  |
+| 75 | `scanning.rs` | 1312 | High   | Relative path + cwd manipulation bypasses absolute string matches      | ⚠️ Open  |
+| 76 | `scanning.rs` | 1753 | High | Missing integration test for insufficient_baselines fail-closed | ⚠️ Open |
+| 77 | `scanning.rs` | 1363 | High | Missing cross-package isolation test for sensitive_file_access_allowlist | ⚠️ Open |
+| TM-2 | `scanning.rs` | — | High | `close` syscall not tracked — stale fd_table entries create `/proc/fd` bypass window | ⚠️ Open |
+| TM-4 | `ARCHITECTURE.md` | — | Medium | `process_vm_readv` accepted risk understates inter-process memory read risk | ⚠️ Open |
+| TM-6 | `ARCHITECTURE.md` | — | Medium | DNS exfiltration risk statement understates query-side data embedding | ⚠️ Open |
+| CURL-SH | `.githooks/pre-commit` | 20 | High | Pre-commit `curl | sh` without integrity verification | ⚠️ Open |
+| APPSEC-3 | `.githooks/pre-commit` | 29 | Medium | `go install ...@latest` unpinned tool version | ⚠️ Open |
+| APPSEC-4 | `.githooks/pre-commit` | 25 | Low | `sudo apt-get` in pre-commit hook without user warning | ⚠️ Open |
+| SENIOR-3 | `.githooks/pre-commit` | 29 | Low | `go install` without Go prerequisite check | ⚠️ Open |
+| DOC-1 | `ARCHITECTURE.md` | — | Medium | Import-time execution gap omitted from Threat Model | ⚠️ Open |
+
+
+
+
 
 
 ## Complexity & Over-Engineering Findings

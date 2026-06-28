@@ -737,3 +737,137 @@ if next.starts_with('-') {
 **Fix direction:** Include a distinct diagnostic error message explaining why the package version was missing from the scan outcome, or use an `Result`/`Option` to explicitly surface parsing failures vs. silent omissions.
 
 ---
+
+
+### Finding 29 — High | `scanning.rs` | ⚠️ Open
+
+**Summary:** `/proc/self/fd/N` evasion and regex anchor bypass via relative paths.
+
+**Root cause:** The `proc_fd_re` regex anchor `^/proc/` is bypassed by `../../proc/self/fd/N` relative paths entering via `open()` (no dirfd) or `openat(AT_FDCWD, ...)`. The relative path flows through `lexical_clean_path` and `is_sensitive_file_read` which tests `ends_with` — neither resolves against `/proc/`.
+
+**Failure scenario:** An attacker opens `../../proc/self/fd/3` which bypasses both the `/proc/` regex anchor and the sensitive file string match.
+
+**Fix direction:** Make `proc_fd_re` accept leading `../` components, or re-lex the path before checking.
+
+
+---
+
+
+---
+
+### Finding 34 — High | `scanning.rs` | ⚠️ Open
+
+**Summary:** Cross-PID `/proc/N/fd/` resolution bypass.
+
+**Root cause:** `proc_fd_re` uses the strace line's PID to resolve the fd instead of the target PID in the `/proc/<pid>/fd/N` path.
+
+**Failure scenario:** A process reading another process's sensitive file descriptor goes undetected because the scanner looks up the fd in the wrong process's table.
+
+**Fix direction:** Extract the target PID from the path and use it for the fd_table lookup.
+
+---
+
+---
+
+### Finding 40 — High | `scanning.rs` | ⚠️ Open
+
+**Summary:** `/proc/self/fd/N` resolution regex requires absolute path, allowing traversal bypass.
+
+**Root cause:** Regex `^/proc/(?:self|\d+)/fd/` fails on relative paths. The path is sent through `lexical_clean_path` which preserves relative structures like `../../proc`.
+
+**Failure scenario:** An `open(\"../../proc/self/fd/3/passwd\")` never matches the regex anchor. The `is_sensitive_file_read` function fails to match it since it doesn't end with `/etc/passwd`. Additionally, this general lack of path canonicalization allows symlink bypasses: an attacker creates `ln -s /etc/passwd readme.txt` then `cat readme.txt` -> strace logs the symlink path (`readme.txt`), bypassing string matches completely.
+
+**Fix direction:** Classify paths through any known symlink by resolving with `std::fs::canonicalize` before passing to `is_sensitive_file_read`.
+
+---
+
+---
+
+### Finding 75 — High | `scanning.rs` | ⚠️ Open
+
+**Summary:** `openat` relative path bypasses absolute suffix checks in `is_sensitive_file_read`.
+
+**Root cause:** `extract_sensitive_file_reads` resolves `openat(AT_FDCWD, "etc/passwd")` to the relative path `"etc/passwd"`. Because `is_sensitive_file_read` checks `ends_with_any` (which expects leading slashes, e.g., `/.env`) and `exact_match` (which lacks relative handling, e.g., `/etc/passwd`), relative paths fail to match.
+
+**Failure scenario:** Since no CWD tracking exists per PID (because `chdir`/`fchdir` syscalls are not intercepted), an attacker postinstall script can simply call `chdir("/")` followed by `open("etc/passwd")`. This produces the path `"etc/passwd"` in strace, completely bypassing all detection. This also applies to `open("passwd")` from cwd `/etc`.
+
+**Fix direction:** Track cwd per PID by adding `chdir`/`fchdir` to the strace trace set. For `openat(AT_FDCWD, ...)` and `open(...)` with relative paths, resolve against the tracked cwd before passing to `is_sensitive_file_read`.
+
+---
+
+---
+
+### Finding 76 — High | `scanning.rs:1753-1768` | ⚠️ Open
+
+**Summary:** Missing inline test for insufficient_baselines fail-closed.
+
+**Root cause:** No inline test asserts the `insufficient_baselines` blocked_reason. The related test `scan_fails_closed_when_one_baseline_trace_is_missing` tests `sandbox_trace_missing` only. 
+
+**Failure scenario:** A regression in `insufficient_baselines` means a package with 0 baselines and no `new_package_exemptions` bypass passes through, producing an empty `TraceSignals` diff (trivially passing all anomaly checks).
+
+**Fix direction:** Add explicit inline tests targeting the `insufficient_baselines` blocked reason. The tests should assert both: "0 baselines + no exemption → blocked" AND "0 baselines + wildcard exemption → allowed."
+
+---
+
+---
+
+### Finding 77 — High | `scanning.rs:1363-1385` | ⚠️ Open
+
+**Summary:** Missing cross-package isolation test for `sensitive_file_access_allowlist`.
+
+**Root cause:** While tests exist for `process_exec_allowlist`, `artifact_allowlist`, and `git_clone_allowlist`, there is no test for `filter_allowlisted_sensitive_reads` demonstrating that an allowlist entry for one package does not leak and allow access for another package.
+
+**Failure scenario:** A bug in the allowlist evaluation could allow any package to read a sensitive file if *any* package in the config is allowed to read it.
+
+**Fix direction:** Add tests verifying isolation and exact matching behavior for `sensitive_file_access_allowlist`.
+
+---
+
+
+### Finding TM-2 — High | `scanning.rs` | ⚠️ Open
+
+**Summary:** `close` syscall not tracked — stale fd_table entries create `/proc/fd` bypass window.
+**Root cause:** `SYSCALL_RE` traces open, dup, fcntl but NOT close. When a fd is closed and reused, fd_table retains the stale mapping.
+**Failure scenario:** An attacker can use `/proc/self/fd/N` to reference a previously-open sensitive file through a now-reused fd number.
+**Fix direction:** Add `close` to `SYSCALL_RE` and remove entries from `fd_table` on close.
+
+### Finding TM-4 — Medium | `ARCHITECTURE.md` | ⚠️ Open
+
+**Summary:** `process_vm_readv` accepted risk understates inter-process memory read risk.
+**Root cause:** ARCHITECTURE.md states "poses no threat to the integrity". While true for integrity, it omits data confidentiality.
+**Failure scenario:** `process_vm_readv` can read sibling process address space (env vars with API tokens) in batched containers.
+**Fix direction:** Update Threat Model docs to explicitly acknowledge the confidentiality risk of `process_vm_readv`.
+
+### Finding TM-6 — Medium | `ARCHITECTURE.md` | ⚠️ Open
+
+**Summary:** DNS exfiltration risk statement understates query-side data embedding.
+**Root cause:** ARCHITECTURE.md narrows exfiltration to "queries sent to an allowed domain." Any DNS recursive resolver forwards queries to the attacker NS.
+**Failure scenario:** Data embedded in `[hex].exfil.example.com` arrives at attacker NS regardless of allowlists, because we only parse `recvfrom` responses.
+**Fix direction:** Update docs to acknowledge any DNS query can exfiltrate data.
+
+### Finding CURL-SH — High | `.githooks/pre-commit` | ⚠️ Open
+
+**Summary:** Pre-commit `curl | sh` without integrity verification.
+**Root cause:** Pipes directly to `sh` with `2>/dev/null || true`, defeating `set -eu` and hiding errors.
+**Failure scenario:** Supply chain compromise or silent failures during pre-commit hook installation.
+**Fix direction:** Note: This was flagged by the static analyzer but appears fixed in commit `4d5a86f`.
+
+### Finding APPSEC-3 — Medium | `.githooks/pre-commit` | ⚠️ Open
+**Summary:** `go install ...@latest` unpinned tool version.
+
+### Finding APPSEC-4 — Low | `.githooks/pre-commit` | ⚠️ Open
+**Summary:** `sudo apt-get` in pre-commit hook without user warning.
+
+### Finding SENIOR-3 — Low | `.githooks/pre-commit` | ⚠️ Open
+**Summary:** `go install` without Go prerequisite check.
+
+### Finding DOC-1 — Medium | `ARCHITECTURE.md` | ⚠️ Open
+
+**Summary:** Import-time execution gap omitted from Threat Model.
+**Root cause:** ARCHITECTURE.md accepted risks section omits the Telnyx T26 bypass (where Python module-scope code executes after sandbox exits).
+**Failure scenario:** Security auditors and developers reading the threat model are unaware of the highest-severity known bypass in the sandbox architecture.
+**Fix direction:** Add a dedicated accepted risk entry for the import-time execution gap in ARCHITECTURE.md.
+
+
+
+

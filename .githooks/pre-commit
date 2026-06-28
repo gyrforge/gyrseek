@@ -2,8 +2,6 @@
 
 set -eu
 
-export PATH="$HOME/go/bin:$HOME/.local/go/bin:$PATH"
-
 MISSING=""
 for tool in yamllint black cargo shellcheck shfmt just; do
 	command -v "$tool" >/dev/null 2>&1 || MISSING="$MISSING $tool"
@@ -11,6 +9,7 @@ done
 
 if [ -n "$MISSING" ]; then
 	echo "Missing required tools:$MISSING" >&2
+	echo "Guidance: Please install them via your package manager (e.g. apt, brew) or cargo (e.g. cargo install just)" >&2
 	exit 1
 fi
 
@@ -29,7 +28,7 @@ SHELL_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '(pre-
 # Only run checks if there are staged Rust files
 if [ -n "$RUST_STAGED" ]; then
 	echo "Running cargo check, cargo fmt, and just lint on staged Rust files..."
-	echo "$RUST_STAGED" | xargs -I {} cargo check --message-format=json | grep -q error && exit 1
+	cargo check
 	echo "$RUST_STAGED" | xargs -I {} cargo fmt {}
 	just lint
 fi
