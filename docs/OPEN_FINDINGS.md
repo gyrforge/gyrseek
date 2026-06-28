@@ -66,7 +66,8 @@
 | 195 | `ARCHITECTURE.md` | — | Medium | `process_vm_readv` accepted risk understates inter-process memory read risk | ⚠️ Open |
 | 196 | `ARCHITECTURE.md` | — | Medium | DNS exfiltration risk statement understates query-side data embedding | ⚠️ Open |
 | 170 | `ARCHITECTURE.md` | — | Medium | Import-time execution gap omitted from Threat Model | ⚠️ Open |
-| 168 | `ARCHITECTURE.md`:116 | Medium | "Context Contradiction" accepted risk understates AI tampering detectability gap | ⚠️ Open |
+| 225 | `*_DETAILED.md` | Low | Duplicate summary tables create a two-source-of-truth maintenance burden | ⚠️ Open |
+
 
 
 

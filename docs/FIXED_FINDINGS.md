@@ -110,6 +110,12 @@
 | 165 | `.githooks/pre-commit`:29 | Medium | `go install ...@latest` unpinned tool version | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
 | 166 | `.githooks/pre-commit`:25 | Low | `sudo apt-get` in pre-commit hook without user warning | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
 | 167 | `.githooks/pre-commit`:29 | Low | `go install` without Go prerequisite check | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
+| 168 | `ARCHITECTURE.md`:116 | Medium | "Context Contradiction" accepted risk understates AI tampering detectability gap | Updated ARCHITECTURE.md | ✅ Fixed |
+| 222 | `ARCHITECTURE.md`:116 | Medium | `_DETAILED.md` excluded from context contradiction | Added to exclusions | ✅ Fixed |
+| 223 | `ARCHITECTURE.md`:120 | Low | `process_vm_writev` claim overstates memory protection | Clarified open vectors | ✅ Fixed |
+| 224 | `FIXED_FINDINGS.md` | Low | New fixed findings reference stale pre-commit line numbers | Removed bare line numbers for legacy code | ✅ Fixed |
+
+
 
 
 ---

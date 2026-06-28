@@ -114,6 +114,12 @@
 | 165 | `.githooks/pre-commit`:29 | Medium | `go install ...@latest` unpinned tool version | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
 | 166 | `.githooks/pre-commit`:25 | Low | `sudo apt-get` in pre-commit hook without user warning | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
 | 167 | `.githooks/pre-commit`:29 | Low | `go install` without Go prerequisite check | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
+| 168 | `ARCHITECTURE.md`:116 | Medium | "Context Contradiction" accepted risk understates AI tampering detectability gap | Updated ARCHITECTURE.md | ✅ Fixed |
+| 222 | `ARCHITECTURE.md`:116 | Medium | `_DETAILED.md` excluded from context contradiction | Added to exclusions | ✅ Fixed |
+| 223 | `ARCHITECTURE.md`:120 | Low | `process_vm_writev` claim overstates memory protection | Clarified open vectors | ✅ Fixed |
+| 224 | `FIXED_FINDINGS.md` | Low | New fixed findings reference stale pre-commit line numbers | Removed bare line numbers for legacy code | ✅ Fixed |
+
+
 
 
 ---
@@ -1175,3 +1181,44 @@ Consider adding a process- or file-system marker that persists across the sessio
 **Summary:** `go install` without Go prerequisite check.
 
 **✅ Fix status — FIXED.** The PR rewrote the hook to a fail-closed check-and-exit pattern with zero automatic installation. The referenced vulnerable code no longer exists.
+
+
+---
+
+### Finding 168 — Medium | `ARCHITECTURE.md:116` | ✅ Fixed
+
+**Summary:** "Context Contradiction" accepted risk understates AI tampering detectability gap.
+
+**Root cause:** The accepted-risk entry claims "The diff provides sufficient context for human reviewers to spot tampering." This is true for human reviewers but ignores that the AI review artifact is generated before any human review, and the AI is not instructed to verify findings-set completeness against the base branch.
+
+**Failure scenario:** A malicious PR could delete a finding row from OPEN_FINDINGS.md among dozens of table changes, and the AI would not flag it as anomalous because it lacks instructions to check for stealth deletions.
+
+**Fix direction:** Update the accepted risk to explicitly acknowledge that the AI reviewer will not detect stealth deletions of findings, and that human reviewers must manually verify findings-set completeness.
+
+**✅ Fix status — FIXED.** Updated ARCHITECTURE.md to explicitly accept the AI blind spot.
+
+
+---
+
+### Finding 222 — Medium | `ARCHITECTURE.md` | ✅ Fixed
+
+**Summary:** `_DETAILED.md` excluded from context contradiction.
+
+**✅ Fix status — FIXED.** Added `_DETAILED.md` counterparts to the exclusion list in `ARCHITECTURE.md`.
+
+---
+
+### Finding 223 — Low | `ARCHITECTURE.md` | ✅ Fixed
+
+**Summary:** `process_vm_writev` claim overstates memory protection.
+
+**✅ Fix status — FIXED.** Clarified that `/proc/pid/mem` and other vectors remain open.
+
+
+---
+
+### Finding 224 — Low | `FIXED_FINDINGS.md` | ✅ Fixed
+
+**Summary:** New fixed findings reference stale pre-commit line numbers.
+
+**✅ Fix status — FIXED.** Replaced bare line numbers (like :20, :25, :29) pointing to deleted code with descriptive anchors (`legacy auto-install block`).

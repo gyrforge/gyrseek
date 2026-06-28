@@ -113,11 +113,11 @@ Based on our static analysis and architectural reviews, the following risks are 
 We heavily rely on Job Separation for AI CI. The untrusted AI agent runs in `ci.yml` with strictly `contents: read` permissions and is permitted to use tools autonomously (`--dangerously-skip-permissions`).
 - **Runner Compromise:** We accept the risk of the AI runner being compromised via prompt injection or `graphify` parsing exploits because the repository contains no deployment secrets and the runner environment is completely ephemeral.
 - **Self-Censoring:** We accept the risk that a malicious PR could use prompt injection to instruct the agent to censor its own review ledger. The worst-case outcome is a "clean" review, which degrades gracefully to the baseline security of standard human review.
-- **Context Contradiction:** `OPEN_FINDINGS.md` and `WONT_FIX_FINDINGS.md` are intentionally *not* checked out from the base branch to prevent confusing the AI when a PR legitimately moves a finding to the `FIXED` state. The diff provides sufficient context for human reviewers to spot tampering.
+- **Context Contradiction:** `OPEN_FINDINGS.md`, `WONT_FIX_FINDINGS.md`, and their `_DETAILED.md` counterparts are intentionally *not* checked out from the base branch to prevent confusing the AI when a PR legitimately moves a finding to the `FIXED` state. We explicitly accept the risk that the autonomous AI reviewer will not detect stealth deletions from these files; human reviewers must manually verify findings-set completeness. The diff provides sufficient context for human reviewers to spot tampering.
 
 ### 2. Sandbox Syscall Permissiveness
 - **`process_vm_readv` Allowed:** `strace` intrinsically requires `process_vm_readv` to read strings and data structures (like arguments to `execve` or file paths in `open`) from the target process's memory space. Blocking it would blind our behavioral telemetry.
-- **Integrity Protection:** Because we explicitly block `process_vm_writev`, the memory corruption vector is neutralized. Read-only sibling access poses no threat to the integrity of the root-owned trace logs.
+- **Integrity Protection:** Because we explicitly block `process_vm_writev`, the primary cross-process memory write vector through ptrace is neutralized. Other write paths (e.g., `/proc/pid/mem`) remain open and are accepted risks. Read-only sibling access poses no threat to the integrity of the root-owned trace logs.
 
 ### 3. CI/CD Architecture Trade-offs
 - **Fragmented Permissions:** `checks: write` is intentionally fragmented and not granted at the top level. This ensures an RCE in the `code-review` job cannot forge "All Checks Passed!" annotations.

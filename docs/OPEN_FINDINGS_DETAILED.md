@@ -857,12 +857,16 @@ if next.starts_with('-') {
 
 
 
-### Finding 168 — Medium | `ARCHITECTURE.md:116` | ⚠️ Open
 
-**Summary:** "Context Contradiction" accepted risk understates AI tampering detectability gap.
 
-**Root cause:** The accepted-risk entry claims "The diff provides sufficient context for human reviewers to spot tampering." This is true for human reviewers but ignores that the AI review artifact is generated before any human review, and the AI is not instructed to verify findings-set completeness against the base branch.
+---
 
-**Failure scenario:** A malicious PR could delete a finding row from OPEN_FINDINGS.md among dozens of table changes, and the AI would not flag it as anomalous because it lacks instructions to check for stealth deletions.
+### Finding 225 — Low | `*_DETAILED.md` | ⚠️ Open
 
-**Fix direction:** Update the accepted risk to explicitly acknowledge that the AI reviewer will not detect stealth deletions of findings, and that human reviewers must manually verify findings-set completeness.
+**Summary:** Duplicate summary tables create a two-source-of-truth maintenance burden.
+
+**Root cause:** The `_DETAILED.md` files begin with an exact copy of the summary table from the main files, requiring agents to perfectly synchronize both files on every update.
+
+**Failure scenario:** Agents often fail to update the detailed file's summary table, causing checklist drift and contradictory documentation states.
+
+**Fix direction:** Consider a future consolidation where the detailed file omits the summary table entirely, leaving the main file as the single source of truth for the index.
