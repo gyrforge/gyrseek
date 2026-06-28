@@ -65,6 +65,7 @@ Principles:
 - Do NOT include chatty conversational text.
 - If evidence is weak or conflicting after verification, mark as "Unverified".
 - If you reject or filter out a finding (e.g. false positives, known Wont Fix), DROP IT ENTIRELY. Do NOT mention it, do NOT explain why you rejected it, and do NOT include it in the final output.
+- If a finding requires no action from the developer, DROP IT ENTIRELY. Do NOT mention it, do NOT explain why you rejected it, and do NOT include it in the final output.
 - If no verified findings remain after filtering, strictly output: "No findings".
 
 Format:

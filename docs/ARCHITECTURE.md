@@ -105,3 +105,24 @@ The CI pipeline (`ci.yml` and `post_review.yml`) employs a strict trusted/untrus
 - **Sanitization**: Before posting any AI-generated output to the PR, the trusted phase aggressively sanitizes the payload to prevent XSS and phishing:
   1. **Markdown Link Stripping**: A dedicated Python preprocessing script (`sanitize_review.py`) physically strips all inline links, reference links, and autolinks (`[Click Here](...)`) from the output. This neuters prompt-injected phishing vectors and tracking pixels that rely on standard HTTP/HTTPS links.
   2. **`cmark --safe`**: The stripped markdown is then passed through `cmark --safe`, which strictly omits raw HTML tags and dangerous protocols (e.g., `javascript:` URIs) to neutralize any XSS payloads hallucinated or injected by the AI.
+
+## Threat Model & Accepted Risks
+Based on our static analysis and architectural reviews, the following risks are explicitly accepted by design:
+
+### 1. AI Reviewer Sandbox and Prompt Injection
+We heavily rely on Job Separation for AI CI. The untrusted AI agent runs in `ci.yml` with strictly `contents: read` permissions and is permitted to use tools autonomously (`--dangerously-skip-permissions`).
+- **Runner Compromise:** We accept the risk of the AI runner being compromised via prompt injection or `graphify` parsing exploits because the repository contains no deployment secrets and the runner environment is completely ephemeral.
+- **Self-Censoring:** We accept the risk that a malicious PR could use prompt injection to instruct the agent to censor its own review ledger. The worst-case outcome is a "clean" review, which degrades gracefully to the baseline security of standard human review.
+- **Context Contradiction:** `OPEN_FINDINGS.md`, `WONT_FIX_FINDINGS.md`, and their `_DETAILED.md` counterparts are intentionally *not* checked out from the base branch to prevent confusing the AI when a PR legitimately moves a finding to the `FIXED` state. We explicitly accept the risk that the autonomous AI reviewer will not detect stealth deletions from these files; human reviewers must manually verify findings-set completeness. The diff provides sufficient context for human reviewers to spot tampering.
+
+### 2. Sandbox Syscall Permissiveness
+- **`process_vm_readv` Allowed:** `strace` intrinsically requires `process_vm_readv` to read strings and data structures (like arguments to `execve` or file paths in `open`) from the target process's memory space. Blocking it would blind our behavioral telemetry.
+- **Integrity Protection:** Because we explicitly block `process_vm_writev`, the primary cross-process memory write vector through ptrace is neutralized. Other write paths (e.g., `/proc/pid/mem`) remain open and are accepted risks. Read-only sibling access poses no threat to the integrity of the root-owned trace logs.
+
+### 3. CI/CD Architecture Trade-offs
+- **Fragmented Permissions:** `checks: write` is intentionally fragmented and not granted at the top level. This ensures an RCE in the `code-review` job cannot forge "All Checks Passed!" annotations.
+- **Fail-Loud Artifacts:** The `upload-artifact` step strictly enforces `if-no-files-found: error`. If the AI reviewer crashes or times out, the PR fails loudly rather than silently passing with a blank review.
+- **Concurrency over Budget:** We allow high parallel inference (`max-parallel: 3`) because PR latency reduction is prioritized over API budget exhaustion attacks.
+
+### 4. DNS Exfiltration Boundaries
+- **DNS Query Exfiltration:** The DNS interceptor parses DNS *responses* (from the strace `recvfrom`), not DNS queries. An attacker encoding secrets into DNS query names sent to an allowed domain bypasses the network diff. This is explicitly accepted as out-of-scope for the install-time behavioral detection.
