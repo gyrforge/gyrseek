@@ -2,14 +2,36 @@
 
 set -eu
 
-if [ "$(uname)" = "Darwin" ]; then
-	for tool in yamllint black rust shellcheck shfmt; do
-		if ! command -v "$tool" >/dev/null 2>&1; then
+TOOLS="yamllint black rust shellcheck shfmt"
+
+for tool in $TOOLS; do
+	if command -v "$tool" >/dev/null 2>&1; then
+		continue
+	fi
+	case "$(uname)" in
+		Darwin)
 			echo "Installing $tool via Homebrew..."
 			brew install "$tool"
-		fi
-	done
-fi
+			;;
+		Linux)
+			case "$tool" in
+				rust)
+					echo "Installing Rust via rustup..."
+					curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y 2>/dev/null || true
+					. "$HOME/.cargo/env" 2>/dev/null || true
+					;;
+				yamllint|black|shellcheck)
+					echo "Installing $tool via apt..."
+					sudo apt-get install -y "$tool" 2>/dev/null || true
+					;;
+				shfmt)
+					echo "Installing shfmt via go install..."
+					go install mvdan.cc/sh/v3/cmd/shfmt@latest 2>/dev/null || true
+					;;
+			esac
+			;;
+	esac
+done
 
 # Identify staged Rust files
 RUST_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
