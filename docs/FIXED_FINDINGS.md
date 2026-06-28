@@ -114,6 +114,35 @@
 | 174 | `ARCHITECTURE.md`:116 | Medium | `_DETAILED.md` excluded from context contradiction | Added to exclusions | ✅ Fixed |
 | 175 | `ARCHITECTURE.md`:120 | Low | `process_vm_writev` claim overstates memory protection | Clarified open vectors | ✅ Fixed |
 | 176 | `FIXED_FINDINGS.md` | Low | New fixed findings reference stale pre-commit line numbers | Removed bare line numbers for legacy code | ✅ Fixed |
+| 228 | `src/lib.rs` | Medium | `new_package_exemptions` accepts empty version values silently | Warn and filter empty values at processing time | ✅ Fixed |
+| 229 | `src/lib.rs` | Medium | `new_package_exemptions` schema changed from `Vec<String>` to `HashMap<String, String>` with no backward compat | Custom deserializer with untagged enum handles old list format | ✅ Fixed |
+| 230 | `src/scanning.rs` | Medium | Misleading "sufficient baselines" message fires even when exemption not in play | Added `&& new_package_exempt` guard to message | ✅ Fixed |
+| 231 | `src/scanning.rs` | High | `tgt_version` comparison in exemption matching allows `"latest"` bypass | Removed `tgt_version` branch; only compare against resolved `v_curr` | ✅ Fixed |
+| 232 | `src/scanning.rs` | Low | `policy_baseline_count` name misleading — sounds like baseline count, stores policy threshold | Renamed to `baseline_threshold` | ✅ Fixed |
+| 238 | `src/scanning.rs` | Medium | `cfg!(debug_assertions)` (runtime) allowed debug-build env-var bypass code to remain in the release binary — branch was patchable | Changed to `#[cfg(debug_assertions)]` compile-time gate: bypass code literally absent from release builds | ✅ Fixed |
+| 239 | `src/lib.rs:28-56` | Medium | `new_package_exemptions` deprecated list format silently became a no-op (entries mapped to `""` version, filtered with CI-missable stderr warning, no hard error to force migration) | Replaced list-format acceptance with hard config-parse error rejecting the format entirely | ✅ Fixed |
+| 240 | `src/scanning.rs:523-568` | High | Override age-filtering functions (`check_override_ages`, `filter_override_version`) were `#[cfg(test)]`-gated — compiled out in release builds, creating an audit hazard against ARCHITECTURE.md's false claim | Removed `#[cfg(test)]` gate; threaded `published_at` from `fetch_history_with_baselines` to caller; age-filter overrides in production path before `select_effective_baselines` | ✅ Fixed |
+| 241 | `src/scanning.rs:503-521` | Medium | `extract_dns_map` missed TCP DNS responses via `read()` leaving gap for large responses | Added `connect()` tracking and `read()` capture with TCP prefix stripping | ✅ Fixed |
+| 242 | `src/scanning.rs:1797,1900` | Low | `baseline_overrides` cloned from hashmap then immediately re-borrowed via `.as_ref()`; line 1900 performed a redundant second hash lookup | Changed to a borrow, deferred clone to the `published_at.is_empty()` path, reused original borrow at line 1900 | ✅ Fixed |
+| 243 | `src/scanning.rs:1862-1878` | Low | 17-line inline mutable-local (`mut new_package_exempt`) with embedded `println!` mixed extraction and presentation | Extracted `exemption_behavior` pure function returning `(bool, Vec<String>)` — testable without stdout capture | ✅ Fixed |
+| 244 | `scanning.rs:503-506` | Medium | IPv6 DNS responses not captured — `recvfrom`/`connect` regexes only matched `sin_port`, missing `sin6_port` on IPv6 sockets | Changed both regexes to `sin6?_port` so IPv4 `sin_port` and IPv6 `sin6_port` match interchangeably | ✅ Fixed |
+| 245 | `scanning.rs:510` | Medium | Failed `connect()` calls to port 53 (e.g. `= -1 ECONNREFUSED`) incorrectly populated `dns_fds`, causing non-DNS `read()` to be parsed as DNS | Added `.*\)\s*=\s*0\b` return-value filter so only successful `= 0` connect calls populate `dns_fds` | ✅ Fixed |
+| 69 | `sandbox.rs` | Medium | `env_lock` unsafe pattern in tests misses RAII guard | Replaced manual set/remove lock pattern with `SandboxEnvVarGuard` struct | ✅ Fixed |
+| 246 | `scanning.rs` | Low | `cfg` gate inconsistency (`#[cfg(any(debug_assertions, test))]` vs `#[cfg(debug_assertions)]`) caused dead code warnings in unit tests | Aligned `cfg` gates to unconditionally compile together in test mode | ✅ Fixed |
+| 247 | `scanning.rs` / `lib.rs` | Low | 24h hard minimum age enforced redundantly at three layers with inconsistent warning messaging | Centralized logic in config parser; standardized warning terminology | ✅ Fixed |
+| 248 | `lib.rs` | Low | `deserialize_new_package_exemptions` had no inline unit tests for its custom Serde parser | Added comprehensive unit tests for Map, List, Null, and Invalid data | ✅ Fixed |
+| 249 | `scanning.rs:1972` | Low | Misleading "Applying baseline override(s)" message when all overrides were age-stripped | Updated condition to `matches!(...)` ensuring at least one valid override is present | ✅ Fixed |
+| 250 | `scanning.rs:611` | Low | `BaselineOverrides` type alias had excessive `pub` visibility despite being strictly internal | Restricted to `pub(crate)` | ✅ Fixed |
+| 251 | `scanning.rs:23` | Low | `PolicyConfig.new_package_exemptions` lacked semantic doc comment explaining key-value mapping | Added precise documentation for semantics and empty-value parsing rules | ✅ Fixed |
+| 252 | `src/scanning.rs:4257-4264` | Low | `extract_dns_map_ipv6_tcp_dns_response` test only asserted map length, missing domain/IP assertion | Added full verification matching the IPv4 equivalent | ✅ Fixed |
+| 253 | `src/scanning.rs:6677-6716` | Low | `check_override_ages_*` tests used `Utc::now()` causing non-deterministic timestamps | Changed to use deterministic frozen timestamp `2024-01-02T12:00:00Z` | ✅ Fixed |
+| 254 | `lib.rs:50` | Low | `deserialize_new_package_exemptions` error message used `[pkg]` instead of YAML literal `- pkg` | Corrected example syntax in error message | ✅ Fixed |
+| 255 | `scanning.rs:524` | Medium | TCP DNS parser captured `read()` but bypassed native resolvers using `recvmsg()` | Extended TCP regex to `(?:read|recvmsg)` | ✅ Fixed |
+| 272 | `scanning.rs:525` | Low | `recvmsg` TCP DNS regex assumed bare `{` after `msg_iov=[` but real strace `-v -xx` output emits `iov_base=` field name, making the recvmsg branch dead code in production | Extended anchor to `\[\{(?:iov_base=)?` and updated test to use realistic strace format | ✅ Fixed |
+| 275 | `scanning.rs:4260-4269` | Low | FIXED #252 regression: `extract_dns_map_ipv6_tcp_dns_response` still lacked concrete IP assertions after #252 claimed "full verification matching the IPv4 equivalent" | Added `ip_strs.contains(&"140.248.144.223")` and `ip_strs.contains(&"2a04:4e42:94::223")` assertions matching the IPv4 TCP equivalent | ✅ Fixed |
+| 276 | `scanning.rs:6734-6738` | Low | `extract_dns_map_tcp_recvmsg_dns_response` only asserted map/IP count; no concrete IP address verification | Added concrete `ip_strs.contains` assertions for both the IPv4 and IPv6 addresses in the payload | ✅ Fixed |
+
+
 
 
 

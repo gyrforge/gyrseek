@@ -17,6 +17,10 @@
 | 26 | `lib.rs`      | 588  | Medium   | `Command::new` relies on PATH — relative-path hijacking in untrusted working dirs | ⚠️ Open  |
 | 27 | `lib.rs`      | 64   | Low      | `--config` value not validated — flag-like value silently swallowed as file path | ⚠️ Open  |
 | 28 | `scanning.rs` | —    | High     | Baseline poisoning evasion for sensitive file access                  | ⚠️ Open  |
+| 82  | `sandbox.rs`  | —    | High     | `scanner_image_config` torn/stale env-var reads during concurrent test execution | ⚠️ Open  |
+| 84  | `scanning.rs` | —    | High     | Async cache race in baseline counting during concurrent `scan_with_cache` calls | ⚠️ Open  |
+| 85  | `scanning.rs` | —    | Medium   | Blocking DNS I/O inside async runtime causes tokio worker-thread DoS   | ⚠️ Open  |
+| 86  | `scanning.rs` | —    | Low      | `scan_package_versions` fallback returns generic `scan_failed` with zero diagnostics | ⚠️ Open  |
 | 178 | `sandbox.rs`  | —    | Critical | `pidfd_open` and `pidfd_getfd` not blocked, allowing fd theft          | ⚠️ Open  |
 | 32 | `scanning.rs` | —    | Critical | NUL-byte path truncation bypass in strace path unescaping              | ⚠️ Open  |
 | 33 | `sandbox.rs`  | —    | High     | `execveat` double gap: absent from trace list and parser regex         | ⚠️ Open  |
@@ -51,7 +55,7 @@
 | 66 | `.github/workflows/ci.yml` | — | Low | LLM prompt instructs model to suggest holistic fix under attacker influence | ⚠️ Open  |
 | 67 | `scanning.rs` | —    | Medium   | Clone/fork fd-inheritance block duplicated verbatim                    | ⚠️ Open  |
 | 68 | `.github/workflows/ci.yml` | — | Medium | `gh run list` and `download` missing `--repo` flag                     | ⚠️ Open  |
-| 69 | `sandbox.rs`  | —    | Medium   | `env_lock` unsafe pattern in tests misses RAII guard                   | ⚠️ Open  |
+
 | 72 | `.github/workflows/ci.yml` | — | Low | `PR_HEAD_REF` branch name passed to `gh` without validation            | ⚠️ Open  |
 | 78 | `.github/workflows/ci.yml` | 449 | Medium | `grep -qi "^# consolidated review"` weakens post-consolidation check | ⚠️ Open |
 | 79 | `lib.rs`      | 133  | Low    | `parse_list_map` has no inline tests | ⚠️ Open |
@@ -67,6 +71,35 @@
 | 173 | `ARCHITECTURE.md` | — | Medium | DNS exfiltration risk statement understates query-side data embedding | ⚠️ Open |
 | 170 | `ARCHITECTURE.md` | — | Medium | Import-time execution gap omitted from Threat Model | ⚠️ Open |
 | 177 | `*_DETAILED.md` | Low | Duplicate summary tables create a two-source-of-truth maintenance burden | ⚠️ Open |
+| 256 | `scanning.rs:511` | Low | UDP DNS regex only matches `recvfrom`; `recvmsg()` used by glibc ≥2.40, musl, and async Rust resolvers produces no domain→IP mapping, degrading FCrDNS enrichment fallback to plain IP for those responses | ⚠️ Open |
+| 257 | `scanning.rs:506-566` | Low | DNS interceptor only matches port-53 strace traffic; DoH (port 443) and DoT (port 853) bypass enrichment — C2 IPs still caught fail-closed but without domain context | ⚠️ Open |
+| 258 | `scanning.rs:1976-1982` | Low | `insufficient_baselines` error message reports only the count shortfall; does not mention that age-gate filtering (`min_baseline_age_hours`) may have caused the shortage, making the failure opaque to users | ⚠️ Open |
+| 262 | `.githooks/pre-commit:30` | Low | Echo message says "on staged Rust files" but `cargo fmt` at line 10 formats every `.rs` file in the workspace — unstaged formatting changes are silently normalized on commit; the scope widened from file-scoped (old `xargs -I {} cargo fmt {}`) to workspace-wide without updating the echo | ⚠️ Open |
+| 263 | `scanning.rs:578` | Low | `exemption_behavior` uses raw `==` to compare version strings; build metadata (`1.0.0+build1` vs `1.0.0`) or non-normalised PEP 440 forms would silently fail to match, causing valid exemptions to be ignored (fail-closed, but operator churn) | ⚠️ Open |
+| 264 | `scanning.rs:1893-1908` | Low | When registry fetch returns empty `published_at`, override handling is asymmetric: test mode (with active test env vars) silently trusts the override; production discards it with a warning. The discard path is never exercised by CI tests. | ⚠️ Open |
+| 265 | `scanning.rs:1911` | Low | `check_override_ages` has thorough unit tests but no integration test verifies that a too-young override is dropped and a fetched baseline fills the slot in the `scan_packages_versions` production path | ⚠️ Open |
+| 266 | `scanning.rs:601-604` | Low | `num_hours()` floors to whole hours; a 23h59m-old version reports "is only 23 hours old" in the warning — numeric comparison is accurate but message is misleading to operators | ⚠️ Open |
+| 269 | `parsing.rs:346-348,506-507` | High | TOCTOU: requirements files and package.json are read eagerly at parse time; sandbox execution and the forwarded command run against the live filesystem — a file swap between parse and install causes a scan-install mismatch | ⚠️ Open |
+| 270 | `scanning.rs:1291-1555` | Medium | Symlink traversal bypasses sensitive-file-read detection: `open("innocent")` where "innocent" is a symlink to `~/.aws/credentials` shows only the link path in strace; `is_sensitive_file_read("innocent")` returns false, so the credential read is never flagged | ⚠️ Open |
+| 271 | `scanning.rs:522-528` | Medium | TCP DNS `recvfrom()` blind spot: READ_RE matches `read\|recvmsg` only; `recvfrom()` is valid on connected TCP sockets and used by some bespoke/async resolvers, bypassing DNS enrichment | ⚠️ Open |
+| 277 | `lib.rs:270` | Low | `new_package_exemptions` key trimming silently overwrites if two YAML keys differ only by whitespace (`pkg` vs `pkg  `) — second entry wins with no warning | ⚠️ Open |
+| 278 | `sandbox.rs:982-1004` | Low | `SandboxEnvVarGuard::set` does not save/restore the pre-existing env var value; Drop always calls `remove_var` unconditionally, losing any value that was set before the guard — test isolation concern | ⚠️ Open |
+| 281 | `scanning.rs:241-254` | Medium | Domain planting: DNS interceptor fallback checks `baseline_domains` membership but verifies IP presence in the **current** trace's DNS map, not the baseline's — an attacker whose domain appeared in any baseline can route new C2 IPs through it and have them silently treated as benign CDN edge rotations | ⚠️ Open |
+| 282 | `scanning.rs:1878` | Low | `baseline_count: 1` silently overridden to 2 via `.max(2)` with no warning; config parser warns on 0 but not 1, inconsistent handling | ⚠️ Open |
+| 283 | `lib.rs:289-298,311-320` | Low | `release_burst_threshold` and `minimum_release_age_package` match blocks have redundant `None => None` arms — `Some(v) => Some(v), None => None` is identical to `v => v` | ⚠️ Open |
+| 284 | `scanning.rs:596,623` | Low | `filter_override_version` and `check_override_ages` use `&std::collections::HashMap<...>` despite `HashMap` being imported at line 2 | ⚠️ Open |
+| 285 | `scanning.rs:2000` | Low | `matches!(filtered_overrides, Some((Some(_), _)) \| Some((_, Some(_))))` re-derives whether any override survived age-filtering, duplicating logic already computed by `check_override_ages` | ⚠️ Open |
+| 286 | `scanning.rs:684-685` | Low | `GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS` parse failures silently drop all entries via `filter_map(|s| s.parse().ok())`, returning zero candidates with no diagnostic (test-only code path) | ⚠️ Open |
+| 287 | `scanning.rs:4249-4257` | Low | `extract_dns_map_ipv6_udp_dns_response` only asserts map and IP count; no concrete IP address verification unlike the IPv4 TCP equivalent | ⚠️ Open |
+| 288 | `src/lib.rs:48-51` | Low | `new_package_exemptions` list→map format change has no deprecation window; operators upgrading with `[pkg]` list syntax encounter a hard config-parse error with no migration path documented in release notes | ⚠️ Open |
+| 289 | `scanning.rs:6628-6681` | Medium | `scan_packages_versions_discards_overrides_when_registry_fails` test makes a real HTTP request to PyPI — `GYRSEEK_TEST_LOCK_ONLY` is not read by `fetch_history_with_baselines` and not listed in `active_test_env_vars()`; test fails in offline CI | ⚠️ Open |
+| 291 | `AGENTS.md:186` | Low | AGENTS.md instructs agents to "keep the summary tables synced across both the main and detailed files" — detailed files no longer have summary tables; instruction is stale | ⚠️ Open |
+| 292 | `README.md:434` | Low | `min_baseline_age_hours` config table says values below 24h are "silently clamped" but `src/lib.rs:258-262` emits an explicit `println!` warning — not silent | ⚠️ Open |
+| 294 | `scanning.rs:156-203` | Medium | Cloud metadata IP `169.254.169.254` is exempt from sandbox-local filtering, but Docker may route it through gateway `172.17.0.1`; strace then shows `connect()` to `172.17.0.1` which is filtered as RFC1918 private — credential theft signal lost | ⚠️ Open |
+| 295 | `scanning.rs:6480-6490` | Low | `filter_override_version` tests only exercise empty `published_at`; no test uses a partial map where other versions are present but the override version is absent — distinct code path untested | ⚠️ Open |
+| 296 | `tests/cli_burst_exit_tests.rs:152` | Low | Test name `exits_with_code_1_and_rejects_versions_newer_than_72_hours_by_default` is ambiguous — "newer than 72 hours" can mean either direction; `younger_than_72_hours` would be unambiguous | ⚠️ Open |
+| 298 | `AGENTS.md:128` | Low | AGENTS.md claims "the floor is enforced in all three code paths of `fetch_history_with_baselines`" — floor enforcement lives entirely in `src/lib.rs:257-262` at config-parse time; `fetch_history_with_baselines` receives an already-clamped value and has no inline floor check | ⚠️ Open |
+| 299 | `docs/FIXED_FINDINGS.md:137` / `docs/WONT_FIX_FINDINGS.md:74` | Low | Finding number 252 is used in both FIXED_FINDINGS.md (IPv6 TCP test regression) and WONT_FIX_FINDINGS.md (530-word false positive) — flat numeric namespace collision | ⚠️ Open |
 
 
 

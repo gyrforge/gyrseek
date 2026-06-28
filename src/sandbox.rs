@@ -966,11 +966,42 @@ mod tests {
         build_docker_run_args, build_matrix_script, build_single_script,
         docker_apparmor_enabled_from_env, docker_apparmor_profile_name, strace_install_command,
     };
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
-        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        static ENV_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
         ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct SandboxEnvVarGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        key: &'static str,
+    }
+
+    impl SandboxEnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let guard = env_lock().lock().expect("env lock poisoned");
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { _lock: guard, key }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let guard = env_lock().lock().expect("env lock poisoned");
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { _lock: guard, key }
+        }
+    }
+
+    impl Drop for SandboxEnvVarGuard {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 
     // --- #4 strace must not truncate argv/addresses ---
@@ -1209,10 +1240,7 @@ mod tests {
 
     #[test]
     fn apparmor_env_var_default_false() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        unsafe {
-            std::env::remove_var("GYRSEEK_DOCKER_APPARMOR_PROFILE");
-        }
+        let _env = SandboxEnvVarGuard::remove("GYRSEEK_DOCKER_APPARMOR_PROFILE");
 
         assert!(
             !docker_apparmor_enabled_from_env(),
@@ -1228,25 +1256,14 @@ mod tests {
             std::env::set_var("GYRSEEK_DOCKER_APPARMOR_PROFILE", "false");
         }
         assert!(!docker_apparmor_enabled_from_env());
-
-        unsafe {
-            std::env::remove_var("GYRSEEK_DOCKER_APPARMOR_PROFILE");
-        }
     }
 
     #[test]
     fn apparmor_disabled_wont_call_apparmor_parser() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        unsafe {
-            std::env::set_var("GYRSEEK_DOCKER_APPARMOR_PROFILE", "false");
-        }
+        let _env = SandboxEnvVarGuard::set("GYRSEEK_DOCKER_APPARMOR_PROFILE", "false");
 
         let result = docker_apparmor_profile_name();
         assert!(result.is_none(), "disabled profile should return None");
-
-        unsafe {
-            std::env::remove_var("GYRSEEK_DOCKER_APPARMOR_PROFILE");
-        }
     }
 
     // --- #4 strace stderr must be captured, not discarded ---
