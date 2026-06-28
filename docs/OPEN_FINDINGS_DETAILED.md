@@ -190,7 +190,7 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 31 — Critical | `sandbox.rs` | ⚠️ Open
+### Finding 178 — Critical | `sandbox.rs` | ⚠️ Open
 
 **Summary:** `pidfd_open` and `pidfd_getfd` not blocked.
 
@@ -824,14 +824,14 @@ if next.starts_with('-') {
 ---
 
 
-### Finding 194 — High | `scanning.rs` | ⚠️ Open
+### Finding 171 — High | `scanning.rs` | ⚠️ Open
 
 **Summary:** `close` syscall not tracked — stale fd_table entries create `/proc/fd` bypass window.
 **Root cause:** `SYSCALL_RE` traces open, dup, fcntl but NOT close. When a fd is closed and reused, fd_table retains the stale mapping.
 **Failure scenario:** An attacker can use `/proc/self/fd/N` to reference a previously-open sensitive file through a now-reused fd number.
 **Fix direction:** Add `close` to `SYSCALL_RE` and remove entries from `fd_table` on close.
 
-### Finding 195 — Medium | `ARCHITECTURE.md` | ⚠️ Open
+### Finding 172 — Medium | `ARCHITECTURE.md` | ⚠️ Open
 
 **Summary:** `process_vm_readv` accepted risk understates inter-process memory read risk.
 **Root cause:** ARCHITECTURE.md states "poses no threat to the integrity". While true for integrity, it omits data confidentiality.
@@ -839,7 +839,7 @@ if next.starts_with('-') {
 
 **Fix direction:** Update ARCHITECTURE.md to document the confidentiality risk and UID separation model.
 
-### Finding 196 — Medium | `ARCHITECTURE.md` | ⚠️ Open
+### Finding 173 — Medium | `ARCHITECTURE.md` | ⚠️ Open
 
 **Summary:** DNS exfiltration risk statement understates query-side data embedding.
 **Root cause:** ARCHITECTURE.md narrows exfiltration to "queries sent to an allowed domain." Any DNS recursive resolver forwards queries to the attacker NS.
@@ -861,7 +861,7 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 225 — Low | `*_DETAILED.md` | ⚠️ Open
+### Finding 177 — Low | `*_DETAILED.md` | ⚠️ Open
 
 **Summary:** Duplicate summary tables create a two-source-of-truth maintenance burden.
 
@@ -870,3 +870,16 @@ if next.starts_with('-') {
 **Failure scenario:** Agents often fail to update the detailed file's summary table, causing checklist drift and contradictory documentation states.
 
 **Fix direction:** Consider a future consolidation where the detailed file omits the summary table entirely, leaving the main file as the single source of truth for the index.
+
+
+---
+
+### Finding 180 — Low | `lib.rs:1092-1173` | ⚠️ Open
+
+**Summary:** `bulk_scan!` macro spans 3 packaging ecosystems — a regression in one leaks to all.
+
+**Root cause:** The `bulk_scan!` macro is used to deduplicate the routing logic for multiple package managers (pip, npm, pnpm, uv sync). However, this creates tight coupling. A change or bug in one package manager's handling can easily break the others or introduce subtle bugs due to shared macro expansion.
+
+**Failure scenario:** Modifying the macro to fix an npm-specific issue accidentally breaks pip argument extraction, causing pip scans to fail open or fail closed silently, and tests for pip might not catch the side-effect if not comprehensive.
+
+**Fix direction:** Replace the macro with explicit typed per-ecosystem functions (`bulk_scan_pip`, `bulk_scan_npm`, etc.) to isolate the logic.

@@ -166,7 +166,7 @@ After every code or behavior change in this repository:
 6. Ensure these updates happen in the same change set whenever possible.
 7. If architecture, workflow, or future plan changes, update docs/ARCHITECTURE.md, docs/DEV_GUIDE.md, docs/ROADMAP.md, and docs/DOCKER_SECURITY.md.
 8. If test structure or coverage changes significantly, update docs/TESTS.md.
-9. If a new finding is identified, add it to `docs/OPEN_FINDINGS.md` and its detailed rationale to `docs/OPEN_FINDINGS_DETAILED.md`. When a finding is fixed, move it to `docs/FIXED_FINDINGS.md` and `docs/FIXED_FINDINGS_DETAILED.md`. If it is excluded from fixing, move it to the `WONT_FIX` equivalents. Remember to keep the summary tables synced across both the main and detailed files.
+ 9. If a new finding is identified, add it to `docs/OPEN_FINDINGS.md` and its detailed rationale to `docs/OPEN_FINDINGS_DETAILED.md`. When a finding is fixed, move it to `docs/FIXED_FINDINGS.md` and `docs/FIXED_FINDINGS_DETAILED.md`. If it is excluded from fixing, move it to the `WONT_FIX` equivalents. Remember to keep the summary tables synced across both the main and detailed files. All finding IDs use a single flat numeric namespace (no category prefixes). When adding new findings, choose the next available number across all three categories to avoid collisions.
 10. Load `understand-code` skill for end-of-session teaching and verification.
 
 ## Quick Post-Change Checklist

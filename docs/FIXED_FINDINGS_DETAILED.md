@@ -11,7 +11,7 @@
 | 1 | `sandbox.rs`:188 | Critical | Empty trace on strace failure passes as clean scan | — | ✅ Fixed |
 | 2 | `scanning.rs`:199 | Critical | PTR-record domain allowlist bypassable by attacker | — | ✅ Fixed |
 | 3 | `scanning.rs`:427 | High | Argv regex truncates at first `]` — corrupts signatures | — | ✅ Fixed |
-| 4 | `sandbox.rs`:307 | High | `\|\| true` suppresses strace failures — root cause of #1 | — | ✅ Fixed |
+| 4 | `sandbox.rs`:307 | High | `\|\| true` suppresses strace failures — root cause of 1 | — | ✅ Fixed |
 | 5 | `parsing.rs`:113 | High | Poetry non-develop local-path packages leak through filter | — | ✅ Fixed |
 | 6 | `parsing.rs`:298 | Medium | PEP 508 extras in package name → PyPI 404 → zero baselines | — | ✅ Fixed |
 | 7 | `parsing.rs`:576 | Medium | Extras key mismatch breaks version pinning in forwarded command | — | ✅ Fixed |
@@ -27,16 +27,16 @@
 | 20 | `sandbox.rs` / `scanning.rs`:559 / 730 | Critical | Pipe delimiter in artifact log — filename injection bypasses all artifact checks | — | ✅ Fixed |
 | 30 | `sandbox.rs` | Critical | `io_uring` syscalls not blocked by seccomp, bypassing strace | Added to blocklist | ✅ Fixed |
 | 31 | `sandbox.rs` | High | `process_vm_writev` not blocked by seccomp, allowing sibling memory corruption | Added to blocklist | ✅ Fixed |
-| 214 | `lib.rs:97-274` | `shrink` | `load_policy_config` is 177 lines of trim→filter→collect for 8 list fields. | `parse_list()` helper; 5 list fields collapsed to 1-liners. | ✅ Fixed |
-| 218 | `Cargo.toml:7` | `shrink` | `tokio` with `features = ["full"]` pulls in 30+ features. | `["rt", "rt-multi-thread", "macros"]` — 3 features instead of 30+. | ✅ Fixed |
-| 219 | `scanning.rs:76-95` | `shrink` | `compare_version_strings` repeats the same Ok/Err/Err/Ok match on both branches. | `parse_and_cmp::<T>` generic helper unifies both arms. | ✅ Fixed |
-| 220 | `scanning.rs:1009-1013` | `yagni` | `burst_triggered` has one caller (`burst_policy_warning`). | Inlined `match` at caller; tests updated to use `burst_policy_warning`. | ✅ Fixed |
-| 221 | `scanning.rs:1325-1343, 1400-1415, 1440-1473` | `shrink` | Three near-identical "CRITICAL WARNING: Behavioral anomaly flagged" blocks. | `fn warn_and_block(...)` saves ~50 lines; all 3 + artifact block consolidated. | ✅ Fixed |
-| 197 | `parsing.rs:648-714` | `shrink` | `parse_package_details` has 5-layer nested if/else per manager. | `match` with guards replaces 5-layer if/else chain. | ✅ Fixed |
-| 201 | `sandbox.rs:662-669` | `yagni` | `docker_seccomp_profile_arg` wraps one format call. | Inline `format!("seccomp={}", path?)` at call site. | ✅ Fixed |
-| 202 | `scanning.rs:1383-1391` | `shrink` | 8-line loop+flatten over two `Option<String>` refs to print warning. | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. | ✅ Fixed |
-| 204 | `scanning.rs` / `parsing.rs` / `sandbox.rs` | `shrink` | 14× `Vec::new()` + push-loop that could be iterator adaptors (`.filter_map().collect()`, `.partition()`, `.filter().take().collect()`, `.map().collect()`). Most clear-cut: `parse_requirements_packages_from_content` (`parsing.rs:321`, 5 lines → 1), `select_age_eligible_baselines` (`scanning.rs:1166`, 11 lines → 3 with `.filter().take()`), and 5 allowlist-split functions that could use `.partition()` (e.g. `filter_allowlisted_new_connections` at `scanning.rs:261`, 26 lines → 6). The double-collect to reverse stdout tail lines (`sandbox.rs:345`, `.collect::<Vec<_>>().into_iter().rev().collect()`) is a standalone allocation. | Convert to iterator adaptors. | ✅ Fixed |
-| 41 | `.github/workflows/ci.yml` | `audit-trail` | Migrated to Won't Fix as **182** (Third-party actions not SHA-pinned) | See `WONT_FIX_FINDINGS.md` | ✅ Migrated |
+| 181 | `lib.rs:97-274` | `shrink` | `load_policy_config` is 177 lines of trim→filter→collect for 8 list fields. | `parse_list()` helper; 5 list fields collapsed to 1-liners. | ✅ Fixed |
+| 182 | `Cargo.toml:7` | `shrink` | `tokio` with `features = ["full"]` pulls in 30+ features. | `["rt", "rt-multi-thread", "macros"]` — 3 features instead of 30+. | ✅ Fixed |
+| 183 | `scanning.rs:76-95` | `shrink` | `compare_version_strings` repeats the same Ok/Err/Err/Ok match on both branches. | `parse_and_cmp::<T>` generic helper unifies both arms. | ✅ Fixed |
+| 184 | `scanning.rs:1009-1013` | `yagni` | `burst_triggered` has one caller (`burst_policy_warning`). | Inlined `match` at caller; tests updated to use `burst_policy_warning`. | ✅ Fixed |
+| 185 | `scanning.rs:1325-1343, 1400-1415, 1440-1473` | `shrink` | Three near-identical "CRITICAL WARNING: Behavioral anomaly flagged" blocks. | `fn warn_and_block(...)` saves ~50 lines; all 3 + artifact block consolidated. | ✅ Fixed |
+| 186 | `parsing.rs:648-714` | `shrink` | `parse_package_details` has 5-layer nested if/else per manager. | `match` with guards replaces 5-layer if/else chain. | ✅ Fixed |
+| 187 | `sandbox.rs:662-669` | `yagni` | `docker_seccomp_profile_arg` wraps one format call. | Inline `format!("seccomp={}", path?)` at call site. | ✅ Fixed |
+| 188 | `scanning.rs:1383-1391` | `shrink` | 8-line loop+flatten over two `Option<String>` refs to print warning. | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. | ✅ Fixed |
+| 189 | `scanning.rs` / `parsing.rs` / `sandbox.rs` | `shrink` | 14× `Vec::new()` + push-loop that could be iterator adaptors (`.filter_map().collect()`, `.partition()`, `.filter().take().collect()`, `.map().collect()`). Most clear-cut: `parse_requirements_packages_from_content` (`parsing.rs:321`, 5 lines → 1), `select_age_eligible_baselines` (`scanning.rs:1166`, 11 lines → 3 with `.filter().take()`), and 5 allowlist-split functions that could use `.partition()` (e.g. `filter_allowlisted_new_connections` at `scanning.rs:261`, 26 lines → 6). The double-collect to reverse stdout tail lines (`sandbox.rs:345`, `.collect::<Vec<_>>().into_iter().rev().collect()`) is a standalone allocation. | Convert to iterator adaptors. | ✅ Fixed |
+| 41 | `.github/workflows/ci.yml` | `audit-trail` | Migrated to Won't Fix as **216** (Third-party actions not SHA-pinned) | See `WONT_FIX_FINDINGS.md` | ✅ Migrated |
 | 71 | `docs/FIXED_FINDINGS.md` | ``documentation`` | Drops cross-finding chain documentation from original file | Restore architectural context | ✅ Fixed |
 | 73 | `docs/common_prompts.md` | ``formatting`` | Missing trailing newline | Append newline | ✅ Fixed |
 | 83 | `.github/workflows/ci.yml` | High | `graphify` runs from PR workspace, allowing arbitrary prompt injection | Regenerate on PR branch + Python `<REDACTED>` tag replacement | ✅ Fixed |
@@ -115,9 +115,9 @@
 | 166 | `.githooks/pre-commit`:25 | Low | `sudo apt-get` in pre-commit hook without user warning | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
 | 167 | `.githooks/pre-commit`:29 | Low | `go install` without Go prerequisite check | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
 | 168 | `ARCHITECTURE.md`:116 | Medium | "Context Contradiction" accepted risk understates AI tampering detectability gap | Updated ARCHITECTURE.md | ✅ Fixed |
-| 222 | `ARCHITECTURE.md`:116 | Medium | `_DETAILED.md` excluded from context contradiction | Added to exclusions | ✅ Fixed |
-| 223 | `ARCHITECTURE.md`:120 | Low | `process_vm_writev` claim overstates memory protection | Clarified open vectors | ✅ Fixed |
-| 224 | `FIXED_FINDINGS.md` | Low | New fixed findings reference stale pre-commit line numbers | Removed bare line numbers for legacy code | ✅ Fixed |
+| 174 | `ARCHITECTURE.md`:116 | Medium | `_DETAILED.md` excluded from context contradiction | Added to exclusions | ✅ Fixed |
+| 175 | `ARCHITECTURE.md`:120 | Low | `process_vm_writev` claim overstates memory protection | Clarified open vectors | ✅ Fixed |
+| 176 | `FIXED_FINDINGS.md` | Low | New fixed findings reference stale pre-commit line numbers | Removed bare line numbers for legacy code | ✅ Fixed |
 
 
 
@@ -232,7 +232,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 **Fix direction:** Normalize `pins` keys and the rewrite lookup to use the same canonical (extras-stripped) name, re-emitting the full spec with extras when building the pinned argument.
 
-**✅ Fix status — FIXED via canonical keying (coordinated with #6).** Because #6 strips extras at parse time, `pins` is now keyed by `requests`. The rewrite looks up with `strip_pep508_extras(arg)` and re-emits `arg==version` (full spec with extras intact): `requests[security]==2.31.0`. (`parsing.rs:583`; test `pins_extras_spec_using_canonical_key_and_preserves_extras`.)
+**✅ Fix status — FIXED via canonical keying (coordinated with 6).** Because 6 strips extras at parse time, `pins` is now keyed by `requests`. The rewrite looks up with `strip_pep508_extras(arg)` and re-emits `arg==version` (full spec with extras intact): `requests[security]==2.31.0`. (`parsing.rs:583`; test `pins_extras_spec_using_canonical_key_and_preserves_extras`.)
 
 ---
 
@@ -387,15 +387,15 @@ The code read `rdlen` from `raw[offset + 6]` and `raw[offset + 7]` — which are
 
 ### Round 1 — 2026-06-09
 
-Initial static review of `sandbox.rs`, `scanning.rs`, `parsing.rs`, `lib.rs`. Produced findings #1–8.
+Initial static review of `sandbox.rs`, `scanning.rs`, `parsing.rs`, `lib.rs`. Produced findings 1–8.
 
-**Verification (against HEAD `7a6d073`):** All 8 findings confirmed accurate. Caveat on #6: the downstream outcome of zero baselines is a silent skip-and-allow for unexempted packages (not always a false-positive block as originally stated — arguably worse). Findings #1 and #4 are one bug expressed as root cause + effect.
+**Verification (against HEAD `7a6d073`):** All 8 findings confirmed accurate. Caveat on 6: the downstream outcome of zero baselines is a silent skip-and-allow for unexempted packages (not always a false-positive block as originally stated — arguably worse). Findings 1 and 4 are one bug expressed as root cause + effect.
 
 ### Round 1 fixes — 2026-06-09
 
 All 8 findings fixed with co-located regression coverage. See individual fix notes above.
 
-**Follow-on environment fix (surfaced by #1/#4):** Once #1 made tracing failures fail closed, real runs began blocking with `strace: ptrace(PTRACE_SEIZE): Operation not permitted`. Root cause: the sandbox container ran without `CAP_SYS_PTRACE`. Because strace drops the install to the unprivileged `gyrseek` user (`strace -u`), cross-UID attach requires this capability, which Docker does not grant by default. The old code hid this by treating empty traces as clean. Fixed by adding `--cap-add SYS_PTRACE` to the container run args (`sandbox.rs:376–377`; test `docker_args_grant_sys_ptrace_capability`). The capability is scoped to the container's PID namespace and cannot trace host processes.
+**Follow-on environment fix (surfaced by 1/4):** Once 1 made tracing failures fail closed, real runs began blocking with `strace: ptrace(PTRACE_SEIZE): Operation not permitted`. Root cause: the sandbox container ran without `CAP_SYS_PTRACE`. Because strace drops the install to the unprivileged `gyrseek` user (`strace -u`), cross-UID attach requires this capability, which Docker does not grant by default. The old code hid this by treating empty traces as clean. Fixed by adding `--cap-add SYS_PTRACE` to the container run args (`sandbox.rs:376–377`; test `docker_args_grant_sys_ptrace_capability`). The capability is scoped to the container's PID namespace and cannot trace host processes.
 
 ### Round 1 runtime verification — 2026-06-10, `GYRSEEK_SANDBOX=docker`
 
@@ -415,7 +415,7 @@ All 8 fixes independently verified against the built binary. Key observations:
 
 ### Round 2 — 2026-06-10
 
-Review of `Fixing-findings` branch (test inlining, visibility reduction, coverage-gap tests, `is_non_registry_npm_spec` CLI fix, `uv lock -P` idx fix). Produced findings #10–14.
+Review of `Fixing-findings` branch (test inlining, visibility reduction, coverage-gap tests, `is_non_registry_npm_spec` CLI fix, `uv lock -P` idx fix). Produced findings 10–14.
 
 ### Round 3 — 2026-06-11 — external LLM (ChatGPT) Rust-idiom review, assessed
 
@@ -425,8 +425,8 @@ An external "is this idiomatic Rust?" review was run (by ChatGPT) and the verdic
 
 - *"Likely no trait abstraction for sandbox/scanner."* False. `src/sandbox.rs:11` defines `trait SandboxRunner` with a `trace_install_matrix` default method; `build_runner_from_env` returns `Box<dyn SandboxRunner>` and scan fns take `&dyn SandboxRunner` — exactly the mockable/swappable abstraction it asked for. The knowledge-graph build (2026-06-11) independently lists every `implements` edge: `DockerRunner`, `HostRunner`, `MicroVmRunner` → `SandboxRunner` (production) plus `NoopRunner` and `MockRunner` → `SandboxRunner` (test doubles). Five implementors and a dyn-dispatch boundary — the codebase is already doing the mocking ChatGPT proposed as a future benefit.
 - *"Heavy `unwrap()`, crashes on failure."* Misleading. Of 23 `unwrap()`s, every non-test one is on a compile-time-constant regex inside a `OnceLock` initializer (idiomatic) or guarded (`package.unwrap()` at `lib.rs:1238` sits immediately after an `is_none()` early-return). The rest are in `#[cfg(test)]`. The real strategy is `Result<_, String>` propagated to `run()`, which prints + `process::exit`.
-- *"Fail closed, not panic" presented as a missing improvement.* The code already fails closed everywhere (unknown manager, empty package set, sandbox init failure, blocked scan, un-spawnable host command) — it is the dominant design principle, see this document and findings #1, #8, #9.
-- *"`forward_args` loses observability / returns no structured result."* It deliberately propagates the host manager's exit code (`lib.rs:626–628`, finding #8) — the opposite of the careless side-effect described.
+- *"Fail closed, not panic" presented as a missing improvement.* The code already fails closed everywhere (unknown manager, empty package set, sandbox init failure, blocked scan, un-spawnable host command) — it is the dominant design principle, see this document and findings 1, 8, 9.
+- *"`forward_args` loses observability / returns no structured result."* It deliberately propagates the host manager's exit code (`lib.rs:626–628`, finding 8) — the opposite of the careless side-effect described.
 
 **Wrong about Rust idiom for *this* domain (generic rules misapplied to a transparent passthrough wrapper):**
 
@@ -485,7 +485,7 @@ All 259 tests pass (244 lib + 15 integration); clippy and fmt clean. See Finding
 
 ### Round 7 — 2026-06-16 — External audit
 
-External static review of `sandbox.rs` and `scanning.rs` for remaining sandbox-escaping, bypass, and performance gaps. Produced findings #20–24.
+External static review of `sandbox.rs` and `scanning.rs` for remaining sandbox-escaping, bypass, and performance gaps. Produced findings 20–24.
 
 - **Finding 20 (Critical)** — Pipe-delimiter injection in artifact scanner. File path not escaped; crafted filename can override `size` and `type` fields, bypassing all artifact checks. **✅ Fixed in Round 8.**
 - **Finding 21 (High)** — Hardcoded 512 MB container memory limit. npm/pnpm native builds (node-gyp, esbuild) routinely OOM-killed.
@@ -495,12 +495,12 @@ External static review of `sandbox.rs` and `scanning.rs` for remaining sandbox-e
 
 ### Round 8 — 2026-06-16 — Architectural & coverage audit + Finding 20 fix
 
-Review of `lib.rs`, `README.md`, and the forwarding pipeline for deferred-execution coverage gaps, supply-chain hardening, and code quality. Produced findings #25–27 and 203. **Finding 20 fixed** — shell script switched to null-byte delimiters (`printf '%s\0...'`) so pipe characters in file paths cannot hijack the parser.
+Review of `lib.rs`, `README.md`, and the forwarding pipeline for deferred-execution coverage gaps, supply-chain hardening, and code quality. Produced findings 25–27 and 203. **Finding 20 fixed** — shell script switched to null-byte delimiters (`printf '%s\0...'`) so pipe characters in file paths cannot hijack the parser.
 
 - **Finding 25 (High)** — Import-time execution (Telnyx T26) not captured. Module-scope code in installed `.py` files fires after sandbox exits. Mitigation: post-install `python -c "import <pkg>"` trigger.
 - **Finding 26 (Medium)** — `Command::new(&self.manager)` uses PATH lookup; `.` or writable dirs in PATH allow relative-path hijacking. Mitigation: resolve to absolute path and validate prefix.
 - **Finding 27 (Low)** — `--config`/`-c` value not validated. A flag-like argument (e.g. `--version`) is swallowed as the config path, producing confusing error or no-op.
-- **C16 (Complexity)** — `bulk_scan!` macro shared across uv/pip/npm/pnpm; a parsing regression in one ecosystem affects all. Mitigation: per-ecosystem typed functions.
+- **180 (Complexity)** — `bulk_scan!` macro shared across uv/pip/npm/pnpm; a parsing regression in one ecosystem affects all. Mitigation: per-ecosystem typed functions.
 
 ---
 
@@ -609,9 +609,9 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 **Summary:** `post_review.yml` used an untrusted artifact (`pr_number.txt`) generated by the PR workflow to determine which Pull Request to post comments to, creating a "Pwn Request" spoofing vulnerability.
 
-**Root cause:** The `workflow_run` event executes in a trusted context with `pull-requests: write` permissions, but it was reading `pr_number.txt` from the untrusted PR artifact. An attacker could modify `ci.yml` in their PR to output a different PR or Issue number to `pr_number.txt` (e.g., `#1`), causing the trusted `post_review.yml` workflow to post arbitrary comments to other users' PRs or critical issues.
+**Root cause:** The `workflow_run` event executes in a trusted context with `pull-requests: write` permissions, but it was reading `pr_number.txt` from the untrusted PR artifact. An attacker could modify `ci.yml` in their PR to output a different PR or Issue number to `pr_number.txt` (e.g., `1`), causing the trusted `post_review.yml` workflow to post arbitrary comments to other users' PRs or critical issues.
 
-**Failure scenario:** An attacker submits a PR that writes `1` to `pr_number.txt` and generates a malicious or defacing review output. The trusted `post_review.yml` downloads this artifact, reads `1`, and posts the defacement comment to Issue #1, bypassing repository restrictions.
+**Failure scenario:** An attacker submits a PR that writes `1` to `pr_number.txt` and generates a malicious or defacing review output. The trusted `post_review.yml` downloads this artifact, reads `1`, and posts the defacement comment to Issue 1, bypassing repository restrictions.
 
 **Fix:** Removed the `pr_number.txt` artifact dependency entirely from both `ci.yml` and `post_review.yml`. `post_review.yml` now securely determines the correct PR number by querying the GitHub API using the cryptographically verified `head_sha` of the triggering workflow run: `gh api repos/${{ github.repository }}/commits/${{ github.event.workflow_run.head_sha }}/pulls`. This maps the trusted SHA directly back to the PR, neutralizing the artifact spoofing vector.
 
@@ -731,7 +731,7 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 **Audit Trail Note:** During architectural review, the team decided to prioritize Developer Experience (DX) and ease of updating over strict cryptographic pinning for established, highly-trusted third-party actions (especially official GitHub actions). Consequently, this finding was reclassified from an active vulnerability to an explicitly accepted risk.
 
-**Resolution:** Finding 41 was closed and migrated to `WONT_FIX_FINDINGS.md` where it is now permanently tracked as **Finding 182**.
+**Resolution:** Finding 41 was closed and migrated to `WONT_FIX_FINDINGS.md` where it is now permanently tracked as **Finding 216**.
 
 ---
 
@@ -1126,7 +1126,7 @@ Consider adding a process- or file-system marker that persists across the sessio
 **Summary:** `sanitize_review.py` properly handled 0-byte input files by writing out a 0-byte output file (triggering the downstream bash guard), but there was no explicit unit test verifying this behavior. A future refactor could introduce a crash on empty input and go unnoticed.
 **Fix:** Added `test_sanitize_empty_input` to explicitly assert that processing a 0-byte file produces a 0-byte output file without raising an exception.
 
-### Finding 165: Regression of panic-unsafe try/finally cleanup in test_cap_ledger.py
+### Finding 170: Regression of panic-unsafe try/finally cleanup in test_cap_ledger.py
 **Severity:** Low
 **Component:** `.github/scripts/test_cap_ledger.py`
 
@@ -1200,7 +1200,7 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 ---
 
-### Finding 222 — Medium | `ARCHITECTURE.md` | ✅ Fixed
+### Finding 174 — Medium | `ARCHITECTURE.md` | ✅ Fixed
 
 **Summary:** `_DETAILED.md` excluded from context contradiction.
 
@@ -1208,7 +1208,7 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 ---
 
-### Finding 223 — Low | `ARCHITECTURE.md` | ✅ Fixed
+### Finding 175 — Low | `ARCHITECTURE.md` | ✅ Fixed
 
 **Summary:** `process_vm_writev` claim overstates memory protection.
 
@@ -1217,7 +1217,7 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 ---
 
-### Finding 224 — Low | `FIXED_FINDINGS.md` | ✅ Fixed
+### Finding 176 — Low | `FIXED_FINDINGS.md` | ✅ Fixed
 
 **Summary:** New fixed findings reference stale pre-commit line numbers.
 

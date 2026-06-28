@@ -7,7 +7,7 @@
 | 1 | `sandbox.rs`:188 | Critical | Empty trace on strace failure passes as clean scan | — | ✅ Fixed |
 | 2 | `scanning.rs`:199 | Critical | PTR-record domain allowlist bypassable by attacker | — | ✅ Fixed |
 | 3 | `scanning.rs`:427 | High | Argv regex truncates at first `]` — corrupts signatures | — | ✅ Fixed |
-| 4 | `sandbox.rs`:307 | High | `\|\| true` suppresses strace failures — root cause of #1 | — | ✅ Fixed |
+| 4 | `sandbox.rs`:307 | High | `\|\| true` suppresses strace failures — root cause of 1 | — | ✅ Fixed |
 | 5 | `parsing.rs`:113 | High | Poetry non-develop local-path packages leak through filter | — | ✅ Fixed |
 | 6 | `parsing.rs`:298 | Medium | PEP 508 extras in package name → PyPI 404 → zero baselines | — | ✅ Fixed |
 | 7 | `parsing.rs`:576 | Medium | Extras key mismatch breaks version pinning in forwarded command | — | ✅ Fixed |
@@ -23,16 +23,16 @@
 | 20 | `sandbox.rs` / `scanning.rs`:559 / 730 | Critical | Pipe delimiter in artifact log — filename injection bypasses all artifact checks | — | ✅ Fixed |
 | 30 | `sandbox.rs` | Critical | `io_uring` syscalls not blocked by seccomp, bypassing strace | Added to blocklist | ✅ Fixed |
 | 31 | `sandbox.rs` | High | `process_vm_writev` not blocked by seccomp, allowing sibling memory corruption | Added to blocklist | ✅ Fixed |
-| 214 | `lib.rs:97-274` | `shrink` | `load_policy_config` is 177 lines of trim→filter→collect for 8 list fields. | `parse_list()` helper; 5 list fields collapsed to 1-liners. | ✅ Fixed |
-| 218 | `Cargo.toml:7` | `shrink` | `tokio` with `features = ["full"]` pulls in 30+ features. | `["rt", "rt-multi-thread", "macros"]` — 3 features instead of 30+. | ✅ Fixed |
-| 219 | `scanning.rs:76-95` | `shrink` | `compare_version_strings` repeats the same Ok/Err/Err/Ok match on both branches. | `parse_and_cmp::<T>` generic helper unifies both arms. | ✅ Fixed |
-| 220 | `scanning.rs:1009-1013` | `yagni` | `burst_triggered` has one caller (`burst_policy_warning`). | Inlined `match` at caller; tests updated to use `burst_policy_warning`. | ✅ Fixed |
-| 221 | `scanning.rs:1325-1343, 1400-1415, 1440-1473` | `shrink` | Three near-identical "CRITICAL WARNING: Behavioral anomaly flagged" blocks. | `fn warn_and_block(...)` saves ~50 lines; all 3 + artifact block consolidated. | ✅ Fixed |
-| 197 | `parsing.rs:648-714` | `shrink` | `parse_package_details` has 5-layer nested if/else per manager. | `match` with guards replaces 5-layer if/else chain. | ✅ Fixed |
-| 201 | `sandbox.rs:662-669` | `yagni` | `docker_seccomp_profile_arg` wraps one format call. | Inline `format!("seccomp={}", path?)` at call site. | ✅ Fixed |
-| 202 | `scanning.rs:1383-1391` | `shrink` | 8-line loop+flatten over two `Option<String>` refs to print warning. | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. | ✅ Fixed |
-| 204 | `scanning.rs` / `parsing.rs` / `sandbox.rs` | `shrink` | 14× `Vec::new()` + push-loop that could be iterator adaptors (`.filter_map().collect()`, `.partition()`, `.filter().take().collect()`, `.map().collect()`). Most clear-cut: `parse_requirements_packages_from_content` (`parsing.rs:321`, 5 lines → 1), `select_age_eligible_baselines` (`scanning.rs:1166`, 11 lines → 3 with `.filter().take()`), and 5 allowlist-split functions that could use `.partition()` (e.g. `filter_allowlisted_new_connections` at `scanning.rs:261`, 26 lines → 6). The double-collect to reverse stdout tail lines (`sandbox.rs:345`, `.collect::<Vec<_>>().into_iter().rev().collect()`) is a standalone allocation. | Convert to iterator adaptors. | ✅ Fixed |
-| 41 | `.github/workflows/ci.yml` | `audit-trail` | Migrated to Won't Fix as **182** (Third-party actions not SHA-pinned) | See `WONT_FIX_FINDINGS.md` | ✅ Migrated |
+| 181 | `lib.rs:97-274` | `shrink` | `load_policy_config` is 177 lines of trim→filter→collect for 8 list fields. | `parse_list()` helper; 5 list fields collapsed to 1-liners. | ✅ Fixed |
+| 182 | `Cargo.toml:7` | `shrink` | `tokio` with `features = ["full"]` pulls in 30+ features. | `["rt", "rt-multi-thread", "macros"]` — 3 features instead of 30+. | ✅ Fixed |
+| 183 | `scanning.rs:76-95` | `shrink` | `compare_version_strings` repeats the same Ok/Err/Err/Ok match on both branches. | `parse_and_cmp::<T>` generic helper unifies both arms. | ✅ Fixed |
+| 184 | `scanning.rs:1009-1013` | `yagni` | `burst_triggered` has one caller (`burst_policy_warning`). | Inlined `match` at caller; tests updated to use `burst_policy_warning`. | ✅ Fixed |
+| 185 | `scanning.rs:1325-1343, 1400-1415, 1440-1473` | `shrink` | Three near-identical "CRITICAL WARNING: Behavioral anomaly flagged" blocks. | `fn warn_and_block(...)` saves ~50 lines; all 3 + artifact block consolidated. | ✅ Fixed |
+| 186 | `parsing.rs:648-714` | `shrink` | `parse_package_details` has 5-layer nested if/else per manager. | `match` with guards replaces 5-layer if/else chain. | ✅ Fixed |
+| 187 | `sandbox.rs:662-669` | `yagni` | `docker_seccomp_profile_arg` wraps one format call. | Inline `format!("seccomp={}", path?)` at call site. | ✅ Fixed |
+| 188 | `scanning.rs:1383-1391` | `shrink` | 8-line loop+flatten over two `Option<String>` refs to print warning. | `if m1.as_deref() == Some(&v_curr) \|\| m2.as_deref() == Some(&v_curr)`, 3 lines. | ✅ Fixed |
+| 189 | `scanning.rs` / `parsing.rs` / `sandbox.rs` | `shrink` | 14× `Vec::new()` + push-loop that could be iterator adaptors (`.filter_map().collect()`, `.partition()`, `.filter().take().collect()`, `.map().collect()`). Most clear-cut: `parse_requirements_packages_from_content` (`parsing.rs:321`, 5 lines → 1), `select_age_eligible_baselines` (`scanning.rs:1166`, 11 lines → 3 with `.filter().take()`), and 5 allowlist-split functions that could use `.partition()` (e.g. `filter_allowlisted_new_connections` at `scanning.rs:261`, 26 lines → 6). The double-collect to reverse stdout tail lines (`sandbox.rs:345`, `.collect::<Vec<_>>().into_iter().rev().collect()`) is a standalone allocation. | Convert to iterator adaptors. | ✅ Fixed |
+| 41 | `.github/workflows/ci.yml` | `audit-trail` | Migrated to Won't Fix as **216** (Third-party actions not SHA-pinned) | See `WONT_FIX_FINDINGS.md` | ✅ Migrated |
 | 71 | `docs/FIXED_FINDINGS.md` | ``documentation`` | Drops cross-finding chain documentation from original file | Restore architectural context | ✅ Fixed |
 | 73 | `docs/common_prompts.md` | ``formatting`` | Missing trailing newline | Append newline | ✅ Fixed |
 | 83 | `.github/workflows/ci.yml` | High | `graphify` runs from PR workspace, allowing arbitrary prompt injection | Regenerate on PR branch + Python `<REDACTED>` tag replacement | ✅ Fixed |
@@ -111,9 +111,9 @@
 | 166 | `.githooks/pre-commit`:25 | Low | `sudo apt-get` in pre-commit hook without user warning | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
 | 167 | `.githooks/pre-commit`:29 | Low | `go install` without Go prerequisite check | Removed auto-install in favor of fail-closed checks | ✅ Fixed |
 | 168 | `ARCHITECTURE.md`:116 | Medium | "Context Contradiction" accepted risk understates AI tampering detectability gap | Updated ARCHITECTURE.md | ✅ Fixed |
-| 222 | `ARCHITECTURE.md`:116 | Medium | `_DETAILED.md` excluded from context contradiction | Added to exclusions | ✅ Fixed |
-| 223 | `ARCHITECTURE.md`:120 | Low | `process_vm_writev` claim overstates memory protection | Clarified open vectors | ✅ Fixed |
-| 224 | `FIXED_FINDINGS.md` | Low | New fixed findings reference stale pre-commit line numbers | Removed bare line numbers for legacy code | ✅ Fixed |
+| 174 | `ARCHITECTURE.md`:116 | Medium | `_DETAILED.md` excluded from context contradiction | Added to exclusions | ✅ Fixed |
+| 175 | `ARCHITECTURE.md`:120 | Low | `process_vm_writev` claim overstates memory protection | Clarified open vectors | ✅ Fixed |
+| 176 | `FIXED_FINDINGS.md` | Low | New fixed findings reference stale pre-commit line numbers | Removed bare line numbers for legacy code | ✅ Fixed |
 
 
 
@@ -122,10 +122,10 @@
 ## Cross-Finding Chains (Architectural Context)
 
 The following chains document how independent bugs created compounded attack surfaces. Preserved here as critical threat modeling context:
-- **Chain 1:** To Do #4 → Starting Code #1 (Missing capability check allowed empty traces to fail open).
-- **Chain 2:** Enforce fail-closed behavior and PEP508 handling #6 → Allow only supported package manager #7 (Unrecognized managers bypassed the sandbox entirely, while malformed package names crashed the parser).
-- **Chain 3:** Add CI pipeline #11 → Route lock commands to scanner and add tests #12 (Lockfile execution lacked sandbox tracing, requiring a new CI pipeline approach to detect regressions).
-- **Chain 4:** Add post-install artifact scan #17 → Add EnvVarGuard and refactor run with bulk_scan #16 → Doco update #18 (Artifact scan introduced locking issues, prompting the RAII EnvVarGuard refactor to ensure panic-safety).
+- **Chain 1:** To Do 4 → Starting Code 1 (Missing capability check allowed empty traces to fail open).
+- **Chain 2:** Enforce fail-closed behavior and PEP508 handling 6 → Allow only supported package manager 7 (Unrecognized managers bypassed the sandbox entirely, while malformed package names crashed the parser).
+- **Chain 3:** Add CI pipeline 11 → Route lock commands to scanner and add tests 12 (Lockfile execution lacked sandbox tracing, requiring a new CI pipeline approach to detect regressions).
+- **Chain 4:** Add post-install artifact scan 17 → Add EnvVarGuard and refactor run with bulk_scan 16 → Doco update 18 (Artifact scan introduced locking issues, prompting the RAII EnvVarGuard refactor to ensure panic-safety).
 
 
 *For detailed root causes, failure scenarios, and review history, see [FIXED_FINDINGS_DETAILED.md](./FIXED_FINDINGS_DETAILED.md).*
