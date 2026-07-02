@@ -424,14 +424,14 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 
 | Key                           | Default       | Purpose                                                                                                                                                                                                                                                        |
 | ----------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ip_allowlist`                | empty         | IPs to ignore before anomaly blocking. Canonicalized (equivalent IPv6 forms match); invalid entries are skipped with a warning.                                                                                                                                |
-| `domain_allowlist`            | empty         | Domains to ignore. Lowercased, trailing `.` stripped. Subdomains match parents (`cdn.example.com` matches `example.com`). Only **forward-confirmed** PTR hostnames (FCrDNS) are matched, so a spoofed reverse-DNS record cannot bypass the allowlist.          |
+| `ip_allowlist`                | empty         | IPs to ignore before anomaly blocking. Supports **global** entries (`- "1.2.3.4"`) and **per-package** entries (`- pkg: ["5.6.7.8"]`) in the same list. Effective set = global ∪ per-package; per-package entries never reduce global protection. Canonicalized (equivalent IPv6 forms match); invalid entries are skipped with a warning. |
+| `domain_allowlist`            | empty         | Domains to ignore. Same semantics and syntax: effective set = global ∪ per-package (see `ip_allowlist`). Lowercased, trailing `.` stripped. Subdomains match parents (`cdn.example.com` matches `example.com`). Only **forward-confirmed** PTR hostnames (FCrDNS) are matched, so a spoofed reverse-DNS record cannot bypass the allowlist. |
 | `artifact_allowlist`          | empty         | Artifact findings to allow **per package** (map of package name to list of allowed artifacts; exact `type\|path\|details` or prefix `type\|path`). New artifacts not in baselines and not allowlisted fail closed. Example: `binary\|/work/bin/tool`.               |
 | `git_clone_allowlist`         | empty         | Git clone targets to allow **per package** when new install-time clone behavior appears (case-insensitive exact URL match).                                                                                                                                                    |
 | `sensitive_file_access_allowlist` | empty         | Sensitive file reads to ignore **per package** (map of package name to list of allowed paths). Supports suffix matching via `*` prefix. E.g. `*.env` matches `/work/.env`. |
 | `baseline_overrides`          | none          | Pin baseline versions **per package** via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines.                                                                                                                                       |
 | `baseline_count`              | `2`           | How many historical baselines to compare against.                                                                                                                                                                                                              |
-| `min_baseline_age_hours`      | `72`          | **Per-package** minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default. Values below 24h are silently clamped to the 24h security floor.                                                  |
+| `min_baseline_age_hours`      | `72`          | **Per-package** minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default. Values below 24h are clamped to the 24h security floor (with a warning).                                       |
 | `new_package_exemptions`      | none          | Map of package names to their specifically vetted version (e.g. `requests: "1.0.0"`). Exempts the pinned version when fewer than 2 eligible baselines exist. Helps prevent exemption-list rot since newer versions naturally ignore the pinned exemption. |
 | `internal_package_exemptions` | none          | Skip specific packages **entirely** — no registry history fetch, no sandbox install, no diff. For first-party / internal packages served from a private index (e.g. Nexus) that `gyrseek`'s public-registry lookups can't resolve, so scanning only yields noise. The package is forwarded unscanned at its requested version.            |
 | `minimum_release_age_package` | off           | Minimum release age in **days**. When set, runs before burst/anomaly checks and fails closed if the current release is younger.                                                                                                                                |
@@ -443,11 +443,15 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 
 ```yaml
 ip_allowlist:
-  - 151.101.0.223
+  - 151.101.0.223        # global — applies to all packages
   - 151.101.64.223
+  - my-private-pkg:      # per-package — only applies to my-private-pkg
+    - 10.0.0.1
 domain_allowlist:
-  - pypi.org
+  - pypi.org             # global
   - files.pythonhosted.org
+  - boto3:               # per-package — only applies to boto3
+    - s3.amazonaws.com
 git_clone_allowlist:
   evil-pkg:
     - https://github.com/acme/repo.git

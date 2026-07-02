@@ -14,8 +14,10 @@ use crate::sandbox::SandboxRunner;
 /// into the scanner so call sites don't have to thread a dozen positional args.
 #[derive(Clone, Debug)]
 pub(crate) struct PolicyConfig {
-    pub ip_allowlist: HashSet<String>,
-    pub domain_allowlist: HashSet<String>,
+    /// Global entries live under key `"*"`; per-package entries under the package name.
+    /// Effective allowlist for a scan = `"*"` entries ∪ per-package entries.
+    pub ip_allowlist: HashMap<String, HashSet<String>>,
+    pub domain_allowlist: HashMap<String, HashSet<String>>,
     pub git_clone_allowlist: HashMap<String, HashSet<String>>,
     pub baseline_overrides: HashMap<String, (Option<String>, Option<String>)>,
     pub baseline_count: usize,
@@ -45,8 +47,8 @@ pub(crate) struct PolicyConfig {
 impl Default for PolicyConfig {
     fn default() -> Self {
         Self {
-            ip_allowlist: HashSet::new(),
-            domain_allowlist: HashSet::new(),
+            ip_allowlist: HashMap::new(),
+            domain_allowlist: HashMap::new(),
             git_clone_allowlist: HashMap::new(),
             baseline_overrides: HashMap::new(),
             baseline_count: 2,
@@ -265,21 +267,23 @@ where
 }
 
 pub(crate) fn filter_allowlisted_new_connections(
+    package_name: &str,
     new_connections: Vec<String>,
-    ip_allowlist: &HashSet<String>,
+    ip_allowlist: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
-    let canonical_allowlist: HashSet<String> = ip_allowlist
+    let empty = HashSet::new();
+    let canonical_allowlist: HashSet<&str> = ip_allowlist
+        .get("*")
+        .unwrap_or(&empty)
         .iter()
-        .filter_map(|ip| ip.parse::<IpAddr>().ok().map(|_| normalize_ip_string(ip)))
+        .chain(ip_allowlist.get(package_name).unwrap_or(&empty).iter())
+        .map(|s| s.as_str())
         .collect();
 
     new_connections
         .into_iter()
         .partition(|ip| match ip.parse::<IpAddr>() {
-            Ok(_) => {
-                let canonical = normalize_ip_string(ip);
-                !canonical_allowlist.contains(&canonical)
-            }
+            Ok(_) => !canonical_allowlist.contains(normalize_ip_string(ip).as_str()),
             Err(_) => true,
         })
 }
@@ -290,29 +294,36 @@ fn normalize_domain(domain: &str) -> String {
 
 fn domain_is_allowlisted(domain: &str, domain_allowlist: &HashSet<String>) -> bool {
     let normalized = normalize_domain(domain);
-    for allowed in domain_allowlist {
-        let allowed = normalize_domain(allowed);
-        if normalized == allowed || normalized.ends_with(&format!(".{}", allowed)) {
-            return true;
-        }
-    }
-    false
+    domain_allowlist.iter().any(|allowed| {
+        // Entries are pre-normalized at config-load time; no re-allocation needed.
+        normalized == *allowed || normalized.ends_with(&format!(".{}", allowed))
+    })
 }
 
 pub(crate) fn filter_domain_allowlisted_new_connections_with<F>(
+    package_name: &str,
     new_connections: Vec<String>,
-    domain_allowlist: &HashSet<String>,
+    domain_allowlist: &HashMap<String, HashSet<String>>,
     resolver: F,
 ) -> (Vec<String>, Vec<String>)
 where
     F: Fn(&str) -> Option<String>,
 {
+    let empty = HashSet::new();
+    let effective: HashSet<String> = domain_allowlist
+        .get("*")
+        .unwrap_or(&empty)
+        .iter()
+        .chain(domain_allowlist.get(package_name).unwrap_or(&empty).iter())
+        .cloned()
+        .collect();
+
     let mut remaining = Vec::new();
     let mut allowlisted = Vec::new();
 
     for ip in new_connections {
         match resolver(&ip) {
-            Some(domain) if domain_is_allowlisted(&domain, domain_allowlist) => {
+            Some(domain) if domain_is_allowlisted(&domain, &effective) => {
                 allowlisted.push(format!("{} -> {}", ip, domain));
             }
             _ => remaining.push(ip),
@@ -1553,27 +1564,31 @@ fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
     }
     reads
 }
-fn find_new_sensitive_reads(current: &HashSet<String>, baseline: &HashSet<String>) -> Vec<String> {
+fn find_new_items(current: &HashSet<String>, baseline: &HashSet<String>) -> Vec<String> {
     let mut out: Vec<String> = current.difference(baseline).cloned().collect();
     out.sort();
     out
 }
 
+fn find_new_sensitive_reads(current: &HashSet<String>, baseline: &HashSet<String>) -> Vec<String> {
+    find_new_items(current, baseline)
+}
+
 fn filter_allowlisted_sensitive_reads(
-    reads: Vec<String>,
     package_name: &str,
+    reads: Vec<String>,
     allowlist_map: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
     let empty_set = HashSet::new();
-    let allowlist = allowlist_map.get(package_name).unwrap_or(&empty_set);
+    let allowlist: HashSet<&str> = allowlist_map
+        .get(package_name)
+        .unwrap_or(&empty_set)
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
 
     reads.into_iter().partition(|read| {
-        !allowlist.iter().any(|allowed| {
-            let t = allowed.trim();
-            if t == "*" || t == "/" || t == "*/" {
-                println!("⚠️ [gyrseek] Warning: Ignoring overly permissive sensitive file allowlist entry: '{}'", allowed);
-                return false;
-            }
+        !allowlist.iter().copied().any(|allowed| {
             if let Some(stripped) = allowed.strip_prefix('*') {
                 read == stripped || read.ends_with(&format!("/{}", stripped))
             } else {
@@ -1587,9 +1602,7 @@ fn find_new_git_clone_signatures(
     current: &HashSet<String>,
     baseline: &HashSet<String>,
 ) -> Vec<String> {
-    let mut out: Vec<String> = current.difference(baseline).cloned().collect();
-    out.sort();
-    out
+    find_new_items(current, baseline)
 }
 
 /// Signatures present in the current version but absent from every baseline.
@@ -1597,9 +1610,7 @@ fn find_new_process_exec_signatures(
     current: &HashSet<String>,
     baseline: &HashSet<String>,
 ) -> Vec<String> {
-    let mut out: Vec<String> = current.difference(baseline).cloned().collect();
-    out.sort();
-    out
+    find_new_items(current, baseline)
 }
 
 /// Splits process-execution signatures into (blocked, allowlisted). An entry is
@@ -1611,14 +1622,17 @@ fn filter_allowlisted_process_exec_signatures(
     process_exec_allowlist: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
     let empty_set = HashSet::new();
-    let normalized_allowlist = process_exec_allowlist
+    let normalized_allowlist: HashSet<&str> = process_exec_allowlist
         .get(package_name)
-        .unwrap_or(&empty_set);
+        .unwrap_or(&empty_set)
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
 
     signatures.into_iter().partition(|signature| {
         let lower = signature.to_ascii_lowercase();
-        let exe = lower.split('|').next().unwrap_or("").to_string();
-        !normalized_allowlist.contains(&lower) && !normalized_allowlist.contains(&exe)
+        let exe = lower.split('|').next().unwrap_or("");
+        !normalized_allowlist.contains(lower.as_str()) && !normalized_allowlist.contains(exe)
     })
 }
 
@@ -1633,7 +1647,12 @@ fn filter_allowlisted_artifact_findings(
     artifact_allowlist: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
     let empty_set = HashSet::new();
-    let normalized_allowlist = artifact_allowlist.get(package_name).unwrap_or(&empty_set);
+    let normalized_allowlist: HashSet<&str> = artifact_allowlist
+        .get(package_name)
+        .unwrap_or(&empty_set)
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
 
     findings.into_iter().partition(|finding| {
         let prefix = {
@@ -1644,7 +1663,8 @@ fn filter_allowlisted_artifact_findings(
                 finding.clone()
             }
         };
-        !normalized_allowlist.contains(finding) && !normalized_allowlist.contains(&prefix)
+        !normalized_allowlist.contains(finding.as_str())
+            && !normalized_allowlist.contains(prefix.as_str())
     })
 }
 
@@ -1654,7 +1674,12 @@ fn filter_allowlisted_git_clone_signatures(
     git_clone_allowlist: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
     let empty_set = HashSet::new();
-    let normalized_allowlist = git_clone_allowlist.get(package_name).unwrap_or(&empty_set);
+    let normalized_allowlist: HashSet<&str> = git_clone_allowlist
+        .get(package_name)
+        .unwrap_or(&empty_set)
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
 
     signatures.into_iter().partition(|signature| {
         let target = signature
@@ -1664,7 +1689,7 @@ fn filter_allowlisted_git_clone_signatures(
             .trim()
             .to_ascii_lowercase();
 
-        target.is_empty() || !normalized_allowlist.contains(&target)
+        target.is_empty() || !normalized_allowlist.contains(target.as_str())
     })
 }
 
@@ -2188,8 +2213,8 @@ pub(crate) async fn scan_packages_versions(
             find_new_sensitive_reads(&sensitive_curr, &baseline_sensitive_reads);
         let (blocked_sensitive_reads, _allowed_sensitive_reads) =
             filter_allowlisted_sensitive_reads(
-                new_sensitive_reads,
                 &plan.package,
+                new_sensitive_reads,
                 &policy.sensitive_file_access_allowlist,
             );
 
@@ -2304,10 +2329,14 @@ pub(crate) async fn scan_packages_versions(
             &baseline_dns_domains,
             |d| lookup_host(d).ok(),
         );
-        let (new_connections, allowlisted_connections) =
-            filter_allowlisted_new_connections(new_connections, &policy.ip_allowlist);
+        let (new_connections, allowlisted_connections) = filter_allowlisted_new_connections(
+            &plan.package,
+            new_connections,
+            &policy.ip_allowlist,
+        );
         let (new_connections, allowlisted_domain_connections) =
             filter_domain_allowlisted_new_connections_with(
+                &plan.package,
                 new_connections,
                 &policy.domain_allowlist,
                 reverse_dns_domain,
@@ -2612,7 +2641,7 @@ openat(AT_FDCWD, "\x2f\x6f\x70\x74\x2f\x61\x70\x70\x2f\x69\x6e\x64\x65\x78\x2e\x
         allowlist_map.insert("test-pkg".to_string(), allowlist);
 
         let (blocked, allowed) =
-            filter_allowlisted_sensitive_reads(reads, "test-pkg", &allowlist_map);
+            filter_allowlisted_sensitive_reads("test-pkg", reads, &allowlist_map);
 
         assert_eq!(blocked, vec!["/home/user/.aws/credentials".to_string()]);
         assert!(allowed.contains(&"/etc/passwd".to_string()));
@@ -3182,6 +3211,20 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     }
 
     #[test]
+    fn sensitive_reads_allowlist_does_not_leak_across_packages() {
+        let path = "/home/user/.aws/credentials".to_string();
+        let mut allowlist: HashMap<String, HashSet<String>> = HashMap::new();
+        allowlist.insert("aws-sdk".to_string(), [path.clone()].into_iter().collect());
+        let (remaining, allowed) =
+            filter_allowlisted_sensitive_reads("boto3", vec![path.clone()], &allowlist);
+        assert!(
+            allowed.is_empty(),
+            "sensitive_reads allowlist must not leak across packages"
+        );
+        assert_eq!(remaining, vec![path]);
+    }
+
+    #[test]
     fn baseline_count_limits_fetched_baselines_without_overrides() {
         let (out, _) = select_effective_baselines(
             "3.0.0",
@@ -3445,9 +3488,14 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn ip_allowlist_filters_new_ips_before_blocking() {
         let new_connections = vec!["8.8.8.8".to_string(), "1.1.1.1".to_string()];
-        let ip_allowlist: HashSet<String> = ["1.1.1.1"].into_iter().map(String::from).collect();
+        let ip_allowlist: HashMap<String, HashSet<String>> = [(
+            "*".to_string(),
+            ["1.1.1.1"].into_iter().map(String::from).collect(),
+        )]
+        .into_iter()
+        .collect();
         let (mut remaining, mut allowlisted) =
-            filter_allowlisted_new_connections(new_connections, &ip_allowlist);
+            filter_allowlisted_new_connections("pkg", new_connections, &ip_allowlist);
         remaining.sort();
         allowlisted.sort();
         assert_eq!(remaining, vec!["8.8.8.8".to_string()]);
@@ -3457,14 +3505,19 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn domain_allowlist_filters_resolved_domains_before_blocking() {
         let new_connections = vec!["8.8.8.8".to_string(), "5.5.5.5".to_string()];
-        let domain_allowlist: HashSet<String> =
-            ["example.net"].into_iter().map(String::from).collect();
+        let domain_allowlist: HashMap<String, HashSet<String>> = [(
+            "*".to_string(),
+            ["example.net"].into_iter().map(String::from).collect(),
+        )]
+        .into_iter()
+        .collect();
         let resolver = |ip: &str| match ip {
             "8.8.8.8" => Some("cdn.example.net".to_string()),
             "5.5.5.5" => Some("other.net".to_string()),
             _ => None,
         };
         let (mut remaining, mut allowlisted) = filter_domain_allowlisted_new_connections_with(
+            "pkg",
             new_connections,
             &domain_allowlist,
             resolver,
@@ -3478,9 +3531,14 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn domain_allowlist_does_not_filter_when_lookup_fails() {
         let new_connections = vec!["8.8.8.8".to_string()];
-        let domain_allowlist: HashSet<String> =
-            ["example.net"].into_iter().map(String::from).collect();
+        let domain_allowlist: HashMap<String, HashSet<String>> = [(
+            "*".to_string(),
+            ["example.net"].into_iter().map(String::from).collect(),
+        )]
+        .into_iter()
+        .collect();
         let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(
+            "pkg",
             new_connections,
             &domain_allowlist,
             |_| None,
@@ -3491,11 +3549,19 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[test]
     fn domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot() {
+        // Entries are normalized at config-load time; the map must hold canonical
+        // lowercase, trimmed, no-trailing-dot forms. domain_is_allowlisted compares
+        // against these stored canonical forms directly (no re-allocation).
         let new_connections = vec!["8.8.8.8".to_string()];
-        let domain_allowlist: HashSet<String> =
-            [" Example.NET. "].into_iter().map(String::from).collect();
+        let domain_allowlist: HashMap<String, HashSet<String>> = [(
+            "*".to_string(),
+            ["example.net"].into_iter().map(String::from).collect(),
+        )]
+        .into_iter()
+        .collect();
         let resolver = |_ip: &str| Some("CDN.Example.Net.".to_string());
         let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(
+            "pkg",
             new_connections,
             &domain_allowlist,
             resolver,
@@ -3877,20 +3943,30 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
         assert_eq!(sorted, vec!["5.5.5.5".to_string(), "8.8.8.8".to_string()]);
 
         // Stage 2: IP allowlist removes 8.8.8.8
-        let ip_allowlist: HashSet<String> = ["8.8.8.8"].into_iter().map(String::from).collect();
+        let ip_allowlist: HashMap<String, HashSet<String>> = [(
+            "*".to_string(),
+            ["8.8.8.8"].into_iter().map(String::from).collect(),
+        )]
+        .into_iter()
+        .collect();
         let (new_connections, allowlisted_ips) =
-            filter_allowlisted_new_connections(sorted, &ip_allowlist);
+            filter_allowlisted_new_connections("pkg", sorted, &ip_allowlist);
         assert_eq!(allowlisted_ips, vec!["8.8.8.8".to_string()]);
         assert_eq!(new_connections, vec!["5.5.5.5".to_string()]);
 
         // Stage 3: Domain allowlist catches 5.5.5.5 -> evil.example.com
-        let domain_allowlist: HashSet<String> =
-            ["evil.example.com"].into_iter().map(String::from).collect();
+        let domain_allowlist: HashMap<String, HashSet<String>> = [(
+            "*".to_string(),
+            ["evil.example.com"].into_iter().map(String::from).collect(),
+        )]
+        .into_iter()
+        .collect();
         let resolver2 = |ip: &str| match ip {
             "5.5.5.5" => Some("evil.example.com".to_string()),
             _ => None,
         };
         let (new_connections, allowlisted_domains) = filter_domain_allowlisted_new_connections_with(
+            "pkg",
             new_connections,
             &domain_allowlist,
             resolver2,
@@ -3976,12 +4052,17 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     #[test]
     fn ip_allowlist_matches_equivalent_ipv6_representations() {
         let new_connections = vec!["2001:0db8:0000:0000:0000:ff00:0042:8329".to_string()];
-        let ip_allowlist: HashSet<String> = ["2001:db8::ff00:42:8329"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let ip_allowlist: HashMap<String, HashSet<String>> = [(
+            "*".to_string(),
+            ["2001:db8::ff00:42:8329"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        )]
+        .into_iter()
+        .collect();
         let (remaining, allowlisted) =
-            filter_allowlisted_new_connections(new_connections, &ip_allowlist);
+            filter_allowlisted_new_connections("pkg", new_connections, &ip_allowlist);
         assert!(remaining.is_empty());
         assert_eq!(
             allowlisted,
@@ -3993,19 +4074,232 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     fn ip_allowlist_matches_across_ipv4_mapped_and_bare_forms() {
         // A bare-IPv4 allowlist entry must match an IPv4-mapped IPv6 hit...
         let (remaining, allowlisted) = filter_allowlisted_new_connections(
+            "pkg",
             vec!["::ffff:203.0.113.5".to_string()],
-            &["203.0.113.5".to_string()].into_iter().collect(),
+            &[(
+                "*".to_string(),
+                ["203.0.113.5".to_string()].into_iter().collect(),
+            )]
+            .into_iter()
+            .collect(),
         );
         assert!(remaining.is_empty());
         assert_eq!(allowlisted, vec!["::ffff:203.0.113.5".to_string()]);
 
-        // ...and an IPv4-mapped allowlist entry must match a bare-IPv4 hit.
+        // ...and an allowlist entry stored as bare IPv4 (load_policy_config collapses
+        // ::ffff:-prefixed forms at parse time) matches a bare-IPv4 hit.
         let (remaining, allowlisted) = filter_allowlisted_new_connections(
+            "pkg",
             vec!["203.0.113.5".to_string()],
-            &["::ffff:203.0.113.5".to_string()].into_iter().collect(),
+            &[(
+                "*".to_string(),
+                ["203.0.113.5".to_string()].into_iter().collect(),
+            )]
+            .into_iter()
+            .collect(),
         );
         assert!(remaining.is_empty());
         assert_eq!(allowlisted, vec!["203.0.113.5".to_string()]);
+    }
+
+    #[test]
+    fn per_package_ip_allowlist_does_not_leak_to_other_packages() {
+        let ip_allowlist: HashMap<String, HashSet<String>> = [(
+            "requests".to_string(),
+            ["1.2.3.4"].into_iter().map(String::from).collect(),
+        )]
+        .into_iter()
+        .collect();
+        // 1.2.3.4 is in requests' per-package list — allowed for requests
+        let (remaining, allowlisted) = filter_allowlisted_new_connections(
+            "requests",
+            vec!["1.2.3.4".to_string()],
+            &ip_allowlist,
+        );
+        assert!(remaining.is_empty());
+        assert_eq!(allowlisted, vec!["1.2.3.4".to_string()]);
+
+        // Same IP must NOT be allowlisted for a different package
+        let (remaining, allowlisted) =
+            filter_allowlisted_new_connections("boto3", vec!["1.2.3.4".to_string()], &ip_allowlist);
+        assert_eq!(remaining, vec!["1.2.3.4".to_string()]);
+        assert!(allowlisted.is_empty());
+    }
+
+    #[test]
+    fn per_package_domain_allowlist_does_not_leak_to_other_packages() {
+        let domain_allowlist: HashMap<String, HashSet<String>> = [(
+            "boto3".to_string(),
+            ["s3.amazonaws.com"].into_iter().map(String::from).collect(),
+        )]
+        .into_iter()
+        .collect();
+        let resolver = |_ip: &str| Some("s3.amazonaws.com".to_string());
+
+        // Allowed for boto3
+        let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(
+            "boto3",
+            vec!["52.216.0.1".to_string()],
+            &domain_allowlist,
+            resolver,
+        );
+        assert!(remaining.is_empty());
+        assert_eq!(
+            allowlisted,
+            vec!["52.216.0.1 -> s3.amazonaws.com".to_string()]
+        );
+
+        // NOT allowed for requests
+        let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(
+            "requests",
+            vec!["52.216.0.1".to_string()],
+            &domain_allowlist,
+            resolver,
+        );
+        assert_eq!(remaining, vec!["52.216.0.1".to_string()]);
+        assert!(allowlisted.is_empty());
+    }
+
+    #[test]
+    fn global_ip_allowlist_applies_to_all_packages() {
+        let ip_allowlist: HashMap<String, HashSet<String>> = [(
+            "*".to_string(),
+            ["8.8.8.8"].into_iter().map(String::from).collect(),
+        )]
+        .into_iter()
+        .collect();
+        for pkg in &["requests", "boto3", "numpy"] {
+            let (remaining, allowlisted) =
+                filter_allowlisted_new_connections(pkg, vec!["8.8.8.8".to_string()], &ip_allowlist);
+            assert!(
+                remaining.is_empty(),
+                "global entry should allow for {}",
+                pkg
+            );
+            assert_eq!(allowlisted, vec!["8.8.8.8".to_string()]);
+        }
+    }
+
+    #[test]
+    fn mixed_global_and_per_package_ip_allowlist() {
+        // Global: 8.8.8.8; per-package for "requests": 1.2.3.4
+        let ip_allowlist: HashMap<String, HashSet<String>> = [
+            (
+                "*".to_string(),
+                ["8.8.8.8"].into_iter().map(String::from).collect(),
+            ),
+            (
+                "requests".to_string(),
+                ["1.2.3.4"].into_iter().map(String::from).collect(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        // requests: both global and per-package IPs allowed
+        let (remaining, _) = filter_allowlisted_new_connections(
+            "requests",
+            vec![
+                "8.8.8.8".to_string(),
+                "1.2.3.4".to_string(),
+                "5.5.5.5".to_string(),
+            ],
+            &ip_allowlist,
+        );
+        assert_eq!(remaining, vec!["5.5.5.5".to_string()]);
+
+        // boto3: only global IP allowed; per-package 1.2.3.4 is NOT allowed
+        let (remaining, allowlisted) = filter_allowlisted_new_connections(
+            "boto3",
+            vec!["8.8.8.8".to_string(), "1.2.3.4".to_string()],
+            &ip_allowlist,
+        );
+        assert_eq!(remaining, vec!["1.2.3.4".to_string()]);
+        assert_eq!(allowlisted, vec!["8.8.8.8".to_string()]);
+    }
+
+    #[test]
+    fn global_domain_allowlist_applies_to_all_packages() {
+        let domain_allowlist: HashMap<String, HashSet<String>> = [(
+            "*".to_string(),
+            ["files.pythonhosted.org"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        )]
+        .into_iter()
+        .collect();
+        let resolver = |_ip: &str| Some("files.pythonhosted.org".to_string());
+
+        for pkg in &["requests", "boto3", "numpy"] {
+            let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(
+                pkg,
+                vec!["151.101.0.1".to_string()],
+                &domain_allowlist,
+                resolver,
+            );
+            assert!(
+                remaining.is_empty(),
+                "global domain entry should allow for {}",
+                pkg
+            );
+            assert_eq!(
+                allowlisted,
+                vec!["151.101.0.1 -> files.pythonhosted.org".to_string()]
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_global_and_per_package_domain_allowlist() {
+        // Global: files.pythonhosted.org; per-package for "boto3": s3.amazonaws.com
+        let domain_allowlist: HashMap<String, HashSet<String>> = [
+            (
+                "*".to_string(),
+                ["files.pythonhosted.org"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
+            ),
+            (
+                "boto3".to_string(),
+                ["s3.amazonaws.com"].into_iter().map(String::from).collect(),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        // boto3 gets both global and per-package domains; c2.evil.com is still blocked
+        let resolver_boto3 = |ip: &str| match ip {
+            "151.101.0.1" => Some("files.pythonhosted.org".to_string()),
+            "52.216.0.1" => Some("s3.amazonaws.com".to_string()),
+            _ => None,
+        };
+        let (remaining, _) = filter_domain_allowlisted_new_connections_with(
+            "boto3",
+            vec![
+                "151.101.0.1".to_string(),
+                "52.216.0.1".to_string(),
+                "1.2.3.4".to_string(),
+            ],
+            &domain_allowlist,
+            resolver_boto3,
+        );
+        assert_eq!(remaining, vec!["1.2.3.4".to_string()]);
+
+        // requests only gets the global domain; s3.amazonaws.com is NOT allowed
+        let resolver_req = |ip: &str| match ip {
+            "52.216.0.1" => Some("s3.amazonaws.com".to_string()),
+            _ => None,
+        };
+        let (remaining, allowlisted) = filter_domain_allowlisted_new_connections_with(
+            "requests",
+            vec!["52.216.0.1".to_string()],
+            &domain_allowlist,
+            resolver_req,
+        );
+        assert_eq!(remaining, vec!["52.216.0.1".to_string()]);
+        assert!(allowlisted.is_empty());
     }
 
     // ---------------------------------------------------------------------------
@@ -6289,7 +6583,7 @@ read(6, "\x00\x44\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x03\x66\x6f\x6
         allowlist_map.insert("test-pkg".to_string(), allowlist);
 
         let (blocked, allowed) =
-            filter_allowlisted_sensitive_reads(reads, "test-pkg", &allowlist_map);
+            filter_allowlisted_sensitive_reads("test-pkg", reads, &allowlist_map);
 
         // /.env and /path/to/.env should be allowed
         assert!(allowed.contains(&"/.env".to_string()));
