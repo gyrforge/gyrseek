@@ -29,7 +29,7 @@ SHELL_STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -cE '(pre-
 if [ -n "$RUST_STAGED" ]; then
 	echo "Running cargo check, cargo fmt, and just lint on staged Rust files..."
 	cargo check
-	echo "$RUST_STAGED" | xargs -I {} cargo fmt {}
+	cargo fmt
 	just lint
 fi
 

@@ -166,18 +166,21 @@ This validates:
 
 **Original count: 53 tests documented.**
 
-## 11. Expanded Test Coverage (278+ tests total)
+## 11. Expanded Test Coverage (310 tests total)
 
 The codebase has evolved significantly since the initial domain-aware IP diff tests were documented. We now have comprehensive test coverage for all features, enforcing the strict fail-closed safety properties of the scanner.
 
-### `src/scanning.rs` (158 tests)
+### `src/scanning.rs` (165 tests)
 - **Network Anomaly Detection**: 53 tests (documented in detail above).
 - **Behavioral Anomaly Detection**:
   - `process_exec` (15+ tests): Watched-process detection (bun, deno, etc.), `process_exec_allowlist` overrides, exact vs. bare executable matching, and harness-command exclusions (`is_harness_command`).
   - `git_clone` (10+ tests): Install-time git clone behavior diffing, recursive vs. non-recursive, and `git_clone_allowlist`.
-  - `sensitive_files` (15+ tests): Strace log parsing for `open`/`openat`/`symlinkat` attempts on high-risk files (`~/.aws/credentials`, `~/.npmrc`), absolute path resolution from `fdcwd`, and `sensitive_file_access_allowlist` prefix filtering.
-- **Artifact Scanning**: (15+ tests) End-to-end trace artifact extraction, binary classification (ELF/Mach-O), `suspicious_pth`, `unexpected_runtime`, null-byte (` `) delimiter injection prevention, and `artifact_allowlist` unblocking.
-- **Version Ordering & Overrides**: (33+ tests) PEP 440 vs Semver version resolution, `latest` pin resolution, minimum release age, burst threshold windows, config overrides (`baseline_overrides`, `internal_package_exemptions`, `new_package_exemptions`), and strict baseline count enforcement (`scan_fails_closed_when_insufficient_baselines_in_registry` and related edge cases).
+  - `sensitive_files` (15+ tests): Strace log parsing for `open`/`openat`/`symlinkat` attempts on high-risk files (`~/.aws/credentials`, `~/.npmrc`, `.env`), absolute path resolution from `fdcwd`, and `sensitive_file_access_allowlist` prefix filtering.
+- **Artifact Scanning**: (15+ tests) End-to-end trace artifact extraction, binary classification (ELF/Mach-O), `suspicious_pth`, `unexpected_runtime`, null-byte (`\0`) delimiter injection prevention, and `artifact_allowlist` unblocking.
+- **Version Ordering & Overrides**: (40+ tests) PEP 440 vs Semver version resolution, `latest` pin resolution, minimum release age, burst threshold windows, config overrides (`baseline_overrides`, `internal_package_exemptions`, `new_package_exemptions`), and strict baseline count enforcement. This includes:
+  - `check_override_ages`: 5 tests covering the new `(warnings, filtered)` return tuple — `None` overrides input, both overrides too young (double-warning + both filtered), both overrides old enough (both kept), exactly 24h boundary (not warned), and 23h 59m boundary (warned, strict `<` verified).
+  - `force_baseline_ages_respects_hard_minimum_floor`: verifies `HARD_MINIMUM_AGE_HOURS=24` is enforced as a floor even when `min_baseline_age_hours=0` is configured — 20h-old synthetic baselines are rejected.
+  - `new_package_exemption_*`: 7 tests covering mismatch-with-baselines (allows), mismatch-no-baselines (blocks), `tgt_version` no longer compared (bypass prevention), and exemption-matches-with-sufficient-baselines (allowed with advisory).
 
 ### `src/sandbox.rs` (27 tests)
 - **Container Constraints**: `docker_enforces_sandbox_constraints` integration test validating seccomp blocking of `process_vm_writev`.
@@ -188,12 +191,33 @@ The codebase has evolved significantly since the initial domain-aware IP diff te
 - **Exclusion Filters**: Poetry local-directory exclusion, npm non-registry spec (file/link/git) exclusion, editable vs. regular dependencies.
 - **Command Rewriting**: `rewrite_args_with_pinned_versions` ensuring safely-scanned packages are precisely pinned before host execution. PEP 508 extras stripping (`requests[security]`).
 
-### `src/lib.rs` & `tests/*.rs` (46 tests)
+### `src/lib.rs` & `tests/*.rs` (54 tests)
 - **Routing**: `lock_routing_tests`, `pnpm_routing_tests` asserting bare `uv lock`, `poetry lock`, and `pnpm install` correctly reach lockfile vs. package fallback scanners, while commands like `uv venv` passthrough safely.
 - **Process Exit**: `cli_burst_exit_tests` verifying exit code 1 propagation for release burst rules, `forward_fail_closed_tests` proving host command failure propagates perfectly.
-- **Version & Config**: `version_flag_tests` (`--version` short circuit without sandboxing), config deserialization tests.
+- **Version & Config** (12 `new_package_exemptions` tests): Covers both map (`pkg: "ver"`) and deprecated list (`- pkg`) YAML formats via the custom `deserialize_new_package_exemptions` deserializer; explicit empty map (`{}`), null section, whitespace-only values and keys, mixed valid/empty entries, and the deprecation warning path. CLI integration (`new_package_exemptions_map_format_loaded_successfully`, `new_package_exemptions_list_format_emits_deprecation_warning`) exercises the full binary end-to-end.
+- `version_flag_tests`: `--version` short circuit without sandboxing, forwarded command's own `--version` not intercepted.
 
-**Total**: 278 tests. 100% pass.
+**Total**: 310 tests. 100% pass.
+
+## 12. `check_override_ages` — filtered-override return value (5 tests)
+
+Added when the function's return type changed from `Vec<String>` to `(Vec<String>, Option<(Option<String>, Option<String>)>)` to propagate the filtered override set to callers. Tests pin all branches of the new return value.
+
+| # | Test | Scenario | Expected |
+|---|------|----------|----------|
+| 54 | `check_override_ages_warnings` *(updated)* | m1=10h old, m2=48h old, boundary=24h, missing version, both-OK | 1 warning; `filtered=Some((None, Some("1.1.0")))` for mixed; boundary kept; missing→None; ok→Some |
+| 55 | `check_override_ages_none_overrides_returns_none` | `overrides=None` input | `([], None)` — callers distinguish "no overrides" from "all stripped" |
+| 56 | `check_override_ages_both_overrides_too_young` | m1=5h, m2=3h — both under 24h | 2 warnings, `Some((None, None))` |
+| 57 | `check_override_ages_both_overrides_old_enough` | m1=48h, m2=72h — both above 24h | 0 warnings, `Some((Some(v1), Some(v2)))` |
+| 58 | `check_override_ages_23h59m_is_too_young` | 23h 59m → `num_hours()=23 < 24` | 1 warning containing "is only 23 hours old"; `Some((None, None))` |
+
+## 13. `HARD_MINIMUM_AGE_HOURS` floor enforcement (1 test)
+
+Added when the baseline-cutoff calculation was changed to `min_baseline_age_hours.max(HARD_MINIMUM_AGE_HOURS as i64)` in all three code paths (test shortcut, npm, pypi).
+
+| # | Test | Scenario | Expected |
+|---|------|----------|----------|
+| 59 | `force_baseline_ages_respects_hard_minimum_floor` | `GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS=20,20`, `min_baseline_age_hours=0` | Blocked: 20h baselines rejected by 24h floor even when per-pkg limit is 0 |
 
 ## Original DNS Coverage summary
 

@@ -9,7 +9,7 @@ use std::fs;
 use std::net::IpAddr;
 use std::process::Command;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use parsing::{
     parse_npm_install_packages_from_args, parse_pip_install_packages_from_args,
@@ -19,9 +19,39 @@ use parsing::{
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
 use sandbox::{SandboxRunner, build_runner_from_env, list_docker_runtimes};
-use scanning::{PolicyConfig, ScanReport, scan_package_versions, scan_packages_versions};
+use scanning::{
+    HARD_MINIMUM_AGE_HOURS, PolicyConfig, ScanReport, scan_package_versions, scan_packages_versions,
+};
 
 const DEFAULT_CONFIG_PATH: &str = "gyrseek.yaml";
+
+fn deserialize_new_package_exemptions<'de, D>(d: D) -> Result<HashMap<String, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NewPkgExemptions {
+        Map(HashMap<String, String>),
+        #[allow(dead_code)]
+        InvalidMap(HashMap<String, serde_yaml::Value>),
+        #[allow(dead_code)]
+        List(Vec<String>),
+        Null,
+    }
+
+    match NewPkgExemptions::deserialize(d)? {
+        NewPkgExemptions::Map(m) => Ok(m),
+        NewPkgExemptions::InvalidMap(_) => Err(serde::de::Error::custom(
+            "Values in 'new_package_exemptions' must be strings (e.g. 'requests: \"1.0.0\"'). Found a non-string value.",
+        )),
+        NewPkgExemptions::List(v) if v.is_empty() => Ok(HashMap::new()),
+        NewPkgExemptions::List(_) => Err(serde::de::Error::custom(
+            "The 'new_package_exemptions' list format (e.g. '- pkg') is no longer supported. Use the map format: 'pkg: \"<version>\"'.",
+        )),
+        NewPkgExemptions::Null => Ok(HashMap::new()),
+    }
+}
 
 #[derive(Deserialize, Default)]
 struct GyrseekConfig {
@@ -36,9 +66,9 @@ struct GyrseekConfig {
     #[serde(default)]
     baseline_count: Option<usize>,
     #[serde(default)]
-    min_baseline_age_hours: HashMap<String, usize>,
-    #[serde(default)]
-    new_package_exemptions: Vec<String>,
+    min_baseline_age_hours: HashMap<String, i64>,
+    #[serde(default, deserialize_with = "deserialize_new_package_exemptions")]
+    new_package_exemptions: HashMap<String, String>,
     #[serde(default)]
     internal_package_exemptions: Vec<String>,
     #[serde(default)]
@@ -219,21 +249,41 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
     };
 
     let mut min_baseline_age_hours = HashMap::new();
-    for (package, hours) in cfg.min_baseline_age_hours {
+    for (package, mut hours) in cfg.min_baseline_age_hours {
         let package = package.trim().to_string();
-        if package.is_empty() || hours == 0 {
-            if hours == 0 {
-                println!(
-                    "⚠️ [gyrseek] Ignoring invalid min_baseline_age_hours for '{}': 0",
-                    package
-                );
-            }
+        if package.is_empty() {
             continue;
+        }
+        if hours < HARD_MINIMUM_AGE_HOURS {
+            println!(
+                "⚠️ [gyrseek] Warning: min_baseline_age_hours for '{}' is set to {} hours, which is below the hardcoded security floor. Automatically raising it to {} hours.",
+                package, hours, HARD_MINIMUM_AGE_HOURS
+            );
+            hours = HARD_MINIMUM_AGE_HOURS;
         }
         min_baseline_age_hours.insert(package, hours);
     }
 
-    let new_package_exemptions = parse_list(cfg.new_package_exemptions, false);
+    let new_package_exemptions: HashMap<String, String> = cfg
+        .new_package_exemptions
+        .into_iter()
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .filter(|(k, v)| {
+            if k.is_empty() {
+                return false;
+            }
+            if v.is_empty() {
+                println!(
+                    "⚠️ [gyrseek] Warning: new_package_exemption for '{}' has an empty version. \
+                     This exemption will never match and has been removed. \
+                     Specify a version: '{}: \"<version>\"' in your configuration.",
+                    k, k
+                );
+                return false;
+            }
+            true
+        })
+        .collect();
     let internal_package_exemptions = parse_list(cfg.internal_package_exemptions, false);
 
     let release_burst_threshold = match cfg.release_burst_threshold {
@@ -399,20 +449,78 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(
             file,
-            "min_baseline_age_hours:\n  requests: 6\n  lodash: 12\n  badpkg: 0"
+            "min_baseline_age_hours:\n  requests: 36\n  lodash: 48\n  badpkg: 0"
         )
         .expect("config should be written");
 
         let cfg = load(&file);
         assert_eq!(
             cfg.min_baseline_age_hours_by_package.get("requests"),
-            Some(&6)
+            Some(&36)
         );
         assert_eq!(
             cfg.min_baseline_age_hours_by_package.get("lodash"),
-            Some(&12)
+            Some(&48)
         );
-        assert!(!cfg.min_baseline_age_hours_by_package.contains_key("badpkg"));
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("badpkg"),
+            Some(&24)
+        );
+    }
+
+    #[test]
+    fn clamps_min_baseline_age_hours_to_hard_floor() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(
+            file,
+            "min_baseline_age_hours:\n  pkg_zero: 0\n  pkg_below: 23\n  pkg_exact: 24\n  pkg_above: 25\n  pkg_high: 999\n  \"  pkg_whitespace  \": 10"
+        )
+        .expect("config should be written");
+
+        let cfg = load(&file);
+
+        // 0 -> clamped to 24
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_zero"),
+            Some(&24)
+        );
+
+        // 23 -> clamped to 24
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_below"),
+            Some(&24)
+        );
+
+        // 24 -> exactly the floor, remains 24
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_exact"),
+            Some(&24)
+        );
+
+        // 25 -> above floor, remains 25
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_above"),
+            Some(&25)
+        );
+
+        // 999 -> above floor, remains 999
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_high"),
+            Some(&999)
+        );
+
+        // Whitespace trimmed and clamped
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package.get("pkg_whitespace"),
+            Some(&24)
+        );
+        // Belt-and-suspenders: untrimmed form is absent — regression in trimming would
+        // leave "  pkg_whitespace  " in the map and "pkg_whitespace" absent.
+        assert_eq!(
+            cfg.min_baseline_age_hours_by_package
+                .get("  pkg_whitespace  "),
+            None
+        );
     }
 
     #[test]
@@ -420,14 +528,187 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(
             file,
-            "new_package_exemptions:\n  - requests\n  - lodash\n  - '  '"
+            "new_package_exemptions:\n  requests: \"2.30.0\"\n  lodash: \"1.0.0\"\n  '  ': \"1.0.0\""
         )
         .expect("config should be written");
 
         let cfg = load(&file);
-        assert!(cfg.new_package_exemptions.contains("requests"));
-        assert!(cfg.new_package_exemptions.contains("lodash"));
+        assert_eq!(
+            cfg.new_package_exemptions.get("requests").unwrap(),
+            "2.30.0"
+        );
+        assert_eq!(cfg.new_package_exemptions.get("lodash").unwrap(), "1.0.0");
         assert_eq!(cfg.new_package_exemptions.len(), 2);
+    }
+
+    #[test]
+    fn rejects_new_package_exemptions_old_list_format() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions:\n  - requests\n  - lodash")
+            .expect("config should be written");
+
+        let err = load_policy_config(file.path().to_str().expect("path should be utf8"), true)
+            .expect_err("old list format should be rejected");
+        assert!(err.contains("list format") && err.contains("no longer supported"));
+    }
+
+    #[test]
+    fn parses_new_package_exemptions_invalid_map_rejected_with_custom_error() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions:\n  requests: 1.0")
+            .expect("config should be written");
+
+        let err = load_policy_config(file.path().to_str().expect("path should be utf8"), true)
+            .expect_err("invalid map format should be rejected");
+        assert!(err.contains("must be strings") && err.contains("Found a non-string value."));
+    }
+
+    #[test]
+    fn parses_new_package_exemptions_empty_version_removed() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions:\n  badpkg: \"\"")
+            .expect("config should be written");
+
+        let cfg = load(&file);
+        assert!(
+            cfg.new_package_exemptions.is_empty(),
+            "empty version entries are removed with a warning"
+        );
+    }
+
+    #[test]
+    fn parses_new_package_exemptions_mixed_valid_and_empty() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(
+            file,
+            "new_package_exemptions:\n  goodpkg: \"1.0.0\"\n  badpkg: \"\""
+        )
+        .expect("config should be written");
+
+        let cfg = load(&file);
+        assert_eq!(cfg.new_package_exemptions.len(), 1);
+        assert_eq!(cfg.new_package_exemptions.get("goodpkg").unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn new_package_exemptions_whitespace_only_value_removed() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions:\n  badpkg: \"  \"")
+            .expect("config should be written");
+
+        let cfg = load(&file);
+        assert!(
+            cfg.new_package_exemptions.is_empty(),
+            "whitespace-only value after trim should be treated as empty"
+        );
+    }
+
+    #[test]
+    fn new_package_exemptions_empty_key_and_empty_value_removed() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions:\n  '': ''").expect("config should be written");
+
+        let cfg = load(&file);
+        assert!(
+            cfg.new_package_exemptions.is_empty(),
+            "empty key with empty value should be removed"
+        );
+    }
+
+    #[test]
+    fn rejects_new_package_exemptions_list_whitespace_and_empty_entries() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(
+            file,
+            "new_package_exemptions:\n  - '  pkg  '\n  - '  '\n  - ''\n  - other"
+        )
+        .expect("config should be written");
+
+        let err = load_policy_config(file.path().to_str().expect("path should be utf8"), true)
+            .expect_err("list format should be rejected");
+        assert!(err.contains("no longer supported"));
+    }
+
+    #[test]
+    fn rejects_new_package_exemptions_list_only_whitespace_entries() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions:\n  - '  '\n  - '\t'")
+            .expect("config should be written");
+
+        let err = load_policy_config(file.path().to_str().expect("path should be utf8"), true)
+            .expect_err("list format should be rejected");
+        assert!(err.contains("no longer supported"));
+    }
+
+    #[test]
+    fn new_package_exemptions_null_section_is_empty() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions:").expect("config should be written");
+
+        let cfg = load(&file);
+        assert!(
+            cfg.new_package_exemptions.is_empty(),
+            "null/empty new_package_exemptions section should produce empty map"
+        );
+    }
+
+    #[test]
+    fn rejects_new_package_exemptions_list_single_entry() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions:\n  - requests").expect("config should be written");
+
+        let err = load_policy_config(file.path().to_str().expect("path should be utf8"), true)
+            .expect_err("list format should be rejected");
+        assert!(err.contains("no longer supported"));
+    }
+
+    #[test]
+    fn accepts_new_package_exemptions_empty_list_as_no_exemptions() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions: []").expect("config should be written");
+
+        let cfg = load(&file);
+        assert!(
+            cfg.new_package_exemptions.is_empty(),
+            "empty list [] should be accepted as no exemptions"
+        );
+    }
+
+    #[test]
+    fn parses_new_package_exemptions_explicit_empty_map() {
+        // An explicit empty YAML map (`{}`) must deserialise to an empty
+        // HashMap — not an error.  Some users write this when clearing the
+        // section without removing the key entirely.
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions: {{}}").expect("config should be written");
+
+        let cfg = load(&file);
+        assert!(
+            cfg.new_package_exemptions.is_empty(),
+            "explicit empty map should produce an empty exemptions map"
+        );
+    }
+
+    #[test]
+    fn new_package_exemptions_map_key_with_whitespace_is_trimmed() {
+        // Keys with surrounding whitespace must be trimmed so that the lookup
+        // `policy.new_package_exemptions.get("requests")` succeeds — the raw
+        // YAML key is `"  requests  "` here.
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "new_package_exemptions:\n  '  requests  ': \"1.0.0\"")
+            .expect("config should be written");
+
+        let cfg = load(&file);
+        assert_eq!(cfg.new_package_exemptions.len(), 1);
+        assert_eq!(
+            cfg.new_package_exemptions.get("requests"),
+            Some(&"1.0.0".to_string()),
+            "key must be trimmed from '  requests  ' to 'requests'"
+        );
+        assert!(
+            !cfg.new_package_exemptions.contains_key("  requests  "),
+            "untrimmed key must not be present"
+        );
     }
 
     #[test]
@@ -505,7 +786,7 @@ mod config_tests {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(
             file,
-            "baseline_overrides:\n  \"  requests  \":\n    baseline-1: \"2.30.0\"\nmin_baseline_age_hours:\n  \"  requests  \": 6"
+            "baseline_overrides:\n  \"  requests  \":\n    baseline-1: \"2.30.0\"\nmin_baseline_age_hours:\n  \"  requests  \": 36"
         )
         .expect("config should be written");
 
@@ -516,7 +797,7 @@ mod config_tests {
         );
         assert_eq!(
             cfg.min_baseline_age_hours_by_package.get("requests"),
-            Some(&6)
+            Some(&36)
         );
     }
 
@@ -1425,5 +1706,55 @@ mod gyrseek_tests {
         let (pkg, version) = eye.parse_package_details();
         assert_eq!(pkg, None);
         assert_eq!(version, None);
+    }
+
+    #[derive(serde::Deserialize, Debug)]
+    struct DummyExemptionConfig {
+        #[serde(deserialize_with = "crate::deserialize_new_package_exemptions")]
+        new_package_exemptions: std::collections::HashMap<String, String>,
+    }
+
+    #[test]
+    fn test_deserialize_new_package_exemptions_map() {
+        let yaml = "new_package_exemptions:\n  requests: \"1.0.0\"\n  urllib3: \"2.0.0\"";
+        let cfg: DummyExemptionConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.new_package_exemptions.get("requests").unwrap(), "1.0.0");
+        assert_eq!(cfg.new_package_exemptions.get("urllib3").unwrap(), "2.0.0");
+    }
+
+    #[test]
+    fn test_deserialize_new_package_exemptions_invalid_map() {
+        // boolean instead of string
+        let yaml = "new_package_exemptions:\n  requests: true";
+        let err = serde_yaml::from_str::<DummyExemptionConfig>(yaml).unwrap_err();
+        assert!(err.to_string().contains("must be strings"));
+
+        // integer instead of string
+        let yaml2 = "new_package_exemptions:\n  requests: 123";
+        let err2 = serde_yaml::from_str::<DummyExemptionConfig>(yaml2).unwrap_err();
+        assert!(err2.to_string().contains("must be strings"));
+    }
+
+    #[test]
+    fn test_deserialize_new_package_exemptions_list() {
+        // empty list is allowed and yields empty map
+        let yaml_empty = "new_package_exemptions: []";
+        let cfg: DummyExemptionConfig = serde_yaml::from_str(yaml_empty).unwrap();
+        assert!(cfg.new_package_exemptions.is_empty());
+
+        // non-empty list is rejected
+        let yaml_list = "new_package_exemptions:\n  - requests";
+        let err = serde_yaml::from_str::<DummyExemptionConfig>(yaml_list).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("list format (e.g. '- pkg') is no longer supported")
+        );
+    }
+
+    #[test]
+    fn test_deserialize_new_package_exemptions_null() {
+        let yaml = "new_package_exemptions: null";
+        let cfg: DummyExemptionConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.new_package_exemptions.is_empty());
     }
 }

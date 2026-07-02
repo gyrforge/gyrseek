@@ -1,5 +1,7 @@
 # Open Findings - Detailed
 
+*This document contains the detailed root-cause analyses for open findings. For the brief overview, see [OPEN_FINDINGS.md](./OPEN_FINDINGS.md).*
+
 ## Detailed Findings
 
 ### Finding 11 — High | `parsing.rs:468` | ⚠️ Open
@@ -623,17 +625,7 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 69 — Medium | `sandbox.rs` | ⚠️ Open
 
-**Summary:** `env_lock` unsafe pattern in tests misses RAII guard.
-
-**Root cause:** Multiple test functions use `env_lock().lock() + unsafe { set_var }` manually without the `EnvVarGuard` that was introduced in `scanning.rs`.
-
-**Failure scenario:** An assertion panic skips the manual teardown, leaking the environment variable and poisoning subsequent tests.
-
-**Fix direction:** Adopt the `EnvVarGuard` pattern in `sandbox.rs` tests.
-
----
 
 ---
 
@@ -883,3 +875,359 @@ if next.starts_with('-') {
 **Failure scenario:** Modifying the macro to fix an npm-specific issue accidentally breaks pip argument extraction, causing pip scans to fail open or fail closed silently, and tests for pip might not catch the side-effect if not comprehensive.
 
 **Fix direction:** Replace the macro with explicit typed per-ecosystem functions (`bulk_scan_pip`, `bulk_scan_npm`, etc.) to isolate the logic.
+
+---
+
+### Finding 23 — Medium | `sandbox.rs:191` | ⚠️ Open
+
+**Summary:** Host mode selected silently — no stderr warning that sandbox protection is disabled.
+
+**Root cause:** When `GYRSEEK_SANDBOX=host`, the sandbox mode is selected without any visible warning to the operator. A misconfiguration or accidental environment variable inheritance can leave users unprotected without knowing it.
+
+**Failure scenario:** A developer running gyrseek in host mode (e.g. via a CI environment that sets `GYRSEEK_SANDBOX=host`) has no indication that the sandbox is disabled and that a malicious package can execute on the host.
+
+**Fix direction:** Emit a prominent stderr warning when host mode is selected, ideally printing to stderr before any scan begins.
+
+---
+
+### Finding 256 — Low | `scanning.rs:511` | ⚠️ Open
+
+**Summary:** UDP DNS regex only matches `recvfrom`; `recvmsg()` used by glibc ≥2.40, musl, and async Rust resolvers produces no domain→IP mapping.
+
+**Root cause:** `UDP_RE` at line 511 only matches `recvfrom(`. The `recvmsg()` syscall is semantically equivalent for UDP and is used by newer glibc, musl, and async resolver implementations. DNS responses received via `recvmsg()` on a UDP socket are silently skipped, degrading FCrDNS enrichment fallback to plain IP membership for those resolutions.
+
+**Failure scenario:** A package using a resolver that emits `recvmsg()` instead of `recvfrom()` for UDP DNS has its C2 IP caught fail-closed but without domain context, reducing the quality of the anomaly report.
+
+**Fix direction:** Extend `UDP_RE` to match `(?:recvfrom|recvmsg)` on AF_INET/AF_INET6 port-53 sockets, similar to how `READ_RE` handles TCP.
+
+---
+
+### Finding 257 — Low | `scanning.rs:506-566` | ⚠️ Open
+
+**Summary:** DNS interceptor only matches port-53 strace traffic; DoH (port 443) and DoT (port 853) bypass enrichment.
+
+**Root cause:** Both `UDP_RE` and `CONNECT_RE` filter on `sin6?_port=htons(53)`. Packages using DNS-over-HTTPS or DNS-over-TLS connect to port 443 or 853 respectively; those connections are invisible to the DNS interceptor.
+
+**Failure scenario:** A malicious package resolves its C2 domain via DoH. The C2 IP is still caught fail-closed by the network diff, but the domain→IP mapping is absent, so FCrDNS enrichment cannot match the IP to a known-good domain and the warning lacks domain context.
+
+**Fix direction:** Noted architectural scope limitation; DoH/DoT interception would require HTTPS/TLS traffic inspection beyond strace port filtering.
+
+---
+
+### Finding 258 — Low | `scanning.rs:1976-1982` | ⚠️ Open
+
+**Summary:** `insufficient_baselines` error message reports only the count shortfall, not that age-gate filtering may have caused it.
+
+**Root cause:** The message at line 1977 says "Registry does not contain enough historical versions...found N". If `min_baseline_age_hours` filtered out available versions, the user sees the same message as if the package simply has few releases — no indication that raising or removing the age gate would resolve it.
+
+**Failure scenario:** An operator running gyrseek on a package with frequent releases but a high `min_baseline_age_hours` setting sees `insufficient_baselines` with no actionable diagnosis, leading to confusion and unnecessary exemptions.
+
+**Fix direction:** Track how many versions were filtered by the age gate and include that count in the error message.
+
+---
+
+### Finding 262 — Low | `.githooks/pre-commit:30` | ⚠️ Open
+
+**Summary:** Echo message says "on staged Rust files" but `cargo fmt` formats all `.rs` files in the workspace.
+
+**Root cause:** Line 30 prints "Running cargo check, cargo fmt, and just lint on staged Rust files..." but `cargo fmt` at line 32 formats every `.rs` file in the project, not just staged ones. Unstaged formatting changes are silently normalized on commit without the operator being aware.
+
+**Failure scenario:** A developer edits two files, stages one, and commits. The pre-commit hook formats both files but only mentions the staged file in its output. The developer is surprised to find their unstaged file modified.
+
+**Fix direction:** Either change the echo to accurately say "all Rust files" or use `cargo fmt -- $(git diff --cached --name-only | grep '\.rs$')` to limit formatting to staged files.
+
+---
+
+### Finding 263 — Low | `scanning.rs:578` | ⚠️ Open
+
+**Summary:** `exemption_behavior` uses raw `==` to compare version strings; build metadata or non-normalised PEP 440 forms silently fail to match.
+
+**Root cause:** `let is_exempt = exempt_version == v_curr` at line 578 is a byte-for-byte string comparison. PyPI normalises versions before publishing (e.g. `1.0.0+local` → `1.0.0`), so in practice `v_curr` from the registry will already be normalised. However, an operator who manually sets `new_package_exemptions: {pkg: "1.0.0+build1"}` would find their exemption silently ignored.
+
+**Failure scenario:** Operator sets an exemption for a version with build metadata. The exemption never matches, the package continues to fail closed, and no warning explains the mismatch.
+
+**Fix direction:** Normalise both strings before comparison using the same version-parsing logic already present in the codebase (PEP 440 / semver).
+
+---
+
+### Finding 264 — Low | `scanning.rs:1893-1908` | ⚠️ Open
+
+**Summary:** Registry fetch failure (empty `published_at`) has asymmetric override handling between test and production modes that is never exercised by CI.
+
+**Root cause:** Lines 1896-1908: when `published_at.is_empty()`, test mode (any active test env vars) silently trusts the override while production discards it with a warning. The production discard path is the security-relevant behaviour, but CI tests use the test mode path exclusively — the discard path has no test coverage.
+
+**Failure scenario:** A regression that accidentally trusts overrides on registry failure in production would not be caught by the test suite.
+
+**Fix direction:** Add a test that exercises the production discard path by simulating an empty `published_at` without any active test env vars.
+
+---
+
+### Finding 265 — Low | `scanning.rs:1911` | ⚠️ Open
+
+**Summary:** No integration test verifies that a too-young baseline override is dropped and a fetched baseline fills the slot in the `scan_packages_versions` production path.
+
+**Root cause:** `check_override_ages` has thorough unit tests, but the call at line 1911 inside `scan_packages_versions` is exercised only via network-dependent end-to-end tests. No test verifies the full path: override rejected by age gate → falls back to fetched baselines → scan proceeds correctly.
+
+**Failure scenario:** A regression in the age-gate wiring inside `scan_packages_versions` (e.g. discarded overrides accidentally still used) would not be caught by unit tests alone.
+
+**Fix direction:** Add an integration test using `NoopRunner` + mock registry data that sets a too-young override and confirms the fetched baseline is used instead.
+
+---
+
+### Finding 266 — Low | `scanning.rs:601-604` | ⚠️ Open
+
+**Summary:** `num_hours()` floors to whole hours; a version 23h59m old reports "is only 23 hours old" — accurate for rejection but misleading to operators.
+
+**Root cause:** `chrono::Duration::num_hours()` truncates fractional hours. A version published 23 hours and 59 minutes ago correctly fails the 24h floor check, but the warning message says "23 hours old", suggesting it is nearly an hour short when it is actually less than a minute away from passing.
+
+**Failure scenario:** An operator sees "is only 23 hours old" and waits a full hour before retrying, when retrying in one minute would suffice.
+
+**Fix direction:** Use `num_minutes()` and format as `Xh Ym` in the warning, or compute the remaining wait time explicitly.
+
+---
+
+### Finding 269 — High | `parsing.rs:346-348,506-507` | ⚠️ Open
+
+**Summary:** TOCTOU: requirements files and package.json are read eagerly at parse time; the sandbox and forwarded command use the live filesystem.
+
+**Root cause:** `parse_pip_install_packages_from_args` reads `-r` requirement files at parse time; `parse_npm_install_packages_from_args` reads `package.json` at parse time. The sandbox probe and the forwarded install command execute later against the live filesystem. A file swap between parse and install causes the scanned package list to differ from what actually gets installed.
+
+**Failure scenario:** An attacker with write access to the working directory swaps `requirements.txt` after gyrseek reads it but before the forwarded `pip install` runs, causing an unscanned package to be installed.
+
+**Fix direction:** Either snapshot the file contents at parse time and pass them to the sandbox and forwarder, or re-read the files immediately before forwarding and compare against the parsed snapshot, failing closed on any diff.
+
+---
+
+### Finding 270 — Medium | `scanning.rs:1291-1555` | ⚠️ Open
+
+**Summary:** Symlink traversal bypasses sensitive-file-read detection: `open("innocent")` where "innocent" is a symlink to `~/.aws/credentials` is not flagged.
+
+**Root cause:** `extract_sensitive_file_reads` checks the path string as passed to the syscall against `is_sensitive_file_read`. If the package creates a symlink named `innocent` pointing to `~/.aws/credentials` and then opens `innocent`, strace records `open("innocent", ...)`. `is_sensitive_file_read("innocent")` returns false because the string does not match any sensitive pattern; the credential access goes undetected.
+
+**Failure scenario:** A malicious package creates `ln -s ~/.aws/credentials innocent` then reads `innocent`, bypassing the sensitive-file-read detector entirely.
+
+**Fix direction:** Track `symlink`/`symlinkat` syscalls to build a symlink resolution map, then resolve the ultimate target before calling `is_sensitive_file_read`. (Note: `extract_sensitive_file_reads` already parses `symlink`/`symlinkat` syscalls but only records their paths — the resolution step is missing.)
+
+---
+
+### Finding 271 — Medium | `scanning.rs:522-528` | ⚠️ Open
+
+**Summary:** TCP DNS `recvfrom()` blind spot: READ_RE matches `read|recvmsg` only; `recvfrom()` on connected TCP sockets bypasses DNS enrichment.
+
+**Root cause:** `READ_RE` at line 525 is `(?:read|recvmsg)\((\d+),...`. While `recvfrom()` is most common on UDP, it is also valid on a connected TCP socket. Some bespoke or async resolver implementations use `recvfrom()` for both UDP and TCP sockets; TCP DNS responses received this way are not captured.
+
+**Failure scenario:** A resolver using `recvfrom()` on a TCP DNS socket produces no domain→IP mapping, degrading enrichment to plain IP membership (fail-closed but context-free).
+
+**Fix direction:** Extend `READ_RE` to `(?:read|recvmsg|recvfrom)` and handle both the recvmsg `msg_iov` format and the bare-buffer recvfrom format.
+
+---
+
+### Finding 277 — Low | `lib.rs:270` | ⚠️ Open
+
+**Summary:** `new_package_exemptions` key trimming silently overwrites colliding entries when two YAML keys differ only by whitespace.
+
+**Root cause:** Line 270 maps `(k, v)` to `(k.trim().to_string(), v.trim().to_string())`. If the YAML config contains both `pkg` and `pkg  ` (trailing spaces) as keys, both trim to `pkg` and the second silently overwrites the first in the resulting `HashMap` with no warning.
+
+**Failure scenario:** A misconfigured YAML with accidental whitespace-duplicate keys produces a silently truncated exemption map, potentially dropping a vetted version without operator awareness.
+
+**Fix direction:** After trimming, check for collisions and emit a warning if two keys normalise to the same string.
+
+---
+
+### Finding 278 — Low | `sandbox.rs:982-1004` | ⚠️ Open
+
+**Summary:** `SandboxEnvVarGuard::set` does not save/restore the pre-existing env var value; Drop unconditionally removes the var, losing any value set before the guard.
+
+**Root cause:** `SandboxEnvVarGuard::set` (lines 982–987) calls `set_var(key, value)` without first saving the previous value of `key`. `Drop` at line 1002 calls `remove_var(self.key)` unconditionally. If a test or the environment had `key` set before the guard was created, the original value is lost after the guard drops.
+
+**Failure scenario:** A test that relies on a pre-existing env var value (e.g. `GYRSEEK_PY_SCANNER_IMAGE` set in the outer test environment) has that value silently removed after the inner guard drops, causing subsequent assertions in the same test or concurrently running tests to see an absent variable.
+
+**Fix direction:** In `set`, save `std::env::var(key).ok()` before setting; in `Drop`, either restore the saved value or call `remove_var` only if the saved value was `None`.
+
+---
+
+### Finding 281 — Medium | `scanning.rs:241-254` | ⚠️ Open
+
+**Summary:** Domain planting: DNS interceptor fallback checks domain presence in `baseline_domains` but verifies IP presence in the current trace's DNS map, not the baseline's.
+
+**Root cause:** Lines 241–254: when FCrDNS fails, the interceptor iterates `dns_map` (the current trace's domain→IP mapping) looking for a domain that is in `baseline_domains` and whose `dns_ips` contain the current IP. It then does host-side forward resolution to confirm. However, `dns_ips` comes from the current trace — not from any baseline. An attacker whose domain appeared in a single baseline trace (e.g. innocuous telemetry ping in v1.0.0) has that domain in `baseline_domains`. In a later version, the attacker points the domain at a new C2 IP; the sandbox resolves the domain to the C2 IP (populating the current trace's `dns_map`); the interceptor finds domain∈baseline_domains + current dns_map has the IP + host forward resolution confirms it (attacker controls DNS) → the C2 IP is silently discarded as a known CDN edge rotation.
+
+**Failure scenario:** Attacker publishes v1.0.0 with a benign telemetry ping to `telemetry.attacker.com`. In v2.0.0, `telemetry.attacker.com` is pointed at a C2 IP. The new C2 IP is silently treated as a benign CDN rotation and not flagged.
+
+**Fix direction:** Thread the baseline DNS map (domain→Vec<IpAddr>) into `find_new_connections_domain_aware` and check that the current IP was also seen in a baseline response for that domain, not just that the domain was seen.
+
+---
+
+### Finding 282 — Low | `scanning.rs:1878` | ⚠️ Open
+
+**Summary:** `baseline_count: 1` is silently overridden to 2 via `.max(2)` with no user warning; config parser warns on 0 but not 1.
+
+**Root cause:** `let fetch_count = policy.baseline_count.max(2)` at line 1878 silently bumps a configured value of 1 to 2. The config parser at `src/lib.rs:242–249` emits a warning when `baseline_count=0` but passes `baseline_count=1` through unchanged — so an operator who sets `baseline_count: 1` gets 2 baselines fetched with no explanation.
+
+**Failure scenario:** An operator explicitly sets `baseline_count: 1` expecting single-baseline behaviour (e.g. for a package with only one prior version). Gyrseek silently fetches 2, the missing second baseline causes `insufficient_baselines`, and the operator has no diagnostic explaining why.
+
+**Fix direction:** Either warn in the config parser when `baseline_count < 2` (matching the 0 case), or document that the effective minimum is 2 and reject values below it with a clear message.
+
+---
+
+### Finding 283 — Low | `lib.rs:289-298,311-320` | ⚠️ Open
+
+**Summary:** `release_burst_threshold` and `minimum_release_age_package` match blocks contain redundant `None => None` arms.
+
+**Root cause:** Both match blocks have the pattern `Some(v) => Some(v), None => None`, which is semantically identical to `v => v` (or just removing the match entirely and using the value as-is). The `None => None` arm is dead code that adds noise without functionality.
+
+**Failure scenario:** No correctness impact. Maintenance hazard: a future contributor adding another arm may not notice the redundancy and introduce inconsistent handling.
+
+**Fix direction:** Simplify each match to `Some(0) => { warn; None }, v => v` (collapsing `Some(v) => Some(v)` and `None => None` into a single wildcard arm).
+
+---
+
+### Finding 284 — Low | `scanning.rs:596,623` | ⚠️ Open
+
+**Summary:** `filter_override_version` and `check_override_ages` use the fully-qualified `&std::collections::HashMap<...>` despite `HashMap` being imported at line 2.
+
+**Root cause:** `use std::collections::{HashMap, HashSet}` is at line 2. The function signatures at lines 596 and 623 (and 686) use `&std::collections::HashMap<...>` unnecessarily, adding visual noise and inconsistency with all other call sites that use the bare `HashMap`.
+
+**Fix direction:** Replace `std::collections::HashMap` with `HashMap` in those two function signatures.
+
+---
+
+### Finding 285 — Low | `scanning.rs:2000` | ⚠️ Open
+
+**Summary:** `matches!(filtered_overrides, Some((Some(_), _)) | Some((_, Some(_))))` re-derives whether any override survived age-filtering, duplicating logic already implicit in `check_override_ages`'s return value.
+
+**Root cause:** `check_override_ages` returns `(warnings, filtered_overrides)` where `filtered_overrides` is `None` if all overrides were stripped, or `Some((opt1, opt2))` if any survived. The `matches!` guard at line 2000 re-tests the structure of the return value to decide whether to print the "Applying baseline override(s)" message. This is a structural re-derivation of what the return value already communicates.
+
+**Fix direction:** Either add a helper `has_any_override(filtered_overrides)` or extend `check_override_ages` to return a boolean `override_applied` flag, eliminating the structural pattern match at the call site.
+
+---
+
+### Finding 286 — Low | `scanning.rs:684-685` | ⚠️ Open
+
+**Summary:** `GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS` silently drops all entries when any value fails to parse as `i64`.
+
+**Root cause:** Line 685: `ages_str.split(',').filter_map(|s| s.parse().ok()).collect()`. If the env var is set to `abc,def` or `100,oops,72`, all unparseable entries are silently dropped via `.ok()`. The result is an unexpectedly short or empty `ages` vec with no warning, causing the test to produce zero candidates and potentially masking test logic errors.
+
+**Failure scenario:** A developer sets `GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS=100,72,` (trailing comma) expecting 2 baselines. The empty string after the comma is silently dropped — no issue. But `100,72,abc` silently drops `abc` and the test proceeds with only 2 entries, potentially hiding the intent.
+
+**Fix direction:** After collecting, emit a `eprintln!` warning if `ages.len() != ages_str.split(',').count()`, signalling that some entries were malformed.
+
+---
+
+### Finding 287 — Low | `scanning.rs:4249-4257` | ⚠️ Open
+
+**Summary:** `extract_dns_map_ipv6_udp_dns_response` only asserts map and IP count; no concrete IP address verification unlike the IPv4 TCP equivalent.
+
+**Root cause:** Lines 4254–4256 assert `map.len()==1`, `map.get("foo.com")` exists, and `ips.len()==2`. No assertion checks the actual IP values decoded from the hex payload. The IPv4 TCP equivalent at lines 4312–4314 additionally asserts `ip_strs.contains(&"140.248.144.223")` and `ip_strs.contains(&"2a04:4e42:94::223")`.
+
+**Failure scenario:** A parsing bug in the IPv6 UDP path that produces wrong IP addresses (e.g. misparses the AAAA record bytes) would pass all three count assertions undetected.
+
+**Fix direction:** Add concrete IP address assertions matching the hex payload bytes in the test trace, consistent with the IPv4 TCP equivalent.
+
+---
+
+### Finding 288 — Low | `src/lib.rs:48-51` | ⚠️ Open
+
+**Summary:** `new_package_exemptions` list→map format change has no deprecation window; operators upgrading encounter a hard config-parse error with no migration path documented in release notes.
+
+**Root cause:** FIXED_FINDINGS #239 replaced silent list-format acceptance with a hard config-parse error. This is correct security behaviour (the old list format mapped entries to `""` versions, creating a no-op bypass). However, operators upgrading gyrseek with an existing `gyrseek.yaml` using the old `- pkg` list syntax will get an immediate hard parse error on startup with no mention of how to migrate. Release notes have not been updated to call this out.
+
+**Failure scenario:** An operator upgrades gyrseek in CI, their `gyrseek.yaml` uses the old list format, gyrseek refuses to start with a config-parse error, and the CI pipeline breaks with no actionable message beyond the error text.
+
+**Fix direction:** Document the breaking change prominently in the changelog/release notes with the migration instruction: replace `- pkg` list entries with `pkg: "<version>"` map entries.
+
+---
+
+### Finding 289 — Medium | `scanning.rs:6628-6681` | ⚠️ Open
+
+**Summary:** `scan_packages_versions_discards_overrides_when_registry_fails` test makes a real HTTP request to PyPI, failing in offline CI.
+
+**Root cause:** The test sets `GYRSEEK_TEST_LOCK_ONLY=1` but this env var is not listed in `active_test_env_vars()` (which only knows `GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS`, `GYRSEEK_TEST_FORCE_RELEASES_LAST_24H`, `GYRSEEK_TEST_FORCE_CURRENT_RELEASE_AGE_DAYS`, `GYRSEEK_TEST_ECHO_MIN_BASELINE_AGE_HOURS`) and is never read by `fetch_history_with_baselines`. The test comment at line 6654 explicitly states: "fetch_history_with_baselines will attempt to query PyPI for `gyrseek-test-nonexistent-pkg`. It will fail (404), returning empty `published_at`." This is a deliberate network call, not a mocked one.
+
+**Failure scenario:** Running `cargo test` in an offline CI environment (no internet access) causes `fetch_history_with_baselines` to hang or fail with a connection error rather than a 404, causing the test to panic with an unexpected error rather than the expected `insufficient_baselines` outcome.
+
+**Fix direction:** Intercept the registry fetch using the existing test env var mechanism (`GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS=""` or similar) to simulate an empty response without a real network call, or add `GYRSEEK_TEST_EMPTY_REGISTRY` to `active_test_env_vars()` and handle it in `fetch_history_with_baselines`.
+
+---
+
+### Finding 291 — Low | `AGENTS.md:186` | ⚠️ Open
+
+**Summary:** AGENTS.md instructs agents to "keep the summary tables synced across both the main and detailed files" but the detailed files no longer have summary tables.
+
+**Root cause:** The AGENTS.md post-change policy at line 186 says: "Remember to keep the summary tables synced across both the main and detailed files." The summary tables in FIXED_FINDINGS_DETAILED.md and OPEN_FINDINGS_DETAILED.md were removed in a prior PR. The instruction now refers to tables that do not exist, potentially causing agents to attempt to maintain phantom tables or misunderstand the document structure.
+
+**Failure scenario:** An agent following AGENTS.md instructions adds a summary table row to OPEN_FINDINGS_DETAILED.md (which has no such table), creating an inconsistency in the detailed file format.
+
+**Fix direction:** Update AGENTS.md line 186 to remove the reference to summary tables in detailed files, clarifying that only the main `*_FINDINGS.md` files have summary tables.
+
+---
+
+### Finding 292 — Low | `README.md:434` | ⚠️ Open
+
+**Summary:** `min_baseline_age_hours` config table says values below 24h are "silently clamped" but the code emits an explicit warning — not silent.
+
+**Root cause:** README.md line 434 reads: "Values below 24h are silently clamped to the 24h security floor." The code at `src/lib.rs:258-262` emits: `"⚠️ [gyrseek] Warning: min_baseline_age_hours for '{}' is set to {} hours, which is below the hardcoded security floor. Automatically raising it to {} hours."` — a visible `println!` warning. The word "silently" is inaccurate.
+
+**Failure scenario:** An operator reading the README expects no feedback when their value is clamped, and may miss the warning in their logs thinking it is expected behaviour.
+
+**Fix direction:** Change "silently clamped" to "clamped (with a warning)" in the README config table row.
+
+---
+
+### Finding 294 — Medium | `scanning.rs:156-203` | ⚠️ Open
+
+**Summary:** Cloud metadata IP `169.254.169.254` is explicitly exempted from sandbox-local filtering, but the exemption only applies when strace shows a direct `connect()` to that IP. If the container's network path routes through the Docker bridge gateway (`172.17.0.1`), strace shows `connect()` to `172.17.0.1` instead — which is filtered as RFC1918 private — so the credential theft signal is silently lost.
+
+**Root cause:** `is_sandbox_local_ip` (lines 183–204) checks `v4 == CLOUD_METADATA_IPV4` before `v4.is_private()`, correctly exempting the IP when seen directly. But container networking may substitute the gateway address as the observed endpoint in certain Docker network topologies (host-gateway routing, custom networks). In that case strace records `connect()` to `172.17.0.1`, which passes the `is_private()` check and is filtered out.
+
+**Failure scenario:** A malicious package issues `curl http://169.254.169.254/latest/meta-data/iam/security-credentials/` and the container routes via `172.17.0.1`. The strace `connect()` record shows `172.17.0.1:80`. `is_sandbox_local_ip` returns `true`, filtering it as a benign gateway address. The credential theft attempt appears as zero new connections — allowed.
+
+**Fix direction:** Consider also exempting connections to the Docker bridge gateway port 80 from RFC1918 filtering, or add a DNS-layer check to detect `169.254.169.254` lookups regardless of the resolved connect target.
+
+---
+
+### Finding 295 — Low | `scanning.rs:6480-6490` | ⚠️ Open
+
+**Summary:** `filter_override_version` tests only exercise a completely empty `published_at` map; no test exercises the case where the map has entries for other versions but is missing the override version — a distinct code path.
+
+**Root cause:** `filter_override_version_not_found_warns` (lines 6480–6490) passes an empty `HashMap::new()` as `published_at`. The "not found" branch executes because the map is empty. The case where `published_at` has entries for some versions but the override version is specifically absent (key lookup returns `None`) hits the same branch via the same code path, but the test never exercises it with partial data — so a regression that accidentally matches a wrong key would not be caught.
+
+**Failure scenario:** A refactor that changes the lookup key (e.g., trims whitespace or normalises version strings) could cause a partially-populated map lookup to match an unrelated version entry, silently accepting a bad override. The empty-map test would still pass.
+
+**Fix direction:** Add a test case passing a `published_at` map with one or more entries for different version strings, asserting the override version is correctly identified as absent.
+
+---
+
+### Finding 296 — Low | `tests/cli_burst_exit_tests.rs:152` | ⚠️ Open
+
+**Summary:** Test name `exits_with_code_1_and_rejects_versions_newer_than_72_hours_by_default` is semantically ambiguous — "newer than 72 hours" can mean either "published less than 72 hours ago" (correct) or "published more than 72 hours ago" (opposite meaning). The comment in the test clarifies the intent, but the function name alone is misleading.
+
+**Root cause:** The test validates that gyrseek rejects packages whose baselines are younger than the 72-hour default `min_baseline_age_hours` gate. The phrasing "newer than 72 hours" means "less than 72 hours old" in natural English when talking about freshness, but "newer than N hours" is ambiguous with "older than N hours" in a temporal context.
+
+**Failure scenario:** A developer reading only the test name may interpret it as testing the opposite gate direction, causing confusion during debugging or when writing related tests.
+
+**Fix direction:** Rename to `exits_with_code_1_when_baselines_younger_than_72h_default_age_gate` or similar to make the direction unambiguous.
+
+---
+
+### Finding 298 — Low | `AGENTS.md:128` | ⚠️ Open
+
+**Summary:** AGENTS.md claims the `min_baseline_age_hours` security floor is "enforced in all three code paths of `fetch_history_with_baselines`" but the floor enforcement lives entirely at config-parse time in `src/lib.rs:257-262`. The value arrives at `fetch_history_with_baselines` already clamped; the function has no inline `HARD_MINIMUM_AGE_HOURS` check.
+
+**Root cause:** FIXED #247 centralized floor enforcement to config-parse time (correct change), but the AGENTS.md documentation was not updated to reflect the new enforcement location. The phrase "all three code paths of `fetch_history_with_baselines`" is stale and points maintainers to the wrong place when reasoning about where the guarantee lives.
+
+**Failure scenario:** A maintainer searching for the floor enforcement to audit or extend it looks inside `fetch_history_with_baselines` (as AGENTS.md instructs), finds no floor check, and either concludes the enforcement is missing or adds a redundant inline check — diverging from the actual enforcement point at lib.rs.
+
+**Fix direction:** Update AGENTS.md line 128 to say the floor is enforced at config-parse time in `src/lib.rs:257-262`; the clamped value is passed through to `fetch_history_with_baselines` and no inline check is needed there.
+
+---
+
+### Finding 299 — Low | `docs/FIXED_FINDINGS.md:137` / `docs/WONT_FIX_FINDINGS.md:74` | ⚠️ Open
+
+**Summary:** Finding number 252 is used in both FIXED_FINDINGS.md and WONT_FIX_FINDINGS.md, violating the flat numeric namespace convention. FIXED #252 is the IPv6 TCP test regression (never actually fixed — see OPEN #275). WONT_FIX #252 is the false-positive claim about a 530-word table row.
+
+**Root cause:** The flat numeric namespace is supposed to have no collisions across all three finding categories. The WONT_FIX #252 entry was filed without checking whether #252 was already taken in FIXED_FINDINGS.md.
+
+**Failure scenario:** A reference to "finding 252" is ambiguous — it could mean either entry depending on which file the reader is looking at.
+
+**Fix direction:** Renumber WONT_FIX #252 to the next available ID (currently 300). Update all cross-references.

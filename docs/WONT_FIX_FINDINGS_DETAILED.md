@@ -2,68 +2,6 @@
 
 *This document contains the detailed rationale for findings marked Won't Fix. For the brief overview, see [WONT_FIX_FINDINGS.md](./WONT_FIX_FINDINGS.md).*
 
-# Won't Fix Findings
-
-This document tracks findings that were raised by static analysis, AI reviews, or manual inspection, but have been explicitly marked as "Won't Fix" along with extensive rationale.
-
-## Summary
-
-| #   | File                       | Tag / Type       | What                                                                                     | Status       |
-|-----|----------------------------|------------------|------------------------------------------------------------------------------------------|--------------|
-| 190  | `lib.rs`                   | `shrink`         | 31-line manual arg-loop for `--config`/`-c`.                                             | 🚫 Won't Fix |
-| 191  | `lib.rs`                   | `yagni`          | `NoopRunner` struct with full trait impl for test bypass.                                | 🚫 Won't Fix |
-| 192  | `lib.rs`                   | `shrink`         | `ScanTimer` struct with `Instant`, `Drop`, two print branches.                           | 🚫 Won't Fix |
-| 193  | `lib.rs`                   | `yagni`          | `scan_targets` is a 1-line delegate to `scan_many_with_cache`.                           | 🚫 Won't Fix |
-| 194 | `parsing.rs`               | `shrink`         | `parse_poetry_lock_packages_from_content` has 7-param closure.                           | 🚫 Won't Fix |
-| 195 | `sandbox.rs`               | `shrink`         | `scanner_user_setup_steps` returns `vec!["..."]`, called once.                           | 🚫 Won't Fix |
-| 196 | `sandbox.rs`               | `shrink`         | `image_setup_steps` 4× `steps.push(...)` with `format!`.                                 | 🚫 Won't Fix |
-| 197 | `scanning.rs`              | `false-positive` | Host-mode `uv pip install` leaks into exec signatures.                                   | 🚫 Won't Fix |
-| 198 | `.github/workflows/ci.yml` | `false-positive` | `actions/checkout@v7` does not exist.                                                    | 🚫 Won't Fix |
-| 199 | `scanning.rs`              | `false-positive` | `/.azure/` test exists but no `/.gnupg/` test.                                           | 🚫 Won't Fix |
-| 200 | `README.md`                | `false-positive` | Exfiltration "caught at the network boundary" docs claim overstates completeness.        | 🚫 Won't Fix |
-| 201 | `AGENTS.md`                | `false-positive` | Graphify skill referenced but skill file does not exist.                 | 🚫 Won't Fix |
-| 202 | `docs/common_prompts.md` | `false-positive` | Raw CI prompt committed into documentation directory. | 🚫 Won't Fix |
-| 203 | `sandbox.rs`               | `false-positive` | `process_vm_readv` is permitted in the seccomp profile.                                  | 🚫 Won't Fix |
-| 204 | `scanning.rs`              | `false-positive` | Race condition in insufficient_baselines check ordering.                                 | 🚫 Won't Fix |
-| 205| `.github/workflows/`       | `false-positive` | Prompt Injection / Runner Compromise exfiltrating deployment secrets.                    | 🚫 Won't Fix |
-| 206| `.github/workflows/`       | `false-positive` | Autonomous Agent execution via `--dangerously-skip-permissions`.                         | 🚫 Won't Fix |
-| 81 | `.github/scripts/sanitize_review.py` | `low` | Python truncation decodes by byte count and ignores UTF-8 errors. | 🚫 Won't Fix |
-| 118 | `.github/workflows/ci.yml` | `low` | Doctest CI tests PR-head sanitizer, not default-branch production script. | 🚫 Won't Fix |
-| 123 | `.github/workflows/post_review.yml` | `invalid` | Adding `actions/checkout` without `ref` would hand `GH_TOKEN` to attacker. | 🚫 Won't Fix |
-| 124 | `.github/scripts/sanitize_review.py` | `low` | Code-block URL defanging is missing AST backtick-context awareness. | 🚫 Won't Fix |
-| 125 | `.github/scripts/post_comment.sh` | `invalid` | `cmark --safe` flag deprecated in cmark ≥0.31. | 🚫 Won't Fix |
-| 129 | `.github/scripts/post_comment.sh` | `accepted-risk` | No automated tests for `post_comment.sh`. | 🚫 Won't Fix |
-| 207| `.github/workflows/ci.yml` | `accepted-risk`  | `timeout-minutes: 10` with no partial-output trap.                                       | 🚫 Won't Fix |
-| 208| `.github/workflows/ci.yml` | `accepted-risk`  | `max-parallel: 3` vector for CI inference budget exhaustion.                             | 🚫 Won't Fix |
-| 209| `AGENTS.md`                | `false-positive` | `AGENTS.md` CI description omits operational details (model name, SHA hash).             | 🚫 Won't Fix |
-| 210| `.github/workflows/ci.yml` | `false-positive` | Redundant OpenCode installation script in dependent consolidation job.                   | 🚫 Won't Fix |
-| 211| `.github/workflows/ci.yml` | `accepted-risk`  | LLM self-censoring via tool access (`--dangerously-skip-permissions`).                   | 🚫 Won't Fix |
-| 212| `.github/workflows/ci.yml` | `accepted-risk`  | Findings documents (`OPEN_FINDINGS`, `WONT_FIX`) are not protected from PR tampering.    | 🚫 Won't Fix |
-| 213| `.github/workflows/ci.yml` | `accepted-risk`  | `graphify update` parsing vulnerability leading to CI runner RCE.                        | 🚫 Won't Fix |
-| 214| `.github/workflows/ci.yml` | `false-positive` | CI job fails if `gyrseek_review.md` or other artifact files are missing.                 | 🚫 Won't Fix |
-| 215| `.github/workflows/ci.yml` | `false-positive` | Permissions fragmentation for `checks: write` across jobs.                               | 🚫 Won't Fix |
-| 138 | `.github/scripts/sanitize_review.py` | `accepted-risk` | `PARENS_REGEX` depth-1 limit causes cosmetic artifacts on deeply-nested URLs. | 🚫 Won't Fix |
-| 151 | `.github/scripts/sanitize_review.py` | `invalid` | `www.` defang is case-sensitive — GFM cmark-gfm is also case-sensitive; `WWW.` does not auto-link. | 🚫 Won't Fix |
-| 152 | `.github/scripts/sanitize_review.py` | `accepted-risk` | Autolink `[^>]+` truncates at first literal `>` in URL — RFC-invalid URLs; `cmark --safe` second layer covers it. | 🚫 Won't Fix |
-| 161 | `.github/scripts/sanitize_review.py` | `invalid`       | `@mention` defang regex fails on second `@` in malformed string like `@evil@user`. | 🚫 Won't Fix |
-| 216| `.github/workflows/`       | `accepted-risk`  | Third-party actions use moving tags instead of being SHA-pinned.                         | 🚫 Won't Fix |
-| 217| `.github/workflows/ci.yml` | `false-positive` | Truncated consolidation prompt is undetected due to lack of file size verification.      | 🚫 Won't Fix |
-| 218| `.github/workflows/ci.yml` | `false-positive` | "Enhanced Only" template has no section for purely-new findings.                         | 🚫 Won't Fix |
-| 219| `.github/workflows/ci.yml` | `false-positive` | No integrity verification (SHA-256) of multi-agent review outputs.                       | 🚫 Won't Fix |
-| 220| `.github/workflows/ci.yml` | `accepted-risk`  | Per-reviewer skill injection removed, relying on autonomous discovery.                   | 🚫 Won't Fix |
-| 221| `.github/workflows/ci.yml` | `false-positive` | Duplicated "checkout trusted policies" bash loop violates DRY.                           | 🚫 Won't Fix |
-| 222| `.github/workflows/ci.yml` | `false-positive` | `consolidate-reviews` lacks explicit `success()` gate.                                   | 🚫 Won't Fix |
-| 223| `.github/workflows/ci.yml` | `false-positive` | No SHA hash pin on `graphify` dependency. Duplicate of 179.                             | 🚫 Won't Fix |
-| 224| `.github/workflows/ci.yml` | `false-positive` | `git fetch` race conditions across concurrent matrix pods.                               | 🚫 Won't Fix |
-| 225| `.github/workflows/ci.yml` | `false-positive` | `rm -rf graphify-out` flagged as unnecessary noise.                                      | 🚫 Won't Fix |
-| 226| `.github/workflows/ci.yml` | `false-positive` | `graphify-out/` architecture context flagged as generated but never consumed.            | 🚫 Won't Fix |
-| 227| `.github/workflows/ci.yml` | `false-positive` | Latent coupling warning between cache key and temp script path.                          | 🚫 Won't Fix |
-| 179 | `.github/workflows/post_review.yml` + `.github/scripts/post_comment.sh` | `accepted-risk` | `workflow_run.pull_requests[0].number` does not exist; commit-based PR resolution returns first ambiguous match. | 🚫 Won't Fix |
-
-
-*For detailed reasoning, see [WONT_FIX_FINDINGS_DETAILED.md](./WONT_FIX_FINDINGS_DETAILED.md).*
-
-
 ---
 
 ## Detailed Rationale
@@ -452,7 +390,7 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 
 ---
 
-### Finding 228 — `false-positive` | `docs/FIXED_FINDINGS.md` | 🚫 Won't Fix
+### Finding 233 — `false-positive` | `docs/FIXED_FINDINGS.md` | 🚫 Won't Fix
 
 **Summary:** The scanner flagged the fix description for Finding 92 as "architecturally incorrect" because it describes sanitizing `graphify-out` artifacts via Python XML-tag replacements before appending to `prompt.txt`. This references a stale architecture, as graphify output is no longer injected into `prompt.txt`.
 
@@ -460,7 +398,7 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 
 ---
 
-### Finding 229 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+### Finding 234 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
 
 **Summary:** The scanner warned that `fetch-err.log` (created during the `git fetch --unshallow` step) is never cleaned up via `rm -f`, meaning a stale log could produce false warnings on subsequent operations.
 
@@ -468,7 +406,7 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 
 ---
 
-### Finding 230 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
+### Finding 235 — `false-positive` | `.github/workflows/ci.yml` | 🚫 Won't Fix
 
 **Summary:** The scanner complained that there is no dedicated CI or script-level test to validate that the multi-step heredoc prompts (`prompt.txt`) are well-formed (i.e., verifying bash variable expansion of `$REVIEWER_NAME`, missing `$`, etc.).
 
@@ -586,3 +524,239 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 **Failure scenario:** An attacker attempts to inject a malformed string like `[@evil@user](url)` hoping the LLM will output a clickable mention to `@user`.
 
 **Reasoning:** On GitHub, `@user` embedded in the middle of a continuous text block without a trailing space or newline does not render as a mention and will not trigger a notification. Since this does not bypass the notification spam protection, this is a purely cosmetic artifact with no security implications.
+
+---
+
+### Finding 236 — `accepted-risk` | `scanning.rs` | 🚫 Won't Fix
+
+**Summary:** An attacker who controls a package can introduce a malicious behavior (e.g., establishing a C2 connection or reading a sensitive file) very slowly to evade detection. They could introduce the behavior in a seemingly benign way, wait several months and multiple version releases for that behavior to become part of the accepted baselines, and then weaponize it in a future update. Because the behavior is already present in the accepted baselines, the subsequent update won't be flagged as an anomaly.
+
+**Suggested Fix:** Implement long-term behavioral drift analysis, or flag behaviors based on their absolute threat level rather than purely relative differences against baselines.
+
+**Reason for Not Fixing:** This is a fundamental limitation of any differential/baseline-based anomaly detection system. Gyrseek's core philosophy is to detect *changes* in behavior between versions, operating under the assumption that long-standing behaviors are implicitly trusted by the ecosystem. Detecting a slow-rolling attack requires absolute semantic understanding of the code's intent (e.g., knowing *why* a connection is being made), which is outside the scope of a behavioral diffing tool. We mitigate this somewhat through static artifact scanning (e.g., flagging unexpected executables or `.pth` files unconditionally), but purely behavioral poisoning over long timeframes will remain an accepted architectural risk.
+
+---
+
+### Finding 240 — `false-positive` | `docs/ARCHITECTURE.md` | 🚫 Won't Fix
+
+**Summary:** Claim that ARCHITECTURE.md line 94 documents `deserialize_new_package_exemptions` as accepting the deprecated list format with a deprecation warning for backward compatibility.
+
+**Reason for Not Fixing:** This is a fabricated claim. ARCHITECTURE.md line 94 describes `src/parsing.rs` (command, lockfile, and requirements parsing) and contains no mention of `deserialize_new_package_exemptions`, deprecated formats, or deprecation warnings. A full-text search of ARCHITECTURE.md for those terms returns zero results. The finding attributes text to the file that simply does not exist there.
+
+---
+
+### Finding 241 — `false-positive` | `AGENTS.md` | 🚫 Won't Fix
+
+**Summary:** Claim that AGENTS.md line 117 states `min_baseline_age_hours` default as "2 hours", contradicting `DEFAULT_MIN_BASELINE_AGE_HOURS = 72` in `src/scanning.rs`.
+
+**Reason for Not Fixing:** This is a fabricated claim with a wrong line number. AGENTS.md line 117 discusses forwarded-command exit-code propagation (FIXED_FINDINGS.md #8) and contains no mention of hours or baseline age. The actual `min_baseline_age_hours` entry is at line 128, which correctly reads "default effective age gate **72 hours**" — fully consistent with `DEFAULT_MIN_BASELINE_AGE_HOURS = 72` in `src/scanning.rs:154`. There is no discrepancy.
+
+---
+
+### Finding 242 — `false-positive` | `docs/FIXED_FINDINGS_DETAILED.md` | 🚫 Won't Fix
+
+**Summary:** Claim that FIXED_FINDINGS_DETAILED.md Finding 239 omits the empty-list exception to the hard config-parse error for `new_package_exemptions`.
+
+**Reason for Not Fixing:** This is a fabricated claim. Finding 239 ends with an explicit parenthetical: *"(Note: an empty list `[]` is explicitly handled as an exception and silently maps to no exemptions without error)"* — which precisely matches `src/lib.rs:48` (`List(v) if v.is_empty() => Ok(HashMap::new())`). The exception is fully documented.
+
+---
+
+### Finding 246 — `false-positive` | `src/scanning.rs` | 🚫 Won't Fix
+
+**Summary:** Claim that `check_override_ages_rejects_version_younger_than_24_hours` and `check_override_ages_accepts_version_24_hours_or_older` use `Utc::now()` instead of deterministic frozen timestamps, while other tests in the same module use frozen timestamps.
+
+**Reason for Not Fixing:** This is a fabricated claim. Both tests construct `now` with `chrono::DateTime::parse_from_rfc3339("2024-01-02T12:00:00Z").unwrap().with_timezone(&Utc)` — a hardcoded, deterministic timestamp — and pass it explicitly to `check_override_ages`. `Utc::now()` appears nowhere in either test.
+
+---
+
+### Finding 247 — `false-positive` | `src/lib.rs` | 🚫 Won't Fix
+
+**Summary:** Claim that the `deserialize_new_package_exemptions` error message uses `[pkg]` bracket syntax that does not match the actual YAML list format, confusing users trying to migrate.
+
+**Reason for Not Fixing:** This is a fabricated claim. The error message at `src/lib.rs:50` reads: `"The 'new_package_exemptions' list format (e.g. '- pkg') is no longer supported."` It uses `- pkg`, which is the correct YAML sequence entry syntax. The `[pkg]` bracket form claimed by the reviewer does not appear anywhere in the message.
+
+---
+
+### Finding 248 — `false-positive` | `src/scanning.rs` | 🚫 Won't Fix
+
+**Summary:** Claim that the TCP DNS parser only captures `read()` syscalls and ignores `recvmsg()`, allowing native-compiled resolvers (Go, Rust, Node.js N-API) that use `recvmsg()` to bypass DNS interceptor enrichment.
+
+**Reason for Not Fixing:** This is a fabricated claim. The TCP read regex at `src/scanning.rs:525` explicitly uses the alternation `(?:read|recvmsg)\((\d+),...`, matching both `read()` and `recvmsg()` syscalls. `recvmsg` is already captured.
+
+---
+
+### Finding 279 — `yagni` | `sandbox.rs:990-996` | 🚫 Won't Fix
+
+**Summary:** Claim that `SandboxEnvVarGuard::remove` redundantly calls `remove_var` in the constructor (line 993) and then again in Drop (line 1002), making the constructor call wasteful.
+
+**Reason for Not Fixing:** The double-remove is intentional defensive behavior. The constructor call ensures the var is absent before the test body runs; the Drop call ensures it is absent after. If the test body sets the variable for some reason, the Drop still cleans it up. Both calls are idempotent (`remove_var` on an unset var is a no-op). This is correct RAII hygiene, not waste.
+
+---
+
+### Finding 293 — `false-positive` | `src/lib.rs:36-41` | 🚫 Won't Fix
+
+**Summary:** Claim that `#[allow(dead_code)]` on `InvalidMap` and `List` variants in `NewPkgExemptions` is unnecessary because both variants are referenced in match arms.
+
+**Reason for Not Fixing:** This is a false positive. With `#[serde(untagged)]`, serde derives the `Deserialize` impl through macro-generated code that constructs each variant based on structural matching of the input data. The Rust compiler's dead-code analysis operates at the source level and cannot see that these variants are instantiated via the macro-generated deserializer path. Without `#[allow(dead_code)]`, rustc emits spurious "variant is never constructed" warnings for `InvalidMap` and `List` even though they are fully reachable at runtime. The annotation is the standard correct solution for this pattern.
+
+---
+
+### Finding 290 — `false-positive` | `docs/FIXED_FINDINGS_DETAILED.md` | 🚫 Won't Fix
+
+**Summary:** Claim that FIXED_FINDINGS_DETAILED.md Finding 229 references a `MapVisitor` implementation that was never committed, and that the actual code uses a simpler `#[serde(untagged)]` enum.
+
+**Reason for Not Fixing:** This is a fabricated claim. A full-text search of FIXED_FINDINGS_DETAILED.md returns zero hits for "MapVisitor". The documentation for Finding 229 correctly and consistently describes the `#[serde(untagged)]` enum approach (`Map`, `List`, `Null`, `InvalidMap` variants) matching the actual code at `src/lib.rs:28-54`. No stale `MapVisitor` reference exists in the file.
+
+---
+
+### Finding 280 — `yagni` | `scanning.rs:693,764,808` | 🚫 Won't Fix
+
+**Summary:** Claim that removing `.max(0)` guards from `Duration::hours(min_baseline_age_hours)` removes a defense-in-depth layer against future refactoring bugs that bypass the config parser clamp.
+
+**Reason for Not Fixing:** The config parser at `src/lib.rs:257-262` is the correct single enforcement point for the ≥24h floor. A redundant guard scattered across three call sites that can never trigger given the enforced invariant is defensive bloat — it obscures the actual invariant rather than protecting it. Speculative defense for hypothetical future refactoring bypasses is YAGNI.
+
+---
+
+### Finding 273 — `false-positive` | `docs/FIXED_FINDINGS.md` | 🚫 Won't Fix
+
+**Summary:** Claim that findings 254–255 omit the `src/` prefix used consistently by all adjacent entries 228–253.
+
+**Reason for Not Fixing:** This is false. Entries 244–251 in the same table also lack the `src/` prefix (e.g. `scanning.rs:510`, `scanning.rs:503-506`, `lib.rs`, `sandbox.rs`). The prefix usage is already inconsistent throughout the table; 254–255 do not introduce a new inconsistency.
+
+---
+
+### Finding 274 — `false-positive` | `scanning.rs:1893-1908` | 🚫 Won't Fix
+
+**Summary:** Claim that operators cannot distinguish age-rejection from registry-outage as the cause of baseline override removal, because both paths emit only a generic warning.
+
+**Reason for Not Fixing:** The two code paths already emit distinct messages. Age-rejection (`filter_override_version`) says *"is only X hours old, which is below the hardcoded security floor"*; registry-outage (`published_at.is_empty()`) says *"Registry fetch failed (empty publish times) for '...'; discarding baseline overrides securely."* An operator reading either warning can identify the cause unambiguously.
+
+---
+
+### Finding 267 — `yagni` | `scanning.rs:640` | 🚫 Won't Fix
+
+**Summary:** Claim that `active_test_env_vars()` lacks a dedicated unit test verifying each of its four env-var names is correctly detected, and that future renames or additions could drift without testing.
+
+**Reason for Not Fixing:** `active_test_env_vars()` is a trivial filter over a static string array — there is no logic to test beyond `std::env::var` existence. Adding a dedicated test that sets and reads the four variable names would test the standard library, not gyrseek. The functions that consume its output (`fetch_history_with_baselines`) are tested by the surrounding integration harness. This is YAGNI.
+
+---
+
+### Finding 268 — `false-positive` | `docs/OPEN_FINDINGS.md` | 🚫 Won't Fix
+
+**Summary:** Claim that OPEN_FINDINGS.md #177 (duplicate summary tables) must be annotated with partial-progress because the FIXED_FINDINGS_DETAILED.md summary table was removed in this PR, but #177 was not updated.
+
+**Reason for Not Fixing:** This is a process preference, not a defect. Open findings are not required to carry incremental progress annotations; they remain open until the issue is fully resolved. Partial-progress notations add maintenance churn without providing actionable value.
+
+---
+
+### Finding 259 — `false-positive` | `AGENTS.md` / `scanning.rs` | 🚫 Won't Fix
+
+**Summary:** Claim that concatenated TCP DNS responses are silently dropped, allowing an attacker-controlled resolver to inject a second poisoned response that is never parsed.
+
+**Reason for Not Fixing:** This is a known documented limitation, not a surprise finding. AGENTS.md explicitly states: *"lacks full TCP reassembly (fragmented DNS responses are dropped)."* The absence of multi-response TCP parsing is an accepted architectural scope limitation already recorded in the docs.
+
+---
+
+### Finding 260 — `false-positive` | `scanning.rs:1994-1999` | 🚫 Won't Fix
+
+**Summary:** Claim that a self-referencing baseline override only warns but does not block, allowing an attacker with YAML write-access to set `baseline-1: "current"` and disable anomaly detection.
+
+**Reason for Not Fixing:** This is working as designed. The self-ref override is excluded from the effective baseline set; if that exclusion causes the baseline count to drop below threshold, `insufficient_baselines` triggers and fails closed. YAML config is an explicitly trusted boundary — an attacker with config-write access can already bypass detection in more direct ways (Finding 237). No additional blocking is warranted.
+
+---
+
+### Finding 261 — `false-positive` | `src/lib.rs` / `AGENTS.md` | 🚫 Won't Fix
+
+**Summary:** Claim that `min_baseline_age_hours` default was changed from 2h to 72h with no backward-compat migration warning, causing packages with infrequent releases to silently fail `insufficient_baselines`.
+
+**Reason for Not Fixing:** The "2h default" is fabricated. `DEFAULT_MIN_BASELINE_AGE_HOURS` has always been `72` in `src/scanning.rs:154`. There was no change from 2h to 72h and therefore no migration gap. The separate usability concern about the error message not mentioning age-gate filtering is tracked as a real finding in OPEN_FINDINGS.md #258.
+
+---
+
+### Finding 249 — `false-positive` | `src/scanning.rs` | 🚫 Won't Fix
+
+**Summary:** Claim that `Utc::now()` is captured once at `scan_packages_versions` function entry and becomes stale for later packages in 100+ package bulk scans.
+
+**Reason for Not Fixing:** This is a fabricated claim. `let now = Utc::now()` at line 1879 is inside the `for (pkg_name, tgt_version) in pkg_targets` loop (lines 1851–1889), not at function entry. Every individual package gets a fresh timestamp on each loop iteration.
+
+---
+
+### Finding 250 — `false-positive` | `docs/FIXED_FINDINGS_DETAILED.md` | 🚫 Won't Fix
+
+**Summary:** Claim that Finding 245 appears twice in FIXED_FINDINGS_DETAILED.md — briefly at line 1190 and in detail at line 1442 — with different detail levels.
+
+**Reason for Not Fixing:** This is a fabricated claim. `grep -c "Finding 245"` returns exactly `1` occurrence in FIXED_FINDINGS_DETAILED.md. There is no duplicate.
+
+---
+
+### Finding 251 — `false-positive` | `docs/OPEN_FINDINGS.md` | 🚫 Won't Fix
+
+**Summary:** Claim that Finding 70 was removed from OPEN_FINDINGS.md but never migrated to FIXED_FINDINGS.md, leaving its fix documentation orphaned.
+
+**Reason for Not Fixing:** This is a fabricated claim. Finding 70 does not appear in OPEN_FINDINGS.md, FIXED_FINDINGS.md, or WONT_FIX_FINDINGS.md. There is no entry to be orphaned; the ID simply was never used or was never in the tracked range of these files.
+
+---
+
+### Finding 252 — `false-positive` | `docs/FIXED_FINDINGS.md` | 🚫 Won't Fix
+
+**Summary:** Claim that the Finding 241 summary table entry is 530+ words, violating the single-line convention.
+
+**Reason for Not Fixing:** This is a fabricated claim. The Finding 241 table row is 222 characters total — a normal single-line pipe-delimited entry. 530 words in a single table cell is physically impossible given the measured length.
+
+---
+
+### Finding 253 — `false-positive` | `AGENTS.md` | 🚫 Won't Fix
+
+**Summary:** Claim that AGENTS.md lines routinely exceed 2000 characters, creating merge conflict hotspots.
+
+**Reason for Not Fixing:** This is a fabricated claim. `awk`-based measurement finds zero lines in AGENTS.md exceeding 2000 characters.
+
+---
+
+### Finding 243 — `false-positive` | `README.md` | 🚫 Won't Fix
+
+**Summary:** Claim that the `min_baseline_age_hours` configuration table row in README.md omits the 24h hard floor clamp enforced in code.
+
+**Reason for Not Fixing:** This is a fabricated claim. README.md line 434 explicitly reads: *"Values below 24h are silently clamped to the 24h security floor."* The clamp is fully documented in the table row. Nothing is missing.
+
+---
+
+### Finding 244 — `false-positive` | `AGENTS.md` | 🚫 Won't Fix
+
+**Summary:** Claim that AGENTS.md overstates the TCP DNS parser by saying it "tolerates short TCP reads" without disclosing the exact threshold (< 3 bytes) or the lack of reassembly for fragmented responses.
+
+**Reason for Not Fixing:** This is a fabricated claim. AGENTS.md line 110 states: *"skips short TCP reads (< 3 bytes) without crashing, but lacks full TCP reassembly (fragmented DNS responses are dropped)."* Both the exact byte threshold and the reassembly limitation are explicitly documented in the same sentence. The description is accurate and complete.
+
+---
+
+### Finding 237 — `accepted-risk` | `scanning.rs` | 🚫 Won't Fix
+
+**Summary:** An attacker who observes that an old version had a particular network endpoint can set `baseline_overrides` to point at that old version and add the endpoint's IP to the allowlist. Even if the current version connects to a new C2 endpoint, the diff against the overridden baseline produces zero diffs, framing a known-good old version as the comparison point to bypass detection.
+
+**Suggested Fix:** Validate that override versions were published recently, or compute a behavioral signature union/intersection across fetched and override baselines to flag behaviors not present in recent versions.
+
+**Reason for Not Fixing:** This will remain a limitation of gyrseek for the foreseeable future. Baseline overrides are explicitly designed as a heavy-handed configuration escape hatch for users to force a specific baseline when natural resolution fails or is inappropriate. Implementing recency validation or intersection logic would significantly complicate the override mechanism and undermine its purpose as an unconditional user-directed override. It is accepted that malicious or compromised configuration changes within the repository (`gyrseek.yaml`) can bypass anomaly detection, as configuration is assumed to be trusted.
+
+---
+
+### Finding 297 — `false-positive` | `scanning.rs:156-190` | 🚫 Won't Fix
+
+**Summary:** Claim that an unparseable IP string in a strace trace would be silently ignored and treated as non-local, allowing a malformed endpoint to bypass detection.
+
+**Reason for Not Fixing:** This is a false positive. `normalize_ip_string` returns the original string unchanged when parsing fails (line 173: `Ok(ip) => ..., Err(_) => addr.to_string()`), and `is_sandbox_local_ip` returns `false` when the input cannot be parsed as an IP (line 188: `let Ok(ip) = addr.parse::<IpAddr>() else { return false; }`). The combined effect is that an unparseable string is **not** filtered out — it passes through to the diff as-is and would be flagged as a new/unknown endpoint. This is the correct fail-closed behaviour. The only "issue" is potential noise if something generates malformed IP strings in the trace, but that is an upstream parsing problem outside the scope of this filter.
+
+---
+
+### Finding 300 — `yagni` | `scanning.rs:1671-1719` | 🚫 Won't Fix
+
+**Summary:** Claim that `select_effective_baselines` returning `(Vec<String>, bool)` couples selection logic to diagnostic output — the bool is only consumed by a warning message and re-derived independently by the override-survival check.
+
+**Reason for Not Fixing:** The `self_ref` boolean flags a specific semantic condition: "at least one override version equals the current version being scanned." This is distinct from whether any non-null override entries survive (checked by `matches!(filtered_overrides, ...)`). The two checks answer different questions. The bool is a meaningful return value, not a leaking diagnostic concern. The interface is minimal and appropriate.
+
+---
+
+### Finding 301 — `yagni` | `scanning.rs:1839-2373` | 🚫 Won't Fix
+
+**Summary:** Claim that `scan_packages_versions` is too large (~534 lines) with too many responsibilities, and that the `#[cfg(any(debug_assertions, test))]` branching creates CI-invisible behavioral asymmetry between test and production modes.
+
+**Reason for Not Fixing:** Function size is a style/maintainability concern not tied to correctness or security. Refactoring would require user-visible API changes with no functional benefit at this time. The `#[cfg]` test/production asymmetry is a real concern, but it is already separately tracked as OPEN #264 with its own detailed rationale and fix direction — tracking it again here is a duplicate.
