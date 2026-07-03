@@ -53,12 +53,21 @@ where
     }
 }
 
+/// One element of a mixed allowlist sequence: either a bare global entry or a
+/// single-key map `{pkg_name: [entries]}` scoping the entries to one package.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AllowlistEntry {
+    Global(String),
+    PerPackage(HashMap<String, Vec<String>>),
+}
+
 #[derive(Deserialize, Default)]
 struct GyrseekConfig {
     #[serde(default)]
-    ip_allowlist: Vec<String>,
+    ip_allowlist: Vec<AllowlistEntry>,
     #[serde(default)]
-    domain_allowlist: Vec<String>,
+    domain_allowlist: Vec<AllowlistEntry>,
     #[serde(default)]
     git_clone_allowlist: HashMap<String, Vec<String>>,
     #[serde(default)]
@@ -160,19 +169,72 @@ fn parse_list(items: Vec<String>, lowercase: bool) -> HashSet<String> {
         .collect()
 }
 
+/// Validates a per-package allowlist map key: trims whitespace, rejects blank
+/// and reserved `"*"` keys (with warnings), and warns on whitespace-variant
+/// collisions. Returns `Some(trimmed_key)` if valid, `None` to skip the entry.
+fn validate_allowlist_pkg_key(
+    pkg_raw: &str,
+    allowlist_name: &str,
+    existing: &HashMap<String, HashSet<String>>,
+    has_global_variant: bool,
+) -> Option<String> {
+    let pkg = pkg_raw.trim().to_string();
+    if pkg.is_empty() {
+        println!("⚠️ [gyrseek] Ignoring {allowlist_name} entry with blank package name");
+        return None;
+    }
+    if pkg == "*" {
+        if has_global_variant {
+            println!(
+                "⚠️ [gyrseek] Ignoring {allowlist_name} per-package entry with reserved key \"*\"; use a bare global entry instead. Per-package entries are additive to global entries — global entries already apply to all packages."
+            );
+        } else {
+            println!(
+                "⚠️ [gyrseek] Ignoring {allowlist_name} entry with reserved key \"*\"; this allowlist does not support a global wildcard — use a specific package name"
+            );
+        }
+        return None;
+    }
+    if pkg != pkg_raw && existing.contains_key(&pkg) {
+        println!(
+            "⚠️ [gyrseek] {allowlist_name} key {:?} trimmed to {:?} which already has entries; merging (check for duplicate/whitespace-variant keys)",
+            pkg_raw, pkg
+        );
+    }
+    Some(pkg)
+}
+
+/// Maps `Some(0)` → `None` with a warning, passes other `Some(v)` through,
+/// and maps `None` → `None`. Used for optional config fields where 0 disables
+/// the feature and should warn rather than silently no-op.
+fn option_zero_to_none(val: Option<usize>, warn_msg: &str) -> Option<usize> {
+    match val {
+        Some(0) => {
+            println!("⚠️ [gyrseek] {}", warn_msg);
+            None
+        }
+        other => other,
+    }
+}
+
 fn parse_list_map(
     map: HashMap<String, Vec<String>>,
     lowercase: bool,
+    name: &str,
 ) -> HashMap<String, HashSet<String>> {
-    let mut result = HashMap::new();
-    for (package, items) in map {
-        let package = package.trim().to_string();
-        if package.is_empty() {
+    let mut result: HashMap<String, HashSet<String>> = HashMap::new();
+    for (package_raw, items) in map {
+        let Some(package) = validate_allowlist_pkg_key(&package_raw, name, &result, false) else {
             continue;
-        }
+        };
         let list = parse_list(items, lowercase);
-        if !list.is_empty() {
-            result.insert(package, list);
+        if list.is_empty() {
+            println!(
+                "⚠️ [gyrseek] {name} package key {:?} has no valid entries; no allowlist protection will be applied for this package",
+                package
+            );
+        } else {
+            result.entry(package).or_default().extend(list);
         }
     }
     result
@@ -192,28 +254,108 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
     let cfg: GyrseekConfig = serde_yaml::from_str(&content)
         .map_err(|e| format!("Failed to parse YAML config '{}': {}", path, e))?;
 
-    let mut ip_allowlist = HashSet::new();
+    let mut ip_allowlist: HashMap<String, HashSet<String>> = HashMap::new();
     for entry in cfg.ip_allowlist {
-        match entry.parse::<IpAddr>() {
-            Ok(addr) => {
-                ip_allowlist.insert(addr.to_string());
-            }
-            Err(_) => {
-                println!(
-                    "⚠️ [gyrseek] Ignoring invalid ip_allowlist entry (not an IP): {}",
-                    entry
-                );
+        match entry {
+            AllowlistEntry::Global(s) => match s.parse::<IpAddr>() {
+                Ok(_) => {
+                    ip_allowlist
+                        .entry("*".to_string())
+                        .or_default()
+                        .insert(scanning::normalize_ip_string(&s));
+                }
+                Err(_) => {
+                    println!(
+                        "⚠️ [gyrseek] Ignoring invalid ip_allowlist entry (not an IP): {}",
+                        s
+                    );
+                }
+            },
+            AllowlistEntry::PerPackage(map) => {
+                for (pkg_raw, ips) in map {
+                    let Some(pkg) =
+                        validate_allowlist_pkg_key(&pkg_raw, "ip_allowlist", &ip_allowlist, true)
+                    else {
+                        continue;
+                    };
+                    let set = ip_allowlist.entry(pkg.clone()).or_default();
+                    for s in ips {
+                        match s.parse::<IpAddr>() {
+                            Ok(_) => {
+                                set.insert(scanning::normalize_ip_string(&s));
+                            }
+                            Err(_) => {
+                                println!(
+                                    "⚠️ [gyrseek] Ignoring invalid ip_allowlist entry '{}' for package '{}'",
+                                    s, pkg
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    let mut domain_set = HashSet::new();
+    let mut domain_allowlist: HashMap<String, HashSet<String>> = HashMap::new();
     for entry in cfg.domain_allowlist {
-        let normalized = entry.trim().trim_end_matches('.').to_ascii_lowercase();
-        if normalized.is_empty() {
-            continue;
+        match entry {
+            AllowlistEntry::Global(s) => {
+                let normalized = s.trim().trim_end_matches('.').to_ascii_lowercase();
+                if normalized == "*" {
+                    println!(
+                        "⚠️ [gyrseek] Ignoring overly permissive domain_allowlist entry: \"*\" does not match any domain. Use exact domain names (e.g. 'pypi.org') or remove this entry."
+                    );
+                } else if normalized.is_empty() {
+                    println!("⚠️ [gyrseek] Ignoring blank domain_allowlist entry");
+                } else if !normalized.contains('.') {
+                    println!(
+                        "⚠️ [gyrseek] Ignoring domain_allowlist entry {:?}: a bare label without a dot would match all subdomains of any TLD. Use a fully-qualified domain (e.g. 'pypi.org').",
+                        s.trim()
+                    );
+                } else {
+                    domain_allowlist
+                        .entry("*".to_string())
+                        .or_default()
+                        .insert(normalized);
+                }
+            }
+            AllowlistEntry::PerPackage(map) => {
+                for (pkg_raw, domains) in map {
+                    let Some(pkg) = validate_allowlist_pkg_key(
+                        &pkg_raw,
+                        "domain_allowlist",
+                        &domain_allowlist,
+                        true,
+                    ) else {
+                        continue;
+                    };
+                    let set = domain_allowlist.entry(pkg.clone()).or_default();
+                    for s in domains {
+                        let normalized = s.trim().trim_end_matches('.').to_ascii_lowercase();
+                        if normalized == "*" {
+                            println!(
+                                "⚠️ [gyrseek] Ignoring overly permissive domain_allowlist entry \"*\" for package '{}': does not match any domain. Use exact domain names (e.g. 'pypi.org') or remove this entry.",
+                                pkg
+                            );
+                        } else if normalized.is_empty() {
+                            println!(
+                                "⚠️ [gyrseek] Ignoring blank domain_allowlist entry for package '{}'",
+                                pkg
+                            );
+                        } else if !normalized.contains('.') {
+                            println!(
+                                "⚠️ [gyrseek] Ignoring domain_allowlist entry {:?} for package '{}': a bare label without a dot would match all subdomains of any TLD. Use a fully-qualified domain (e.g. 'pypi.org').",
+                                s.trim(),
+                                pkg
+                            );
+                        } else {
+                            set.insert(normalized);
+                        }
+                    }
+                }
+            }
         }
-        domain_set.insert(normalized);
     }
 
     let mut baseline_overrides = HashMap::new();
@@ -286,48 +428,60 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         .collect();
     let internal_package_exemptions = parse_list(cfg.internal_package_exemptions, false);
 
-    let release_burst_threshold = match cfg.release_burst_threshold {
-        Some(0) => {
-            println!(
-                "⚠️ [gyrseek] Ignoring invalid release_burst_threshold=0; disabling burst checker"
-            );
-            None
-        }
-        Some(v) => Some(v),
-        None => None,
-    };
+    let release_burst_threshold = option_zero_to_none(
+        cfg.release_burst_threshold,
+        "Ignoring invalid release_burst_threshold=0; disabling burst checker",
+    );
 
-    let release_burst_window_hours = match cfg.release_burst_window_hours {
-        Some(0) => {
-            println!(
-                "⚠️ [gyrseek] Ignoring invalid release_burst_window_hours=0; using default 24"
-            );
-            24
-        }
-        Some(v) => v,
-        None => 24,
-    };
+    let release_burst_window_hours = option_zero_to_none(
+        cfg.release_burst_window_hours,
+        "Ignoring invalid release_burst_window_hours=0; using default 24",
+    )
+    .unwrap_or(24);
 
-    let minimum_release_age_package = match cfg.minimum_release_age_package {
-        Some(0) => {
-            println!(
-                "⚠️ [gyrseek] Ignoring invalid minimum_release_age_package=0; disabling minimum release age check"
-            );
-            None
-        }
-        Some(v) => Some(v),
-        None => None,
-    };
+    let minimum_release_age_package = option_zero_to_none(
+        cfg.minimum_release_age_package,
+        "Ignoring invalid minimum_release_age_package=0; disabling minimum release age check",
+    );
 
-    let process_exec_allowlist = parse_list_map(cfg.process_exec_allowlist, true);
-    let artifact_allowlist = parse_list_map(cfg.artifact_allowlist, false);
-    let sensitive_file_access_allowlist =
-        parse_list_map(cfg.sensitive_file_access_allowlist, false);
-    let git_clone_allowlist = parse_list_map(cfg.git_clone_allowlist, true);
+    let process_exec_allowlist =
+        parse_list_map(cfg.process_exec_allowlist, true, "process_exec_allowlist");
+    let artifact_allowlist = parse_list_map(cfg.artifact_allowlist, false, "artifact_allowlist");
+    let mut sensitive_file_access_allowlist = parse_list_map(
+        cfg.sensitive_file_access_allowlist,
+        false,
+        "sensitive_file_access_allowlist",
+    );
+    for (pkg, entries) in sensitive_file_access_allowlist.iter_mut() {
+        entries.retain(|v| {
+            let t = v.trim();
+            if t == "*" || t == "/" || t == "*/" || t == "/*" {
+                println!(
+                    "⚠️ [gyrseek] Ignoring overly permissive sensitive_file_access_allowlist entry '{}' for package '{}'",
+                    v, pkg
+                );
+                false
+            } else {
+                true
+            }
+        });
+    }
+    sensitive_file_access_allowlist.retain(|pkg, entries| {
+        if entries.is_empty() {
+            println!(
+                "⚠️ [gyrseek] sensitive_file_access_allowlist package '{}' has no valid entries after filtering; no allowlist protection will be applied",
+                pkg
+            );
+            false
+        } else {
+            true
+        }
+    });
+    let git_clone_allowlist = parse_list_map(cfg.git_clone_allowlist, true, "git_clone_allowlist");
 
     Ok(PolicyConfig {
         ip_allowlist,
-        domain_allowlist: domain_set,
+        domain_allowlist,
         git_clone_allowlist,
         baseline_overrides,
         baseline_count,
@@ -413,12 +567,20 @@ mod config_tests {
 
         let cfg = load(&file);
 
-        assert_eq!(cfg.ip_allowlist.len(), 3);
-        assert!(cfg.ip_allowlist.contains("1.1.1.1"));
-        assert!(cfg.ip_allowlist.contains("8.8.8.8"));
-        assert!(cfg.ip_allowlist.contains("2001:db8::ff00:42:8329"));
-        assert!(cfg.domain_allowlist.contains("example.com"));
-        assert!(cfg.domain_allowlist.contains("sub.safe.net"));
+        let global_ips = cfg
+            .ip_allowlist
+            .get("*")
+            .expect("global ip_allowlist entry");
+        assert_eq!(global_ips.len(), 3);
+        assert!(global_ips.contains("1.1.1.1"));
+        assert!(global_ips.contains("8.8.8.8"));
+        assert!(global_ips.contains("2001:db8::ff00:42:8329"));
+        let global_domains = cfg
+            .domain_allowlist
+            .get("*")
+            .expect("global domain_allowlist entry");
+        assert!(global_domains.contains("example.com"));
+        assert!(global_domains.contains("sub.safe.net"));
         assert_eq!(cfg.baseline_overrides.len(), 2);
         assert_eq!(
             cfg.baseline_overrides.get("requests"),
@@ -435,6 +597,357 @@ mod config_tests {
         assert_eq!(cfg.release_burst_window_hours, 24);
         assert!(cfg.minimum_release_age_package.is_none());
         assert!(cfg.git_clone_allowlist.is_empty());
+    }
+
+    #[test]
+    fn parses_per_package_ip_and_domain_allowlist() {
+        let yaml = "ip_allowlist:\n  - 1.1.1.1\n  - requests:\n    - 5.6.7.8\n  - boto3:\n    - 9.10.11.12\ndomain_allowlist:\n  - global.example.com\n  - requests:\n    - api.requests-cdn.net\n";
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "{}", yaml).expect("config should be written");
+        let cfg = load(&file);
+
+        let global_ips = cfg.ip_allowlist.get("*").expect("global ips");
+        assert_eq!(global_ips.len(), 1);
+        assert!(global_ips.contains("1.1.1.1"));
+
+        let requests_ips = cfg.ip_allowlist.get("requests").expect("requests ips");
+        assert!(requests_ips.contains("5.6.7.8"));
+
+        let boto3_ips = cfg.ip_allowlist.get("boto3").expect("boto3 ips");
+        assert!(boto3_ips.contains("9.10.11.12"));
+
+        // requests per-package IP must not appear in global or boto3 entries
+        assert!(!global_ips.contains("5.6.7.8"));
+        assert!(!boto3_ips.contains("5.6.7.8"));
+
+        let global_domains = cfg.domain_allowlist.get("*").expect("global domains");
+        assert!(global_domains.contains("global.example.com"));
+
+        let requests_domains = cfg
+            .domain_allowlist
+            .get("requests")
+            .expect("requests domains");
+        assert!(requests_domains.contains("api.requests-cdn.net"));
+        assert!(!global_domains.contains("api.requests-cdn.net"));
+    }
+
+    #[test]
+    fn ip_allowlist_config_load_normalizes_ipv4_mapped_ipv6() {
+        // Fix #305 collapses ::ffff:x.x.x.x → bare IPv4 at config-load time.
+        // This test exercises the glue between load_policy_config and
+        // normalize_ip_string — a regression would store raw ::ffff: forms,
+        // causing bare-IPv4 connection IPs to miss the allowlist.
+        let yaml = concat!(
+            "ip_allowlist:\n",
+            "  - \"::ffff:203.0.113.5\"\n", // global IPv4-mapped
+            "  - requests:\n",
+            "    - \"::ffff:198.51.100.1\"\n", // per-package IPv4-mapped
+        );
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{}", yaml).expect("write");
+        let cfg = load(&file);
+
+        let global = cfg.ip_allowlist.get("*").expect("global bucket");
+        assert!(
+            global.contains("203.0.113.5"),
+            "global ::ffff:203.0.113.5 must be stored as bare IPv4"
+        );
+        assert!(
+            !global.contains("::ffff:203.0.113.5"),
+            "raw IPv4-mapped form must not be stored"
+        );
+
+        let pkg = cfg.ip_allowlist.get("requests").expect("requests bucket");
+        assert!(
+            pkg.contains("198.51.100.1"),
+            "per-package ::ffff:198.51.100.1 must be stored as bare IPv4"
+        );
+        assert!(
+            !pkg.contains("::ffff:198.51.100.1"),
+            "raw IPv4-mapped form must not be stored in per-package bucket"
+        );
+    }
+
+    #[test]
+    fn per_package_allowlist_key_trimmed_and_blank_key_dropped() {
+        // Key with surrounding whitespace must be stored under the trimmed name.
+        // A key that trims to "" must be silently dropped (not stored under "").
+        let yaml = concat!(
+            "ip_allowlist:\n",
+            "  - \"  requests  \":\n",
+            "    - 5.6.7.8\n",
+            "  - \"   \":\n", // blank after trim — should be dropped
+            "    - 9.9.9.9\n",
+            "domain_allowlist:\n",
+            "  - \"  boto3  \":\n",
+            "    - api.boto3-cdn.net\n",
+            "  - \"  \":\n", // blank after trim — should be dropped
+            "    - bad.example.com\n",
+        );
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "{}", yaml).expect("config should be written");
+        let cfg = load(&file);
+
+        // Trimmed key present, untrimmed absent — regression guard for #302
+        let req_ips = cfg.ip_allowlist.get("requests").expect("requests ips");
+        assert!(req_ips.contains("5.6.7.8"));
+        assert!(!cfg.ip_allowlist.contains_key("  requests  "));
+
+        // Blank key dropped entirely
+        assert!(!cfg.ip_allowlist.contains_key(""));
+        assert!(!cfg.ip_allowlist.contains_key("   "));
+
+        let boto3_domains = cfg.domain_allowlist.get("boto3").expect("boto3 domains");
+        assert!(boto3_domains.contains("api.boto3-cdn.net"));
+        assert!(!cfg.domain_allowlist.contains_key("  boto3  "));
+        assert!(!cfg.domain_allowlist.contains_key(""));
+        assert!(!cfg.domain_allowlist.contains_key("  "));
+    }
+
+    #[test]
+    fn per_package_allowlist_star_key_rejected_for_ip_domain_and_list_map() {
+        // "*" as a per-package key must be dropped with a warning, not silently
+        // merged into the global "*" bucket or stored as a per-package entry.
+        let yaml = concat!(
+            "ip_allowlist:\n",
+            "  - \"*\":\n",
+            "    - 9.9.9.9\n",
+            "domain_allowlist:\n",
+            "  - \"*\":\n",
+            "    - cdn.example.com\n",
+            "git_clone_allowlist:\n",
+            "  \"*\":\n",
+            "    - https://github.com/evil/repo.git\n",
+        );
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{}", yaml).expect("write");
+        let cfg = load(&file);
+
+        // ip_allowlist: global "*" bucket must be empty — the per-package "*" was rejected
+        assert!(
+            cfg.ip_allowlist.get("*").is_none_or(|s| s.is_empty()),
+            "ip_allowlist \"*\" bucket must be empty when only per-package \"*\" key was used"
+        );
+        // domain_allowlist: same
+        assert!(
+            cfg.domain_allowlist.get("*").is_none_or(|s| s.is_empty()),
+            "domain_allowlist \"*\" bucket must be empty when only per-package \"*\" key was used"
+        );
+        // git_clone_allowlist: "*" key must be dropped, not stored
+        assert!(
+            !cfg.git_clone_allowlist.contains_key("*"),
+            "git_clone_allowlist must not store \"*\" as a package key"
+        );
+    }
+
+    #[test]
+    fn domain_allowlist_star_value_rejected_in_global_and_per_package_positions() {
+        // "*" as a domain VALUE (not key) must be dropped with a warning in both
+        // the global list and the per-package list positions. It passes serde
+        // parsing but domain_is_allowlisted never matches it (neither exact nor
+        // ends_with(".*")), so silently keeping it would create a dead entry with
+        // no diagnostic — FIXED_FINDINGS.md #315.
+        let yaml = concat!(
+            "domain_allowlist:\n",
+            "  - \"*\"\n", // global position
+            "  - requests:\n",
+            "    - \"*\"\n",           // per-package position
+            "    - cdn.example.com\n", // legitimate entry must survive
+        );
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{}", yaml).expect("write");
+        let cfg = load(&file);
+
+        // Global "*" bucket must not contain the literal "*"
+        let star_not_in_global = cfg
+            .domain_allowlist
+            .get("*")
+            .is_none_or(|s| !s.contains("*"));
+        assert!(
+            star_not_in_global,
+            "global domain_allowlist must not store \"*\" as a domain value"
+        );
+        // Per-package "requests" entry must not contain "*", but must keep cdn.example.com
+        let pkg_domains = cfg
+            .domain_allowlist
+            .get("requests")
+            .expect("requests domain entry must exist");
+        assert!(
+            !pkg_domains.contains("*"),
+            "per-package domain_allowlist must not store \"*\" as a domain value"
+        );
+        assert!(
+            pkg_domains.contains("cdn.example.com"),
+            "legitimate per-package domain entry must be kept"
+        );
+    }
+
+    #[test]
+    fn domain_allowlist_empty_value_dropped_in_global_and_per_package_positions() {
+        // An empty string or whitespace-only value normalizes to "" and must be
+        // silently dropped (with a warning) in both global and per-package positions.
+        // FIXED_FINDINGS.md #328.
+        let yaml = concat!(
+            "domain_allowlist:\n",
+            "  - \"\"\n",   // global empty
+            "  - \"  \"\n", // global whitespace-only
+            "  - requests:\n",
+            "    - \"\"\n",            // per-package empty
+            "    - cdn.example.com\n", // legitimate entry must survive
+        );
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{}", yaml).expect("write");
+        let cfg = load(&file);
+
+        // Global "*" bucket must not contain empty string
+        assert!(
+            cfg.domain_allowlist
+                .get("*")
+                .is_none_or(|s| !s.contains("")),
+            "global domain_allowlist must not store empty string as a domain value"
+        );
+        // Per-package "requests" must not have empty entry but must keep cdn.example.com
+        let pkg_domains = cfg
+            .domain_allowlist
+            .get("requests")
+            .expect("requests domain entry must exist");
+        assert!(
+            !pkg_domains.contains(""),
+            "per-package domain_allowlist must not store empty string as a domain value"
+        );
+        assert!(
+            pkg_domains.contains("cdn.example.com"),
+            "legitimate per-package domain entry must be kept"
+        );
+    }
+
+    #[test]
+    fn per_package_allowlist_whitespace_collision_merges_both_ip_sets() {
+        // Two YAML keys that differ only by surrounding whitespace both trim to
+        // the same package name — their IP sets must be merged, not silently
+        // dropped. This is the allowlist analogue of OPEN #277.
+        let yaml = concat!(
+            "ip_allowlist:\n",
+            "  - requests:\n",
+            "    - 1.2.3.4\n",
+            "  - \"  requests  \":\n",
+            "    - 5.6.7.8\n",
+        );
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{}", yaml).expect("write");
+        let cfg = load(&file);
+
+        let ips = cfg
+            .ip_allowlist
+            .get("requests")
+            .expect("requests must be present");
+        assert!(ips.contains("1.2.3.4"), "first key's IP must be present");
+        assert!(
+            ips.contains("5.6.7.8"),
+            "whitespace-variant key's IP must be merged in"
+        );
+    }
+
+    #[test]
+    fn domain_allowlist_bare_tld_rejected_in_global_and_per_package_positions() {
+        // A domain entry with no dot (e.g. "com") would match evil.com, attacker.com, etc.
+        // via ends_with(".com"). It must be rejected at config-load time (FIXED #367).
+        let yaml = concat!(
+            "domain_allowlist:\n",
+            "  - com\n",      // global bare TLD — must be dropped
+            "  - pypi.org\n", // global valid — must be kept
+            "  - requests:\n",
+            "    - org\n",                    // per-package bare TLD — must be dropped
+            "    - files.pythonhosted.org\n", // per-package valid — must be kept
+        );
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{}", yaml).expect("write");
+        let cfg = load(&file);
+
+        let global = cfg.domain_allowlist.get("*").expect("global bucket");
+        assert!(!global.contains("com"), "bare TLD 'com' must be rejected");
+        assert!(
+            global.contains("pypi.org"),
+            "valid global entry must be kept"
+        );
+
+        let pkg = cfg
+            .domain_allowlist
+            .get("requests")
+            .expect("requests bucket");
+        assert!(
+            !pkg.contains("org"),
+            "bare TLD 'org' must be rejected for per-package"
+        );
+        assert!(
+            pkg.contains("files.pythonhosted.org"),
+            "valid per-package entry must be kept"
+        );
+    }
+
+    #[test]
+    fn sensitive_file_access_allowlist_all_values_filtered_drops_key() {
+        // When all values for a package in sensitive_file_access_allowlist are
+        // overly-permissive ("*", "/", "*/", "/*"), the package key must be removed
+        // from the map entirely — not left as an empty HashSet (FIXED #368).
+        let yaml = concat!(
+            "sensitive_file_access_allowlist:\n",
+            "  all-bad-pkg:\n",
+            "    - \"*\"\n",
+            "    - /\n",
+            "  mixed-pkg:\n",
+            "    - \"*\"\n",
+            "    - .env\n", // one valid entry survives
+        );
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{}", yaml).expect("write");
+        let cfg = load(&file);
+
+        assert!(
+            !cfg.sensitive_file_access_allowlist
+                .contains_key("all-bad-pkg"),
+            "key with only overly-permissive values must be removed entirely"
+        );
+        let mixed = cfg
+            .sensitive_file_access_allowlist
+            .get("mixed-pkg")
+            .expect("mixed-pkg must be present");
+        assert!(mixed.contains(".env"), "valid entry must survive");
+        assert!(
+            !mixed.contains("*"),
+            "overly-permissive entry must be removed"
+        );
+    }
+
+    #[test]
+    fn parse_list_map_whitespace_collision_merges_both_value_sets() {
+        // Two YAML keys differing only in surrounding whitespace must merge their
+        // value sets, not silently drop one. Covers the parse_list_map path (here
+        // via git_clone_allowlist) which shares the same validate_allowlist_pkg_key
+        // → entry().or_default().extend() merge semantics as ip/domain PerPackage.
+        let yaml = concat!(
+            "git_clone_allowlist:\n",
+            "  requests:\n",
+            "    - https://github.com/psf/requests.git\n",
+            "  \"  requests  \":\n",
+            "    - https://github.com/psf/requests-cache.git\n",
+        );
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{}", yaml).expect("write");
+        let cfg = load(&file);
+
+        let urls = cfg
+            .git_clone_allowlist
+            .get("requests")
+            .expect("requests must be present");
+        assert!(
+            urls.contains("https://github.com/psf/requests.git"),
+            "first key's URL must be present"
+        );
+        assert!(
+            urls.contains("https://github.com/psf/requests-cache.git"),
+            "whitespace-variant key's URL must be merged in"
+        );
     }
 
     #[test]
@@ -844,6 +1357,41 @@ mod config_tests {
         assert_eq!(list.len(), 1);
     }
 
+    #[test]
+    fn parse_list_map_empty_value_set_drops_key() {
+        // A package key whose entire value list is blank/whitespace must not be
+        // inserted into the allowlist — operator has no protection for that key
+        // and must see a warning (FIXED #363).
+        let yaml = concat!(
+            "git_clone_allowlist:\n",
+            "  my-pkg:\n",
+            "    - \"  \"\n", // whitespace-only — filtered by parse_list
+            "    - \"\"\n",   // empty — filtered by parse_list
+            "  other-pkg:\n",
+            "    - https://github.com/acme/repo.git\n",
+        );
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{}", yaml).expect("write");
+        let cfg = load(&file);
+
+        assert!(
+            !cfg.git_clone_allowlist.contains_key("my-pkg"),
+            "key with only blank values must not appear in the allowlist"
+        );
+        assert!(
+            cfg.git_clone_allowlist.contains_key("other-pkg"),
+            "key with valid values must be present"
+        );
+    }
+
+    #[test]
+    fn option_zero_to_none_direct() {
+        use crate::option_zero_to_none;
+        assert_eq!(option_zero_to_none(Some(0), "warn"), None);
+        assert_eq!(option_zero_to_none(Some(42), "warn"), Some(42));
+        assert_eq!(option_zero_to_none(None, "warn"), None);
+    }
+
     // --- gap #12: parse_global_options edge cases ---
 
     #[test]
@@ -1201,24 +1749,45 @@ pub async fn run(args: Vec<String>) {
         }
     };
 
-    if !policy.ip_allowlist.is_empty() {
+    let total_ips: usize = policy.ip_allowlist.values().map(|s| s.len()).sum();
+    if total_ips > 0 {
         println!(
             "ℹ️ [gyrseek] Loaded {} allowlisted IP(s) from {}",
-            policy.ip_allowlist.len(),
-            config_path
+            total_ips, config_path
         );
     }
-    if !policy.domain_allowlist.is_empty() {
+    let total_domains: usize = policy.domain_allowlist.values().map(|s| s.len()).sum();
+    if total_domains > 0 {
         println!(
             "ℹ️ [gyrseek] Loaded {} allowlisted domain(s) from {}",
-            policy.domain_allowlist.len(),
-            config_path
+            total_domains, config_path
         );
     }
     if !policy.git_clone_allowlist.is_empty() {
         println!(
-            "ℹ️ [gyrseek] Loaded {} allowlisted git clone target(s) from {}",
+            "ℹ️ [gyrseek] Loaded git clone allowlist for {} package(s) from {}",
             policy.git_clone_allowlist.len(),
+            config_path
+        );
+    }
+    if !policy.artifact_allowlist.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] Loaded artifact allowlist for {} package(s) from {}",
+            policy.artifact_allowlist.len(),
+            config_path
+        );
+    }
+    if !policy.sensitive_file_access_allowlist.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] Loaded sensitive file access allowlist for {} package(s) from {}",
+            policy.sensitive_file_access_allowlist.len(),
+            config_path
+        );
+    }
+    if !policy.process_exec_allowlist.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] Loaded process exec allowlist for {} package(s) from {}",
+            policy.process_exec_allowlist.len(),
             config_path
         );
     }

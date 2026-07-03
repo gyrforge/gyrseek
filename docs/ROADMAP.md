@@ -13,6 +13,7 @@
 - Empty/whitespace traces now fail closed; strace stderr is captured; Docker tracing is hardened with `-s 4096 -v`, unprivileged payload execution, and `--cap-add SYS_PTRACE`.
 - IPv6 capture and canonicalization, IPv4-mapped IPv6 collapse, sandbox-local IP filtering, and cloud-metadata IP preservation.
 - FCrDNS-backed `domain_allowlist`, balanced-bracket exec parsing, and correct PEP 508 extras normalization for registry lookup plus forwarded pinning.
+- Mixed global/per-package allowlist syntax across all six allowlist types (`ip_allowlist`, `domain_allowlist`, `git_clone_allowlist`, `artifact_allowlist`, `sensitive_file_access_allowlist`, `process_exec_allowlist`); effective set is global ∪ per-package for ip/domain; per-package only for the other four. Config-load-time key and value validation with actionable warnings.
 - `internal_package_exemptions` support for first-party/private-index packages that should bypass registry lookup and sandbox scanning entirely.
 - Docker, host, and MicroVM sandbox modes, including runtime selection via `GYRSEEK_MICROVM_RUNTIME` and the `sandbox runtimes` diagnostic command.
 - Prebuilt scanner image support and documented digest-pinning workflow for faster, more reproducible scans.

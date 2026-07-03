@@ -195,9 +195,14 @@ The codebase has evolved significantly since the initial domain-aware IP diff te
 - **Routing**: `lock_routing_tests`, `pnpm_routing_tests` asserting bare `uv lock`, `poetry lock`, and `pnpm install` correctly reach lockfile vs. package fallback scanners, while commands like `uv venv` passthrough safely.
 - **Process Exit**: `cli_burst_exit_tests` verifying exit code 1 propagation for release burst rules, `forward_fail_closed_tests` proving host command failure propagates perfectly.
 - **Version & Config** (12 `new_package_exemptions` tests): Covers both map (`pkg: "ver"`) and deprecated list (`- pkg`) YAML formats via the custom `deserialize_new_package_exemptions` deserializer; explicit empty map (`{}`), null section, whitespace-only values and keys, mixed valid/empty entries, and the deprecation warning path. CLI integration (`new_package_exemptions_map_format_loaded_successfully`, `new_package_exemptions_list_format_emits_deprecation_warning`) exercises the full binary end-to-end.
+- **IP allowlist config-load** (`ip_allowlist_config_load_normalizes_ipv4_mapped_ipv6`): Verifies `load_policy_config` collapses `::ffff:x.x.x.x` → bare IPv4 at parse time for both global and per-package entries (FIXED #361).
+- **parse_list_map empty value set** (`parse_list_map_empty_value_set_drops_key`): Verifies a package key whose entire value list is blank/whitespace is not inserted into the allowlist (FIXED #363).
+- **Domain allowlist bare TLD rejected** (`domain_allowlist_bare_tld_rejected_in_global_and_per_package_positions`): Verifies dot-free entries (e.g. `"com"`) are dropped in both global and per-package positions at config-load time (FIXED #367).
+- **sensitive_file_access_allowlist all-bad values drops key** (`sensitive_file_access_allowlist_all_values_filtered_drops_key`): Verifies a package key is removed entirely when all its values are overly-permissive after the value-filter retain (FIXED #368).
+- **option_zero_to_none direct** (`option_zero_to_none_direct`): Directly exercises all three arms of `option_zero_to_none`: `Some(0)→None`, `Some(42)→Some(42)`, `None→None` (FIXED #376).
 - `version_flag_tests`: `--version` short circuit without sandboxing, forwarded command's own `--version` not intercepted.
 
-**Total**: 310 tests. 100% pass.
+**Total**: 358 tests. 100% pass.
 
 ## 12. `check_override_ages` — filtered-override return value (5 tests)
 

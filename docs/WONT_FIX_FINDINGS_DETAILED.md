@@ -760,3 +760,311 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 **Summary:** Claim that `scan_packages_versions` is too large (~534 lines) with too many responsibilities, and that the `#[cfg(any(debug_assertions, test))]` branching creates CI-invisible behavioral asymmetry between test and production modes.
 
 **Reason for Not Fixing:** Function size is a style/maintainability concern not tied to correctness or security. Refactoring would require user-visible API changes with no functional benefit at this time. The `#[cfg]` test/production asymmetry is a real concern, but it is already separately tracked as OPEN #264 with its own detailed rationale and fix direction — tracking it again here is a duplicate.
+
+---
+
+### Finding 306 — `false-positive` | `src/scanning.rs:279,323` | 🚫 Won't Fix
+
+**Summary:** Claim that `ip_allowlist.get(package_name)` and `domain_allowlist.get(package_name)` at the per-package lookup sites in `filter_allowlisted_new_connections` and `filter_domain_allowlisted_new_connections_with` do not trim `package_name`, so a future caller passing an untrimmed name would silently miss its per-package entries.
+
+**Reason for Not Fixing:** All current callers derive `package_name` from `plan.package` which is populated from parsed CLI arguments or lockfile entries. Neither path introduces leading or trailing whitespace. The claim describes a hypothetical future regression in caller code, not a current bug. Adding a `.trim()` at the lookup site would be defensive bloat for a scenario that does not exist. If a future caller with untrimmed names is added, the fix belongs at the new call site.
+
+---
+
+---
+
+### Finding 308 — `false-positive` | `src/lib.rs` | 🚫 Won't Fix
+
+**Summary:** Claim that per-package domain/IP normalization lacks dedicated edge-case tests for trailing-dot stripping, mixed-case lowering, and IPv6 canonicalization in the per-package code paths.
+
+**Reason for Not Fixing:** The per-package normalization paths execute the same functions as the global paths — `normalize_domain` (which calls `.trim().trim_end_matches('.').to_ascii_lowercase()`) and `scanning::normalize_ip_string`. A regression in normalization logic would break both global and per-package paths simultaneously and would be caught by the existing global-path tests. Adding duplicated test coverage for identical code paths is yagni.
+
+---
+
+### Finding 309 — `yagni` | `src/lib.rs` | 🚫 Won't Fix
+
+**Summary:** Claim that mistyped per-package allowlist keys (e.g. `"requets"` instead of `"requests"`) silently produce dead entries with no diagnostic, and that scan-time validation against the known package list should be added.
+
+**Reason for Not Fixing:** The full package list is not available at config-parse time, making config-load validation impossible. Scan-time cross-referencing would add complexity (passing the resolved package list back to a config-validation layer) for a usability concern with no security consequence — a missed per-package allowlist entry is fail-closed (the package is still scanned, the entry just has no effect). This is the same accepted limitation as mistyped keys in `baseline_overrides` and `min_baseline_age_hours_by_package`.
+
+---
+
+### Finding 311 — `false-positive` | `src/scanning.rs:2351-2370` | 🚫 Won't Fix
+
+**Summary:** Claim that `filter_domain_allowlisted_new_connections_with` runs before `find_new_connections_domain_aware`, so the per-package domain allowlist removes IPs before the domain-aware diff sees them, amplifying the existing OPEN #281 domain-planting attack surface.
+
+**Reason for Not Fixing:** The premise is factually wrong. The call order in `scan_packages_versions` (lines 2351→2359→2364) is: (1) `find_new_connections_domain_aware` computes the diff from raw current and baseline IP sets, (2) `filter_allowlisted_new_connections` applies the ip allowlist to the diff output, (3) `filter_domain_allowlisted_new_connections_with` applies the domain allowlist to the remainder. Neither allowlist filter receives or modifies the raw `ips_curr`/`baseline_ips` sets that the diff reads. The domain allowlist cannot amplify OPEN #281.
+
+### Finding 320 — `false-positive` | `src/scanning.rs:247-252` | 🚫 Won't Fix
+
+**Summary:** Claim that the DNS interceptor in `find_new_connections_domain_aware` has an `IpAddr` type mismatch: connection IPs are normalized to `IpAddr::V4` via `normalize_ip_string`, but DNS-map IPs could be stored as `IpAddr::V6(::ffff:1.2.3.4)`, causing `dns_ips.contains(&parsed)` to always return false for those entries.
+
+**Reason for Not Fixing:** The scenario requires a DNS server to serve an IPv4-mapped address as an AAAA record. This does not happen in practice: IPv4 addresses are served as A records (DNS type 1), which `parse_dns_response` always stores as `IpAddr::V4`. An AAAA record (type 28) contains a 16-byte IPv6 address — a real IPv4-mapped `::ffff:x.x.x.x` in AAAA position would be a synthetic/crafted DNS response outside the real threat model. Both real A records and real AAAA records are stored correctly typed, and a connection IP resolved from an A record always matches its DNS-map counterpart. No production path produces the type mismatch.
+
+---
+
+### Finding 321 — `false-positive` | `src/lib.rs:236` | 🚫 Won't Fix
+
+**Summary:** Claim that per-package allowlist keys are `.trim()`-only (no `.to_ascii_lowercase()`), causing silent dead entries when npm preserves mixed-case package names like `MyPackage` while the allowlist key is `mypackage`.
+
+**Reason for Not Fixing:** npm enforces all-lowercase package names at the registry level. A package named `MyPackage` cannot be published to the npm registry, and `npm install MyPackage` returns a 404. No real npm package has a mixed-case name that could diverge from a lowercase allowlist key.
+
+PyPI is case-insensitive but does NOT normalize package names before they reach `plan.package` — if an operator runs `pip install Requests`, `plan.package` will be `Requests`, and `allowlist.get("Requests")` will miss a key written as `requests`. This creates a genuinely dead allowlist entry with no diagnostic. However, the consequence is fail-closed (a missed allowlist entry means the package is not allowlisted, which is the safe direction — the package still gets scanned and blocked on anomalies). This is the same class as WONT_FIX #309 (misspelled keys): config is a trusted boundary, and adding scan-time cross-referencing to catch casing mismatches would require knowing the full resolved package list at config-parse time, which is unavailable then. Operators who care about exact casing should write lowercase keys, which is the universal convention for Python package names (PEP 508).
+
+**TM-5 (parse_list_map asymmetry):** `parse_list_map` passes `lowercase: bool` to `parse_list` which lowercases *values* only, not package keys. A package key `"Requests"` in YAML stores under `"Requests"` in the map; `scan_packages_versions` looks up by the resolved name (e.g. `"requests"`), producing a miss. This is the same root cause as the PyPI casing issue above — distinct manifestation (values vs. keys path) but identical fail-closed consequence and identical reason for not fixing.
+
+---
+
+### Finding 323 — `false-positive` | `src/scanning.rs:316-322` | 🚫 Won't Fix
+
+**Summary:** Claim that `filter_domain_allowlisted_new_connections_with` builds `effective: HashSet<String>` via `.cloned().collect()`, while the IP equivalent `filter_allowlisted_new_connections` uses `HashSet<&str>` via `.map(|s| s.as_str()).collect()` — an inconsistency and unnecessary allocation.
+
+**Reason for Not Fixing:** Switching the domain filter from `HashSet<String>` to `HashSet<&str>` requires adding a lifetime parameter to the function signature and threading it through `domain_is_allowlisted`, adding complexity for a single O(n) allocation over a typically small (≤10 entry) allowlist that is built once per filter call. FIXED #305 addressed O(n×m) re-normalization work that occurred on every lookup — a per-call cost proportional to both allowlist size and IP count. The `cloned()` here is a one-time O(n) build, which is qualitatively different and not worth the lifetime annotation overhead to eliminate.
+
+---
+
+### Finding 327 — `yagni` | `src/lib.rs:217-330`, `src/scanning.rs:269-334` | 🚫 Won't Fix
+
+**Summary:** Claim that no end-to-end integration test exercises the full `load_policy_config` → `PolicyConfig` → `scan_packages_versions` → filter chain with a mixed global+per-package allowlist.
+
+**Reason for Not Fixing:** The gap exists at the integration boundary, but the risk is low. `load_policy_config` tests assert on every `PolicyConfig` field that the function populates — the output is directly verified. Scan-layer tests construct `PolicyConfig` structs directly with the same field values and assert filter behavior. The connection between the two is direct struct field assignment (`ip_allowlist: ip_allowlist`, etc.) with no transformation logic that could silently regress. A full mock-runner end-to-end test for this path would require MockRunner setup, fake version history, and fake trace output — substantial complexity for a bridge that has no logic to test, only assignment.
+
+**Filter orthogonality note:** A reviewer raised that even if the bridge is correct, a filter function itself could silently ignore per-package entries (e.g., if `get(package_name)` was accidentally replaced with `get("*")`). This is a distinct risk from the bridge. However, each of the four `parse_list_map`-based filter functions has a dedicated per-package isolation test (e.g. `sensitive_reads_allowlist_does_not_leak_across_packages`, FIXED #325) that would catch exactly this regression — the filter tests are independent of the bridge and cover the per-package lookup path directly.
+
+---
+
+### Finding 337 — `false-positive` | `src/scanning.rs:299` | 🚫 Won't Fix
+
+**Summary:** Claim that `ends_with(&format!(".{}", allowed))` in `domain_is_allowlisted` is overly broad — an entry of `"amazonaws.com"` also matches `ec2.us-east-1.amazonaws.com`, `cloudfront.amazonaws.com`, and every other subdomain of the parent zone, when the operator may have intended only to allow that specific domain.
+
+**Reason for Not Fixing:** Subdomain-inclusive matching is **standard DNS allowlist convention**, used by every WAF, proxy, and firewall domain allowlist tool. Writing a parent domain in an allowlist universally means "this domain and its subdomains." The exact-match branch (`normalized == *allowed`) already handles operators who want to scope to a single FQDN — they write `"s3.amazonaws.com"` instead of `"amazonaws.com"`. The suffix match is not a bug but the correct behavior for the common case (e.g., AWS SDK packages legitimately connect to hundreds of `*.amazonaws.com` endpoints; requiring the operator to enumerate every subdomain individually is not viable). The domain allowlist is written by a trusted operator in a trusted config file; an operator who writes `"amazonaws.com"` is making a deliberate scoping decision, not an accidental one. There is no security regression: the allowlist is always an explicit opt-in that widens the pass set; fail-closed behavior applies to everything outside the allowlist.
+
+**Shared-infrastructure amplification note:** An operator writing `"amazonaws.com"` to allow S3 access also admits DynamoDB (`dynamodb.us-east-1.amazonaws.com`), EC2 metadata (`ec2.amazonaws.com`), STS (`sts.amazonaws.com`), and every other AWS service endpoint — a much broader pass set than intended. This is an accepted consequence of parent-domain matching. Operators who want tighter scoping should write the specific service subdomain (e.g. `"s3.amazonaws.com"`) rather than the parent zone. WONT_FIX #347 documents the related FCrDNS erosion risk when a shared-infrastructure domain is allowlisted per-package.
+
+---
+
+### Finding 348 — `yagni` | `src/lib.rs:158` | 🚫 Won't Fix
+
+**Summary:** Claim that `parse_list` lacks a dedicated unit test — coverage is indirect through callers only. (`option_zero_to_none` split to FIXED #376 when a third call site raised the stakes.)
+
+**Reason for Not Fixing:** `parse_list` is a four-line filter+lowercase+collect pipeline. Every caller is independently tested and the function has no branching logic that a caller test could miss. A dedicated test would be an exact duplicate of a subset of the existing caller tests — adding it increases test count without increasing coverage or confidence.
+
+---
+
+### Finding 349 — `false-positive` | `src/lib.rs:257,279-280,300,324` | 🚫 Won't Fix
+
+**Summary:** Claim that the domain allowlist uses `"blank"` while the IP allowlist uses `"invalid"` for similar situations — operators scanning logs for one term miss warnings from the other allowlist.
+
+**Reason for Not Fixing:** The different wording reflects genuinely different validation situations. The IP path emits `"Ignoring invalid ip_allowlist entry (not an IP)"` when `s.parse::<IpAddr>()` returns `Err` — this fires on any non-IP string including non-empty garbage like `"foobar"` or `"1.2.3.4.5"`. The domain path emits `"Ignoring blank domain_allowlist entry"` specifically when `normalize_domain(s)` returns `""` — i.e. the value was whitespace-only or empty after trimming. A non-empty invalid domain string (e.g. `"not_a_domain!"`) would pass through silently because the domain path has no invalid-format check beyond normalization. The messages are accurate for what they detect. Unifying them to `"invalid"` would be misleading for the domain path since it only catches the blank case.
+
+---
+
+### Finding 350 — `false-positive` | `docs/FIXED_FINDINGS_DETAILED.md` | 🚫 Won't Fix
+
+**Summary:** Claim that new detailed entries (332+) include severity in headings as a convention drift — `FIXED #326` and `AGENTS.md` state summary tables (including severity) live only in main files.
+
+**Reason for Not Fixing:** The claim is backwards. New entries (315+) use `### Finding N: description` — no severity in the heading. Old entries (1–24) use `### Finding N — Severity | file | ✅ Fixed` — those include severity. The inconsistency runs in the opposite direction from the claim: older entries are more verbose, newer entries are cleaner. The newer format (no severity) is the correct convention. No action needed.
+
+---
+
+### Finding 342 — `yagni` | `src/lib.rs:247-252,269-274` | 🚫 Won't Fix
+
+**Summary:** Claim that IP addresses are double-parsed at config-load time: `s.parse::<IpAddr>()` validates the string then discards the result; `normalize_ip_string(&s)` parses from scratch internally. The parsed `IpAddr` could be threaded into normalization to avoid the second parse.
+
+**Reason for Not Fixing:** This code path runs once at startup over a small config list (typically <20 entries). The second parse costs nanoseconds. Eliminating it would require changing `normalize_ip_string`'s signature from `(&str) -> String` to accepting an `IpAddr`, rippling the change to all other callers (including the hot-path filter). The complexity cost far exceeds any measurable benefit.
+
+---
+
+### Finding 343 — `yagni` | `src/scanning.rs:286` | 🚫 Won't Fix
+
+**Summary:** Claim that `normalize_ip_string(ip)` in `filter_allowlisted_new_connections` is redundant because connection IPs are already normalized by `extract_connection_ips` at trace-capture time — the call is always a no-op on legitimate inputs.
+
+**Reason for Not Fixing:** The normalization is a cheap defensive guard at the boundary of a security-critical filter. `extract_connection_ips` normalizes today, but a future refactor could add a new call site that bypasses that path. Keeping the normalization in the filter ensures correctness regardless of how the caller constructs `new_connections`. The cost is negligible (parse + format of a small set per scan).
+
+---
+
+### Finding 344 — `yagni` | `src/scanning.rs:299` | 🚫 Won't Fix
+
+**Summary:** Claim that `format!(".{}", allowed)` in `domain_is_allowlisted` allocates a new `String` per allowlist entry per call. The comment on line 298 says "no re-allocation needed" (referring to Fix #324's removal of `normalize_domain` re-allocation), but this `format!` allocation remains.
+
+**Reason for Not Fixing:** The allowlist is typically ≤10 entries; this function is not on a hot path (called once per new IP after a sandbox scan, not in a tight loop). Replacing with a byte-index suffix check would reduce readability for a sub-microsecond saving. The comment on line 298 is accurate in context — it describes the removal of the `normalize_domain(allowed)` per-entry re-normalization allocation from Fix #324, not a claim that zero allocations occur on that line.
+
+---
+
+### Finding 345 — `false-positive` | `src/lib.rs:643-651` | 🚫 Won't Fix
+
+**Summary:** Claim that `is_none_or(|s| s.is_empty())` in `per_package_allowlist_star_key_rejected_for_ip_domain_and_list_map` is less strict than `!contains_key("*")`, potentially masking an insertion-then-removal bug.
+
+**Reason for Not Fixing:** Both `None` (key absent) and `Some(empty_set)` (key present but empty) correctly verify the security property — no IPs are reachable via the `"*"` bucket. The production code path cannot produce `Some(empty_set)` for `"*"` (the `"*"` key is only inserted by the `Global` branch which always inserts a non-empty string, or by the PerPackage branch which is rejected by `validate_allowlist_pkg_key`). There is no real "insertion-then-removal" scenario in the code.
+
+---
+
+### Finding 346 — `yagni` | `src/scanning.rs` | 🚫 Won't Fix
+
+**Summary:** Claim that `find_new_items` has no dedicated unit test verifying `find_new_items(&a, &a).is_empty()` or superset behavior.
+
+**Reason for Not Fixing:** `find_new_items` is three lines: `current.difference(baseline).cloned().collect()` + `out.sort()`. The set-difference logic is entirely delegated to `HashSet::difference` from the standard library — there is no custom set-difference implementation that could have an off-by-one. The only gyrseek-specific logic is the sort, which the caller tests exercise on all non-empty outputs. The three delegating functions are one-line wrappers; their caller tests exercise identical-sets, new-items, and no-new-items cases, providing complete coverage of everything gyrseek contributes. A dedicated test for `find_new_items` would test stdlib `HashSet::difference`, not gyrseek code.
+
+**Sort stability concern:** A reviewer noted that `HashSet::difference` returns elements in non-deterministic iteration order, so caller tests that only assert membership (rather than exact order) might not catch a regression that removes or breaks the sort. In practice, the three caller wrapper tests (`sensitive_reads`, `git_clone`, `process_exec`) produce multi-element results and assert on `Vec` equality against a sorted expected slice, which locks in sort order. A regression dropping `out.sort()` would fail those tests. The sort contract is covered.
+
+---
+
+### Finding 347 — `accepted-risk` | `src/scanning.rs:295-301`, `docs/ARCHITECTURE.md` | 🚫 Won't Fix
+
+**Summary:** Claim that allowing an operator to add a per-package domain allowlist entry for a domain the package author controls (e.g. `evil-pkg: ["cdn.evil-pkg.net"]`) erodes the FCrDNS trust model. FCrDNS only prevents third-party PTR spoofing; it does not protect against an attacker who owns the allowlisted domain rotating C2 infrastructure behind their own legitimate PTR and forward DNS records.
+
+**Reason for Not Fixing:** This is fundamental to how any allowlist works. When an operator writes `evil-pkg: ["cdn.evil-pkg.net"]`, they are explicitly asserting trust in that domain for that package. The config file is a trusted boundary; the operator is assumed to have vetted the domain before allowlisting it. No allowlist system — DNS-based or otherwise — can protect against an operator deliberately trusting infrastructure the attacker controls. FCrDNS prevents *third-party* DNS spoofing attacks, which is the relevant threat model. Removing or restricting the allowlist feature would not mitigate this scenario; it would only reduce operator control.
+
+**Cloud-storage exfiltration scenario (S3/GCS/Azure Blob):** A concrete instance of this risk: an operator adds `aws-sdk: ["s3.amazonaws.com"]` to allow the AWS SDK to connect to S3. Later, the package is compromised. The malicious version exfiltrates credentials to an attacker-controlled S3 bucket — a connection to `s3.amazonaws.com` that FCrDNS validates cleanly (AWS's own PTR and forward DNS records confirm the binding). gyrseek sees `s3.amazonaws.com` traffic in both baseline and current, the allowlist passes it, and no anomaly fires. The same applies to `storage.googleapis.com`, `blob.core.windows.net`, and similar cloud-storage endpoints. This is an accepted risk: the allowlist is an operator opt-in that explicitly widens the pass set, and the operator is responsible for understanding that allowlisting a shared-infrastructure domain (rather than a package-specific endpoint) admits a broad class of traffic. Operators can mitigate this by preferring narrow, package-specific domain entries and avoiding shared cloud-storage wildcard allowlisting for sensitive packages.
+
+---
+
+### Finding 335 — `false-positive` | `src/scanning.rs:492-540` | 🚫 Won't Fix
+
+**Summary:** Claim that `extract_dns_map` should heuristically detect whether strace was invoked with the `-xx` flag (by checking for `\x`-escaped bytes in the trace) and emit a warning or error if not, since a missing `-xx` flag would produce un-escaped binary wire data that `unescape_strace_string` cannot parse, yielding an empty DNS map.
+
+**Reason for Not Fixing:** The strace flags are unconditionally assembled in `build_matrix_script` in `src/sandbox.rs`. There is no code path in the production build where `extract_dns_map` receives a trace without `-xx`. A heuristic detector (e.g., checking for `\x` occurrences in the captured DNS payload) would be brittle: a trace with no DNS activity would look identical to a trace generated without `-xx` from the heuristic's perspective, producing false warnings. The safe failure mode when `-xx` is absent is already correct: `unescape_strace_string` returns the raw bytes unchanged, the DNS regex does not match, the DNS map is empty, and the fallback to FCrDNS and then plain-IP membership diff kicks in — both of which are fail-closed for genuinely new endpoints. Adding a `-xx` detection heuristic adds complexity and false-positive risk for a configuration state that cannot arise in the production path.
+
+---
+
+### Finding 336 — `false-positive` | `Cargo.toml` | 🚫 Won't Fix
+
+**Summary:** Claim that version bumps in `Cargo.toml` should be in a separate commit from code changes to keep semantic version history clean and allow `git log` to isolate behavioral changes from release bookkeeping.
+
+**Reason for Not Fixing:** This is a style preference with no correctness or security consequence. The repository has no established policy requiring version bump isolation — reviewing the git log shows version bumps and code changes are regularly combined in single commits. The overhead of splitting every PR into a "code change" commit and a "version bump" commit adds process friction without a compensating benefit for a project of this size and team composition.
+
+**Semver jump rationale (0.6.0→1.0.0):** The 0.6.0→1.0.0 increment was intentional. The per-package allowlist feature changes the YAML config schema in a way that is backward-compatible (new optional keys), but 1.0.0 signals general production readiness after the core security hardening series (Findings 1–341). ROADMAP lists future changes that may further evolve the config schema, but those will each carry their own version bumps when they land. Semver policy for this project: breaking config changes bump major, new backward-compatible features bump minor, fixes bump patch.
+
+**Tag-at-docs-commit concern:** The concern that a combined code+docs commit causes the release tag to point at a "docs commit" rather than the functional feature commit is noted. In practice, the tag points at the HEAD of the PR merge, which contains both the feature code and the version bump in the same commit — there is no separate docs-only commit here. The version bump is in the same commit as the code changes it describes.
+
+---
+
+### Finding 353 — `yagni` | `src/scanning.rs:1573-1614` | 🚫 Won't Fix
+
+**Summary:** `find_new_sensitive_reads`, `find_new_git_clone_signatures`, and `find_new_process_exec_signatures` are each now a single-line delegate to `find_new_items`. Claim: delete the wrappers and call `find_new_items` directly at each call site.
+
+**Reason for Not Fixing:** The named wrappers preserve domain-specific semantics at their call sites — `find_new_sensitive_reads(current, baseline)` is self-documenting in a way that `find_new_items(current, baseline)` is not when read in context of the broader anomaly-detection logic. The thin delegation adds zero runtime cost (inlined by the compiler). Removing the wrappers would save three function definitions but make every call site less readable. The tradeoff favours named domain functions.
+
+---
+
+### Finding 354 — `yagni` | `src/scanning.rs` | 🚫 Won't Fix
+
+**Summary:** Claim that the `baselines` parameter in `select_effective_baselines` and `fetch_history_with_baselines` should be renamed to `baseline_versions` for clarity.
+
+**Reason for Not Fixing:** The name `baselines` is consistent with the surrounding codebase terminology (type `Vec<String>` holding version strings used as baseline probes). It is unambiguous in context — `select_effective_baselines` makes the intent clear from the function name alone. Renaming is a cosmetic change with no correctness or security benefit.
+
+---
+
+### Finding 355 — `yagni` | `src/lib.rs` | 🚫 Won't Fix
+
+**Summary:** `AllowlistEntry::Global(String)` is declared after `AllowlistEntry::PerPackage(HashMap<String, Vec<String>>)`. With `#[serde(untagged)]`, serde tries variants in declaration order. Moving `Global` first would avoid attempting HashMap deserialization on scalar inputs.
+
+**Reason for Not Fixing:** Config is parsed once at startup over a typically small allowlist. The HashMap attempt on a scalar YAML string fails fast (serde returns a type error immediately on a non-map node); it is not a retry loop or an O(n) scan. The declaration order has no observable impact on performance or correctness. Reordering would be a micro-optimisation with no safety benefit.
+
+---
+
+### Finding 356 — `yagni` | `src/scanning.rs` | 🚫 Won't Fix
+
+**Summary:** `normalize_ip_string` creates an intermediate `String` that it immediately returns. Claim: refactor to avoid the temporary.
+
+**Reason for Not Fixing:** `normalize_ip_string` is called at config-load time over the ip_allowlist entries — typically a handful of strings, once per process startup. The single heap allocation per entry is negligible. Changing the function signature or implementation to avoid the intermediate would not improve any measurable metric and would make the code harder to follow.
+
+---
+
+### Finding 372 — `yagni` | `src/scanning.rs:1577,1619,1644,1671` | 🚫 Won't Fix
+
+**Summary:** Claim that `filter_allowlisted_sensitive_reads`, `filter_allowlisted_process_exec_signatures`, `filter_allowlisted_artifact_findings`, and `filter_allowlisted_git_clone_signatures` should each have a doc comment noting they only look up `get(package_name)` with no `"*"` global chain, so a future developer adding global support to `parse_list_map` knows to update these functions.
+
+**Reason for Not Fixing:** Any developer adding global `"*"` support to `parse_list_map` must audit its callers by definition — that audit is not optional and not guided by comments. A comment saying "update this if you change parse_list_map" is a speculative maintenance note with no present-day value. The four functions already share a visually identical structure (`get(package_name)`, no `"*"` fallback) that is immediately legible. Comments in this style tend to become stale when the function is updated and the comment is not, creating misleading documentation. YAGNI: no global parse_list_map support is planned.
+
+---
+
+### Finding 377 — `false-positive` | `docs/ARCHITECTURE.md`, `AGENTS.md` | 🚫 Won't Fix
+
+**Summary:** Review claimed ARCHITECTURE.md omitted the config-loading helper layer (`validate_allowlist_pkg_key`, `option_zero_to_none`, `parse_list_map`) — the section allegedly covered only the allowlist decision model (step 5) without describing the helper hierarchy or why extraction was necessary.
+
+**Reason for Not Fixing:** The premise was incorrect. FIXED #374 had already added a "Config-loading helpers" subsection to ARCHITECTURE.md describing all three helpers, their validation semantics, merge behavior, and call sites. The finding was raised against a version of the document that had already been updated in the same PR. No action needed.
+
+---
+
+### Finding 373 — `yagni` | `src/lib.rs:1751-1825` | 🚫 Won't Fix
+
+**Summary:** Claim that the 13-block startup info section could be extracted to a macro or slice-of-tuples iterator to eliminate the repeated `if !policy.X.is_empty() { println!(...) }` pattern.
+
+**Reason for Not Fixing:** The blocks are not uniform. They use three different access patterns — `.values().map(|s| s.len()).sum()` for ip/domain (counting total entries), `.len()` for map-keyed allowlists (counting package keys), and `if let Some(v) =` for optional numeric thresholds. They reference different field types (`HashMap<String, HashSet<String>>`, `HashMap<String, String>`, `Vec<String>`, `Option<usize>`). Extracting the uniform subset (the `is_empty()` + `println!` blocks) would require an enum or closure per variant to bridge the type diversity, producing more abstraction than the original. The three `release_burst_threshold` and `minimum_release_age_package` blocks would remain inline regardless, so the extraction is partial. The existing pattern is straightforward to read and extend: adding a new allowlist type is a three-line copy. YAGNI.
+
+**CO-1 partial-extraction proposal considered:** A reviewer proposed extracting the uniform count-based blocks into `fn print_config_summary(policy, config_path)` using a slice-of-tuples iterator for the `is_empty()`+`len()` subset while keeping threshold and exemption blocks inline. This correctly identifies the extractable subset, but the result would still require the non-uniform blocks to remain adjacent (or be moved inside the same function), and the function would need closures or an enum to handle the `.sum()` vs `.len()` access difference. The net outcome is a private helper with mixed-type closure arguments that is harder to extend than the current three-line copy pattern. Extraction deferred until a second caller exists.
+
+---
+
+### Finding 369 — `accepted-risk` | `src/scanning.rs:1577-1599` | 🚫 Won't Fix
+
+**Summary:** No path canonicalization in `filter_allowlisted_sensitive_reads` — allowlist entries and strace-observed paths are compared via string matching (`==` and `ends_with`). Path-complexity variants like `./././.aws/credentials` or `foo/../../.aws/credentials` could bypass the allowlist.
+
+**Reason for Not Fixing:** The paths in strace output are the paths as received by the Linux kernel at the `open`/`openat` syscall boundary. The kernel does not receive the pre-resolution client string — it receives the path after the C library has resolved `./` components through `realpath`-equivalent logic for most callers. Strace traces the syscall argument, not the userspace string before `chdir`/relative resolution. In practice, strace-observed paths in production sandbox traces are already in a normalized form (absolute paths without `./` or `../` components). Additionally, `Path::canonicalize()` performs a live filesystem lookup (`stat` + readlink chain) and requires the path to exist on the *host* filesystem at the time of the call. All paths being evaluated are paths inside a Docker container — they are never present on the host. Every `canonicalize()` call would fail with `No such file or directory` and fall back to string matching anyway, adding overhead with zero benefit. OPEN #270 tracks the related symlink traversal bypass, which is the realistic threat in the sandbox context.
+
+---
+
+### Finding 366 — `yagni` | `src/lib.rs:429-441` | 🚫 Won't Fix
+
+**Summary:** Claim that the `sensitive_file_access_allowlist` value guard only rejects four hardcoded patterns (`"*"`, `"/"`, `"*/"`, `"/*"`) — other wildcard forms like `"**"`, `"*foo*"`, or `"*foo/*"` pass through, creating a maintenance gap if wildcard semantics evolve.
+
+**Reason for Not Fixing:** The filter at `scanning.rs:1592` uses `strip_prefix('*')` to convert any `"*"`-prefixed entry into a suffix match on the stripped remainder. A value like `"**"` becomes a suffix match for paths ending in `"*"` (none exist in practice), and `"*foo*"` becomes a suffix match for paths ending in `"foo*"` (also none). These are dead entries — they never match any real file path and provide no protection, but they also don't over-match. The four rejected forms are the only ones that would produce meaningfully over-broad matches (`"*"` → any path, `"/"` → root, `"*/"` and `"/*"` → effectively anything). No planned change to wildcard semantics exists; adding exhaustive pattern validation is YAGNI in the absence of a concrete threat.
+
+---
+
+### Finding 357 — `yagni` | `src/lib.rs`, `AGENTS.md` | 🚫 Won't Fix
+
+**Summary:** The `"*"` key convention for the global ip_allowlist/domain_allowlist bucket is not explained in user-facing documentation (README).
+
+**Reason for Not Fixing:** The semantics are fully documented in AGENTS.md. A full config-reference page (covering all six allowlists, their keys, value formats, and effective-set semantics) is tracked as a ROADMAP item. Adding a partial note in the README before the full reference exists would create documentation fragmentation. The existing AGENTS.md entry is the authoritative source for contributors; end-users requiring a config reference will be directed to the forthcoming dedicated doc.
+
+---
+
+### Finding 395 — `false-positive` | `docs/FIXED_FINDINGS.md` | 🚫 Won't Fix
+
+**Summary:** Claim that existing FIXED entries (#292–#376) violate the convention added by FIXED #375 by including line numbers (e.g. `src/lib.rs:65-70`, `src/scanning.rs:295-304`).
+
+**Reason for Not Fixing:** FIXED #375 established a forward-looking convention: *new* entries should omit line numbers. It does not retroactively require stripping line numbers from ~60 entries written before the convention existed. The same logic applies as WONT_FIX #350 and #384: retroactive normalization of historical entries has no correctness benefit and would touch every existing entry. The convention applies from the point it was established; prior entries are grandfathered.
+
+---
+
+### Finding 396 — `yagni` | `src/lib.rs` | 🚫 Won't Fix
+
+**Summary:** `!s.contains("")` in a test assertion uses `HashSet::contains` (membership check — correct) but reads like a `String::contains` substring check to a casual reader unfamiliar with the type. Replacing with `!s.iter().any(|d| d.is_empty())` would make the intent explicit.
+
+**Reason for Not Fixing:** The assertion is functionally correct. `HashSet<String>::contains("")` checks whether the empty string is a member of the set — exactly the intended check. The type annotation is visible in context. This is the same class as WONT_FIX #345 (`is_none_or` assertion readability). Cosmetic-only; no correctness risk.
+
+---
+
+### Finding 392 — `yagni` | `src/lib.rs`, `src/scanning.rs` | 🚫 Won't Fix
+
+**Summary:** Global IP/domain allowlist entries are stored under the magic key `"*"` in the same `HashMap` as per-package entries. A filter function that forgets to chain `get("*")` with `get(package_name)` silently skips all global entries. A separate `global: HashSet<String>` field in `PolicyConfig` would make the global/per-package distinction unmissable at compile time.
+
+**Reason for Not Fixing:** Both current filter functions (`filter_allowlisted_new_connections` and `filter_domain_allowlisted_new_connections_with`) correctly chain `get("*").unwrap_or(&empty).iter().chain(get(package_name).unwrap_or(&empty).iter())`. The risk is speculative: a future developer adding a third filter forgetting the chain. Restructuring `PolicyConfig` to split the `HashMap` into `global: HashSet<String>` + `per_package: HashMap<String, HashSet<String>>` would require changes to `load_policy_config`, both filter functions, all test fixtures, and the startup summary — substantial churn for a two-caller pattern that is already visually distinctive. No current bug; YAGNI.
+
+---
+
+### Finding 384 — `false-positive` | `docs/OPEN_FINDINGS_DETAILED.md` | 🚫 Won't Fix
+
+**Summary:** New entries (#378–#382) use `### Finding N: description` while pre-existing entries use `### Finding N — Severity | file | ⚠️ Open`. The formats are inconsistent.
+
+**Reason for Not Fixing:** Same class as WONT_FIX #350, which noted the same inconsistency in FIXED_FINDINGS_DETAILED.md and documented it as not a forward drift — new entries omit severity, old entries include it. Retroactively normalizing hundreds of entries to a single format has no correctness benefit. The inconsistency is cosmetic and benign.
+
+---
+
+### Finding 385 — `yagni` | `src/lib.rs` | 🚫 Won't Fix
+
+**Summary:** Over 20 `println!("⚠️ [gyrseek] ...")` calls in `load_policy_config` follow a near-identical pattern. A helper macro or function could reduce repetition.
+
+**Reason for Not Fixing:** Each call site is at most two lines and carries specific, non-uniform context (allowlist name, package name, entry value, guidance text). Extracting to a helper would require passing these varying fields as parameters, producing a function with 3–4 arguments that is harder to read than the inline calls. Same class as WONT_FIX #373 (non-uniform startup block). No correctness benefit; YAGNI.
+
+---
+
+### Finding 386 — `yagni` | `src/lib.rs` | 🚫 Won't Fix
+
+**Summary:** `validate_allowlist_pkg_key` accepts `&HashMap<String, HashSet<String>>` but only calls `.contains_key()` on it. The parameter type is broader than required; `&HashSet<String>` (the key set) or a `contains_key`-capable trait would be sufficient.
+
+**Reason for Not Fixing:** `validate_allowlist_pkg_key` is a private helper with three callers, all of which pass the full map because they already have it in scope. Narrowing to `&HashSet<String>` would require callers to pass `map.keys().collect()` or a separate set, adding an allocation and a transformation step at each call site. Introducing a trait bound for a single `.contains_key()` call adds abstraction for no correctness gain. The function is already well-scoped and the broader type costs nothing at runtime.
+
+---

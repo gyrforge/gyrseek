@@ -374,11 +374,11 @@ if next.starts_with('-') {
 
 **Summary:** `extract_sensitive_file_reads` requires decomposition.
 
-**Root cause:** The function is 264 lines long and conflates `fd_table` construction, `/proc/N/fd/M` resolution, clone/fork fd inheritance, dup/fcntl tracking, and sensitivity classification.
+**Root cause:** The function is very long and conflates `fd_table` construction, `/proc/N/fd/M` resolution, clone/fork fd inheritance, dup/fcntl tracking, and sensitivity classification. The clone/fork fd-inheritance block in the resumed-syscall handler and the initial-syscall handler is duplicated verbatim — see also Finding 67.
 
 **Failure scenario:** Increased maintenance burden, higher risk of introducing logic bugs, and poor testability.
 
-**Fix direction:** Extract helper functions like `build_fd_table` and `resolve_proc_fd_path`.
+**Fix direction:** Extract helper functions like `build_fd_table` and `resolve_proc_fd_path`. Start by extracting the shared clone/fork inheritance logic (Finding 67) as `fn inherit_fds(child_pid, parent_pid, fd_table)`.
 
 ---
 
@@ -605,11 +605,11 @@ if next.starts_with('-') {
 
 **Summary:** Clone/fork fd-inheritance block duplicated verbatim.
 
-**Root cause:** A 12-line fd-inheritance loop appears identically in both the resumed-syscall handler and the initial-syscall handler.
+**Root cause:** A 12-line fd-inheritance loop (`let mut to_insert = Vec::new(); for (&(p, fd), path) in &fd_table { … } for (c_pid, fd, path) in to_insert { … }`) appears identically in both the resumed-syscall handler and the initial-syscall handler of `extract_sensitive_file_reads`. See also Finding 47 which tracks the broader decomposition.
 
-**Failure scenario:** Maintenance trap; updating one but not the other causes the paths to drift out of sync.
+**Failure scenario:** Maintenance trap; updating one copy but not the other causes the two paths to drift out of sync.
 
-**Fix direction:** Extract to `fn inherit_fds(child_pid, parent_pid, fd_table)`.
+**Fix direction:** Extract to `fn inherit_fds(child_pid: u32, pid: u32, fd_table: &mut HashMap<(u32, i32), String>)` and call it from both sites.
 
 ---
 
@@ -656,16 +656,6 @@ if next.starts_with('-') {
 **Fix direction:** Add a `if [ ! -f consolidated_gyrseek_review.md ]; then exit 1; fi` guard before the grep check. Remove the `-i` flag to enforce exact case, and do not swallow stderr so failures are visible.
 
 ---
-
-### Finding 79 — High | `lib.rs:133` | ⚠️ Open
-
-**Summary:** `parse_list_map` lacks tests for exploitable edge cases.
-
-**Root cause:** `parse_list_map` is the central trust boundary for all 4 allowlist types (`process_exec_allowlist`, `artifact_allowlist`, `git_clone_allowlist`, `sensitive_file_access_allowlist`), but lacks inline tests. Untested edge cases create exploitable parser-level attacks: colon injection in values (`C:\Users\...` splits on wrong delimiter), comma injection in package names, and empty-value collapsing (`package:` produces `[""]` which downstream empty-string matches bypass all allowlist entries).
-
-**Failure scenario:** Edge cases in parsing break allowlist boundaries. **Coupled Vulnerability (F77 + F79):** A `parse_list_map` bug that flattens all allowlist keys into a single global key, combined with the missing cross-package isolation test (Finding 77), creates a concrete attack chain: an operator adds `package-b` to `sensitive_file_access_allowlist` for `~/.aws/credentials`, and the parser bug silently grants that exemption to a malicious `package-c` as well.
-
-**Fix direction:** Add comprehensive inline unit tests for `parse_list_map` covering colons, commas, empty values, and strict key isolation.
 
 ---
 
@@ -802,19 +792,6 @@ if next.starts_with('-') {
 ---
 
 ---
-
-### Finding 77 — High | `scanning.rs:1363-1385` | ⚠️ Open
-
-**Summary:** Missing cross-package isolation test for `sensitive_file_access_allowlist`.
-
-**Root cause:** While tests exist for `process_exec_allowlist`, `artifact_allowlist`, and `git_clone_allowlist`, there is no test for `filter_allowlisted_sensitive_reads` demonstrating that an allowlist entry for one package does not leak and allow access for another package.
-
-**Failure scenario:** A bug in the allowlist evaluation could allow any package to read a sensitive file if *any* package in the config is allowed to read it.
-
-**Fix direction:** Add tests verifying isolation and exact matching behavior for `sensitive_file_access_allowlist`.
-
----
-
 
 ### Finding 171 — High | `scanning.rs` | ⚠️ Open
 
@@ -1128,13 +1105,19 @@ if next.starts_with('-') {
 
 ### Finding 288 — Low | `src/lib.rs:48-51` | ⚠️ Open
 
-**Summary:** `new_package_exemptions` list→map format change has no deprecation window; operators upgrading encounter a hard config-parse error with no migration path documented in release notes.
+**Summary:** The 0.6.0→1.0.0 upgrade introduces multiple breaking or behavior-changing items that have no changelog entry or migration guide.
 
-**Root cause:** FIXED_FINDINGS #239 replaced silent list-format acceptance with a hard config-parse error. This is correct security behaviour (the old list format mapped entries to `""` versions, creating a no-op bypass). However, operators upgrading gyrseek with an existing `gyrseek.yaml` using the old `- pkg` list syntax will get an immediate hard parse error on startup with no mention of how to migrate. Release notes have not been updated to call this out.
+**Root cause:** Several config-validation and schema changes landed in this release without being documented in a CHANGELOG or upgrade guide. Operators upgrading from 0.6.x will encounter silent behavior changes and hard errors with no actionable guidance.
 
-**Failure scenario:** An operator upgrades gyrseek in CI, their `gyrseek.yaml` uses the old list format, gyrseek refuses to start with a config-parse error, and the CI pipeline breaks with no actionable message beyond the error text.
+**Affected changes:**
+1. `new_package_exemptions` list format (`- pkg`) is now a hard config-parse error (FIXED #239). Migration: replace `- pkg` with `pkg: "<version>"`. Previously silently mapped to `""` (no-op), now rejected outright.
+2. Bare-TLD domain entries (e.g. `"com"`) are now dropped with a warning (FIXED #367). Operators with such entries will see warnings and reduced allowlist coverage.
+3. `"*"` and empty values in `ip_allowlist`, `domain_allowlist`, and `parse_list_map`-based allowlists now emit explicit warnings (FIXED #304, #315, #328). Previously silent no-ops now produce startup noise that may alarm operators.
+4. Per-package allowlist syntax for `ip_allowlist` and `domain_allowlist` is new. Operators with global-only configs are unaffected, but those who attempt per-package scoping need to learn the new YAML shape.
 
-**Fix direction:** Document the breaking change prominently in the changelog/release notes with the migration instruction: replace `- pkg` list entries with `pkg: "<version>"` map entries.
+**Failure scenario:** An operator upgrades gyrseek in CI, their `gyrseek.yaml` uses the old `new_package_exemptions` list format, gyrseek refuses to start with a config-parse error, and the pipeline breaks with no actionable guidance. Separately, an operator's domain allowlist had a bare-TLD entry that silently provided coverage before; after upgrade it is silently dropped, reducing protection without a clear migration path.
+
+**Fix direction:** Add a CHANGELOG entry and/or upgrade guide for 1.0.0 documenting all breaking and behavior-changing config items with before/after examples.
 
 ---
 
@@ -1159,18 +1142,6 @@ if next.starts_with('-') {
 **Failure scenario:** An agent following AGENTS.md instructions adds a summary table row to OPEN_FINDINGS_DETAILED.md (which has no such table), creating an inconsistency in the detailed file format.
 
 **Fix direction:** Update AGENTS.md line 186 to remove the reference to summary tables in detailed files, clarifying that only the main `*_FINDINGS.md` files have summary tables.
-
----
-
-### Finding 292 — Low | `README.md:434` | ⚠️ Open
-
-**Summary:** `min_baseline_age_hours` config table says values below 24h are "silently clamped" but the code emits an explicit warning — not silent.
-
-**Root cause:** README.md line 434 reads: "Values below 24h are silently clamped to the 24h security floor." The code at `src/lib.rs:258-262` emits: `"⚠️ [gyrseek] Warning: min_baseline_age_hours for '{}' is set to {} hours, which is below the hardcoded security floor. Automatically raising it to {} hours."` — a visible `println!` warning. The word "silently" is inaccurate.
-
-**Failure scenario:** An operator reading the README expects no feedback when their value is clamped, and may miss the warning in their logs thinking it is expected behaviour.
-
-**Fix direction:** Change "silently clamped" to "clamped (with a warning)" in the README config table row.
 
 ---
 
@@ -1210,24 +1181,161 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 298 — Low | `AGENTS.md:128` | ⚠️ Open
+### Finding 380: Config-load warnings use stdout instead of stderr
 
-**Summary:** AGENTS.md claims the `min_baseline_age_hours` security floor is "enforced in all three code paths of `fetch_history_with_baselines`" but the floor enforcement lives entirely at config-parse time in `src/lib.rs:257-262`. The value arrives at `fetch_history_with_baselines` already clamped; the function has no inline `HARD_MINIMUM_AGE_HOURS` check.
+**Summary:** All `~60` warning `println!` calls in `load_policy_config` write to stdout. CI pipelines typically only surface stderr in failure highlights; stdout warnings scroll past silently. The one `eprintln!` in the file is inconsistent with all config validation warnings.
 
-**Root cause:** FIXED #247 centralized floor enforcement to config-parse time (correct change), but the AGENTS.md documentation was not updated to reflect the new enforcement location. The phrase "all three code paths of `fetch_history_with_baselines`" is stale and points maintainers to the wrong place when reasoning about where the guarantee lives.
+**Root cause:** Warning messages were written with `println!` throughout `load_policy_config` without considering CI stdout/stderr routing conventions.
 
-**Failure scenario:** A maintainer searching for the floor enforcement to audit or extend it looks inside `fetch_history_with_baselines` (as AGENTS.md instructs), finds no floor check, and either concludes the enforcement is missing or adds a redundant inline check — diverging from the actual enforcement point at lib.rs.
+**Failure scenario:** A bare-TLD domain entry dropped with a warning, a `"*"` key rejected, or a whitespace-collision merged in config — all emit stdout-only diagnostics that are invisible in CI dashboards that filter to stderr.
 
-**Fix direction:** Update AGENTS.md line 128 to say the floor is enforced at config-parse time in `src/lib.rs:257-262`; the clamped value is passed through to `fetch_history_with_baselines` and no inline check is needed there.
+**Fix direction:** Switch all config validation `println!("⚠️ [gyrseek] ...")` calls to `eprintln!` so warnings route to stderr and appear in CI failure output.
 
 ---
 
-### Finding 299 — Low | `docs/FIXED_FINDINGS.md:137` / `docs/WONT_FIX_FINDINGS.md:74` | ⚠️ Open
+### Finding 381: Per-package allowlists are permanent trust anchors with no version-pinning
 
-**Summary:** Finding number 252 is used in both FIXED_FINDINGS.md and WONT_FIX_FINDINGS.md, violating the flat numeric namespace convention. FIXED #252 is the IPv6 TCP test regression (never actually fixed — see OPEN #275). WONT_FIX #252 is the false-positive claim about a 530-word table row.
+**Summary:** An allowlist entry (e.g. `sensitive_file_access_allowlist: { telemetry-sdk: ["/etc/ssl/certs"] }`) is granted for a package name unconditionally. It applies equally to v1.0.0 (legitimate) and v5.0.0 (compromised). No mechanism exists to scope an allowlist entry to a specific version or version range.
 
-**Root cause:** The flat numeric namespace is supposed to have no collisions across all three finding categories. The WONT_FIX #252 entry was filed without checking whether #252 was already taken in FIXED_FINDINGS.md.
+**Root cause:** All per-package allowlist structures (`ip_allowlist`, `domain_allowlist`, `sensitive_file_access_allowlist`, `git_clone_allowlist`, `artifact_allowlist`, `process_exec_allowlist`) key on package name only. There is no version field in the config schema or the `PolicyConfig` struct.
 
-**Failure scenario:** A reference to "finding 252" is ambiguous — it could mean either entry depending on which file the reader is looking at.
+**Failure scenario:** An operator allowlists a known-good SDK's network traffic or file access. The package is later compromised and a new version is published with malicious additions. The allowlist silently passes the new version's behavior because the name matches, defeating the anomaly detection that would otherwise catch the new activity.
 
-**Fix direction:** Renumber WONT_FIX #252 to the next available ID (currently 300). Update all cross-references.
+**Fix direction:** Add optional version-scoping syntax (e.g. `telemetry-sdk@1.x: [...]`) to per-package allowlist entries; at scan time, check the resolved version before applying the allowlist. Unversioned entries retain current behavior for backward compatibility.
+
+**Precedent:** `new_package_exemptions` already implements version-pinning at the config level (`pkg: "1.2.3"` — the exemption only matches the exact resolved version). The same pattern could be applied to per-package allowlist keys, using the resolved `v_curr` at scan time as the comparand.
+
+---
+
+### Finding 382: Missing test coverage for `"*/"` and `"/*"` overly-permissive guards
+
+**Summary:** `sensitive_file_access_allowlist_all_values_filtered_drops_key` tests only the `"*"` and `"/"` guard cases. The test comment mentions all four patterns (`"*"`, `"/"`, `"*/"`, `"/*"`) but only two are exercised. A regression removing `"*/"` or `"/*"` from the `retain` guard passes CI undetected.
+
+**Root cause:** The test was written to cover FIXED #368 (empty-set cleanup) and FIXED #360 (`"/*"` guard addition) but the test body was not updated to exercise the newly added `"/*"` and `"*/"` patterns.
+
+**Failure scenario:** A future refactor consolidates or rewrites the four-value retain condition and accidentally drops `"*/"` or `"/*"`. The test passes because it only asserts on `"*"` and `"/"`. An operator config with `"*/"` now passes the guard silently as a dead entry with no warning.
+
+**Fix direction:** Add `"*/"` and `"/*"` to the `all-bad-pkg` value list in the test and assert they are also removed, consistent with the comment that describes all four patterns.
+
+---
+
+### Finding 394 — Low | `README.md` | ⚠️ Open
+
+**Summary:** The README `domain_allowlist` config table row does not document the bare-TLD rejection gate added by FIXED #367. An operator who has a bare label like `"com"` in their config will see a startup warning after upgrading but find no explanation in the README.
+
+**Root cause:** FIXED #367 updated AGENTS.md and added the check to `load_policy_config`, but the README config table was not updated to mention that entries without a dot are rejected.
+
+**Failure scenario:** An operator upgrading from 0.6.0 with `domain_allowlist: ["com"]` (intending something like "allow all .com domains") sees `⚠️ [gyrseek] Ignoring domain_allowlist entry "com": a bare label without a dot would match all subdomains of any TLD` and has no README reference explaining why or what to write instead.
+
+**Fix direction:** Add a note to the README `domain_allowlist` row explaining that entries must contain at least one dot (e.g. `"pypi.org"`, not `"org"`) and that bare labels are rejected at startup with a warning.
+
+---
+
+### Finding 393 — Medium | `src/scanning.rs` | ⚠️ Open
+
+**Summary:** `filter_allowlisted_git_clone_signatures` matches only the URL component of a git clone signature, silently discarding all flags. A git clone allowlist entry for `https://github.com/legit/repo.git` also permits the same URL cloned with `--recurse-submodules` (pulls a malicious submodule), `--config core.gitProxy=/evil/proxy` (routes traffic through an attacker-controlled proxy), `--branch malicious`, or `--depth 1` variants.
+
+**Root cause:** The filter splits the signature on `|`, takes only index 0 (the URL via `.split('|').next()`), trims and lowercases it, then checks membership in the normalized allowlist. The remainder of the signature — the pipe-separated flags captured by `extract_git_clone_signatures` — is discarded before comparison.
+
+**Failure scenario:** An operator adds `git_clone_allowlist: { evil-pkg: ["https://github.com/legit/repo.git"] }` after reviewing a baseline that clones without flags. A compromised new version clones the same URL with `--recurse-submodules` pointing to a malicious submodule. The allowlist matches (URL is identical), the clone proceeds, and the malicious submodule is pulled without triggering an anomaly.
+
+**Fix direction:** Either (a) require exact signature match (URL + all flags must match the stored allowlist entry, requiring operators to specify full signatures like `"https://github.com/legit/repo.git|--recurse-submodules"`), or (b) treat any flag change as a new signature requiring explicit re-allowlisting. Option (a) is more operator-friendly for known-good flag combinations; option (b) is stricter and fail-closed.
+
+---
+
+### Finding 388 — Medium | `src/lib.rs` | ⚠️ Open
+
+**Summary:** An empty per-package IP or domain value list (`- my-pkg: []`) silently creates a dead `HashSet` entry in `ip_allowlist` or `domain_allowlist`. The operator believes protection is active for that package but no entries are stored.
+
+**Root cause:** The ip and domain PerPackage branches call `ip_allowlist.entry(pkg.clone()).or_default()` before iterating the value list. If the list is empty, the entry is created with an empty set and no warning is emitted. FIXED #363 added the equivalent empty-set warning to `parse_list_map`, but the ip/domain PerPackage branches were not updated.
+
+**Failure scenario:** An operator writes `- my-pkg: []` expecting to grant per-package exemption later, or accidentally clears the list. The startup message counts the entry as "loaded"; at scan time `get("my-pkg")` returns an empty set, so no IPs or domains are exempted — silently defeating the allowlist.
+
+**Fix direction:** After the per-entry loop in both PerPackage branches, check `if set.is_empty()` and emit a warning consistent with FIXED #363: "ip_allowlist package 'pkg' has no valid entries; no allowlist protection will be applied for this package." Consider also removing the empty key to avoid counting it in the startup summary.
+
+---
+
+### Finding 389 — Medium | `src/scanning.rs` | ⚠️ Open
+
+**Summary:** `find_new_items` is used at three set-difference sites but not at the artifact diff site, which uses an inline `.difference().cloned().collect()` without sorting. Three patterns for set-difference exist across the codebase.
+
+**Root cause:** The artifact finding diff predates the `find_new_items` extraction (FIXED #330) and was not updated. `find_new_items` adds a deterministic sort on top of `HashSet::difference`; the inline call skips it.
+
+**Failure scenario:** `new_artifact_findings` is an unsorted `Vec`. Any consumer that compares it against a sorted expected list (e.g. in tests) or displays it to the operator sees non-deterministic ordering. A future change to `find_new_items` (e.g. adding dedup logic) would silently miss the inline artifact site.
+
+**Fix direction:** Replace the inline `.difference(&baseline_artifact_findings).cloned().collect::<Vec<_>>()` with `find_new_items(&artifact_curr, &baseline_artifact_findings)` for consistency and determinism.
+
+---
+
+### Finding 390 — Low | `src/scanning.rs` | ⚠️ Open
+
+**Summary:** `reverse_dns_domain` is called three times for overlapping IP sets per scan: (1) inside `find_new_connections_domain_aware` for the domain-level diff, (2) inside `filter_domain_allowlisted_new_connections_with` for allowlist matching, and (3) in the enrichment display loop. Each call does a live PTR lookup; two-thirds of these are redundant.
+
+**Root cause:** The three call sites evolved independently. No shared cache was introduced when the enrichment display loop was added.
+
+**Failure scenario:** Each redundant PTR lookup adds latency per new connection endpoint per scan. For a package with many new IPs, this compounds. In offline or slow-DNS environments it delays scan results.
+
+**Fix direction:** Build a `HashMap<String, Option<String>>` cache before the first call site, pass it through to all three, and memoize results on first lookup. Alternatively, make `reverse_dns_domain` accept a mutable cache reference so callers share state naturally.
+
+---
+
+### Finding 391 — Low | `src/lib.rs` | ⚠️ Open
+
+**Summary:** `parse_list_map_empty_value_set_drops_key` tests blank and whitespace string values within a list, but not a bare `my-pkg:` YAML key with no list items (which serde deserializes as an empty `Vec<String>`). The FIXED #363 warning path for a genuinely empty list is untested.
+
+**Root cause:** The test was written to cover blank/empty string entries inside a list; the case of no items at all was not considered.
+
+**Failure scenario:** A serde change that delivers a bare key as `None` instead of an empty `Vec`, or a future refactor of `parse_list_map` that handles the empty-vec path differently, would silently skip the warning. CI passes because the tested path (blank string values) still triggers correctly.
+
+**Fix direction:** Add a test case with `my-pkg:` and no value list items (empty YAML sequence or null). Assert the key is absent from the result and the warning is emitted.
+
+---
+
+### Finding 383 — Low | `AGENTS.md`, `docs/ARCHITECTURE.md` | ⚠️ Open
+
+**Summary:** `validate_allowlist_pkg_key`, `parse_list_map`, and `option_zero_to_none` are documented in full parameter-level detail in both AGENTS.md (lines ~52–56) and ARCHITECTURE.md (Config-loading helpers subsection). Two authoritative sources for the same specification will drift as the helpers evolve.
+
+**Root cause:** FIXED #374 added a "Config-loading helpers" subsection to ARCHITECTURE.md that duplicated the level of detail already present in AGENTS.md rather than cross-referencing it.
+
+**Failure scenario:** A future change to a helper's signature or semantics is reflected in one document but not the other. Both appear authoritative, leaving readers uncertain which is correct.
+
+**Fix direction:** Designate AGENTS.md as the single authoritative source for helper implementation detail. Reduce the ARCHITECTURE.md subsection to a one-line description per helper with a "see AGENTS.md for full detail" cross-reference.
+
+---
+
+### Finding 387 — Low | `src/scanning.rs` | ⚠️ Open
+
+**Summary:** No unit test exercises `domain_is_allowlisted` with a trailing-dot hostname (e.g. `"example.com."`) as the FCrDNS result. `normalize_domain` strips the trailing dot before comparison, but this path is untested.
+
+**Root cause:** The normalization is a no-op for all current production inputs (FCrDNS results in the sandbox never carry a trailing dot in practice), so no test was written for it.
+
+**Failure scenario:** A future refactor of `normalize_domain` or `domain_is_allowlisted` removes the `trim_end_matches('.')` step. All existing tests pass because none supply a trailing-dot input. A real FCrDNS result with a trailing dot then fails to match its allowlist entry, silently blocking a legitimate package.
+
+**Fix direction:** Add a unit test to `domain_is_allowlisted` that supplies an allowlist entry `"example.com"` and verifies that a trailing-dot lookup `"example.com."` also matches.
+
+---
+
+### Finding 378: Parse-time warnings omit config file path
+
+**Summary:** `load_policy_config` receives the config file `path` as a parameter but parse-time warnings (invalid IP entries, invalid domain entries, overly-permissive `sensitive_file_access_allowlist` values) do not include it in their output. Only the post-load startup summary lines include `config_path`.
+
+**Root cause:** Warning `println!` calls inside `load_policy_config` were written without the path parameter, while the startup messages in `run()` (which do have `config_path` in scope) include it.
+
+**Failure scenario:** In a multi-project CI environment where several repos each have a `gyrseek.yaml`, a `⚠️ [gyrseek] Ignoring invalid ip_allowlist entry` line in aggregated logs provides no indication of which project's config file is misconfigured.
+
+**Fix direction:** Pass `path` through to each warning inside `load_policy_config`, or thread it into helper functions, so every diagnostic names the source file.
+
+---
+
+### Finding 379: Startup IP/domain count conflates global and per-package buckets
+
+**Summary:** `total_ips` at startup is computed as `policy.ip_allowlist.values().map(|s| s.len()).sum()`, which sums all map values including the `"*"` global bucket. The message "Loaded N allowlisted IP(s)" does not distinguish global entries from per-package entries, making it impossible to audit allowlist scope from startup output alone.
+
+**Root cause:** The ip_allowlist and domain_allowlist `HashMap` stores both global entries under key `"*"` and per-package entries under package name keys. Summing all values conflates the two.
+
+**Failure scenario:** An operator configured 2 global IPs and 13 per-package IPs across 5 packages sees "Loaded 15 allowlisted IP(s)" — they cannot tell whether all 15 are global (applying to every package) or scoped per-package without reading the config file.
+
+**Fix direction:** Separate the count: `N global, M per-package across P package(s)` by checking `ip_allowlist.get("*")` for the global count and summing the rest for per-package.
+
+---
+
