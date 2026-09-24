@@ -12,10 +12,11 @@ use std::process::Command;
 use serde::{Deserialize, Deserializer};
 
 use parsing::{
-    parse_npm_install_packages_from_args, parse_pip_install_packages_from_args,
-    parse_poetry_lock_packages_from_content, parse_pylock_packages_from_content,
-    parse_requirements_packages_from_content, parse_uv_lock_packages_from_content,
-    parse_uv_lock_upgrade_packages_from_args, rewrite_args_with_pinned_versions,
+    has_only_non_registry_npm_specs, parse_npm_install_packages_from_args,
+    parse_pip_install_packages_from_args, parse_poetry_lock_packages_from_content,
+    parse_pylock_packages_from_content, parse_requirements_packages_from_content,
+    parse_uv_lock_packages_from_content, parse_uv_lock_upgrade_packages_from_args,
+    rewrite_args_with_pinned_versions,
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
 use sandbox::{SandboxRunner, build_runner_from_env, list_docker_runtimes};
@@ -2108,6 +2109,14 @@ pub async fn run(args: Vec<String>) {
             || (eye.manager == "pnpm"
                 && eye.passthrough_args.get(1).map(String::as_str) == Some("add")))
     {
+        if has_only_non_registry_npm_specs(&eye.passthrough_args) {
+            println!(
+                "ℹ️ [gyrseek] Only non-registry package specifications detected. Forwarding command directly..."
+            );
+            eye.forward_original_command();
+            return;
+        }
+
         let npm_sub = eye
             .passthrough_args
             .get(1)

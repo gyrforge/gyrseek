@@ -57,3 +57,31 @@ fn pnpm_install_uses_package_json_fallback() {
         "pnpm install should find package.json dependencies, got: {stdout}"
     );
 }
+
+#[test]
+fn pnpm_add_only_non_registry_specs_forwards_directly_without_scanning() {
+    let dir = tempfile::tempdir().expect("temp dir should be created");
+    // Even if a package.json with dependencies exists, non-registry targets must NOT scan it!
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"dependencies":{"left-pad":"^1.3.0"}}"#,
+    )
+    .expect("package.json should be written");
+
+    let output = pnpm_command(&["pnpm", "add", "file:../local-pkg"])
+        .current_dir(dir.path())
+        .output()
+        .expect("gyrseek process should run");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "Only non-registry package specifications detected. Forwarding command directly..."
+        ),
+        "expected non-registry specs to forward directly, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("Testing 1 package(s)"),
+        "must not scan package.json when non-registry targets are passed, got: {stdout}"
+    );
+}

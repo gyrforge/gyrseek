@@ -4,31 +4,6 @@
 
 ## Detailed Findings
 
-### Finding 11 — High | `parsing.rs:468` | ⚠️ Open
-
-**Summary:** When all npm CLI args are non-registry specs (`file:`, `git+`, `https://`, `link:`), the package.json fallback fires and scans unrelated registry dependencies; any policy hit on those deps blocks the install the user actually requested.
-
-**Root cause:** `parse_npm_install_packages_from_args` correctly filters non-registry specs, but when all args are filtered, `packages` is empty and the `!packages.is_empty()` guard falls through to the `package.json` fallback. That fallback reads all `dependencies`, `devDependencies`, etc. — none of which were part of the user's command — and returns them as scan targets.
-
-**Failure scenario:** User runs `gyrseek npm install file:../local-pkg`. Arg filtered → `packages=[]`. `package.json` lists `moment` published 10 minutes ago. `minimum_release_age_package: 1` is configured. `scan_many_with_cache` blocks on `moment`. `exit(1)`. The local-file install never runs.
-
-**Chained with:** Finding 12 — same root cause when no `package.json` exists.
-
-**Fix direction:** When all CLI args are non-registry specs, forward the command directly without scanning. The package.json fallback should only fire when the user typed `npm install` with no arguments at all.
-
----
-
-### Finding 12 — High | `lib.rs:1021` | ⚠️ Open
-
-**Summary:** When all npm CLI args are non-registry specs and no `package.json` exists, gyrseek exits 1, blocking a valid local or URL-based install.
-
-**Root cause:** Same filter path as Finding 11. With no `package.json` in the working directory, the fallback returns `Vec::new()`. Back in `lib.rs`, `npm_packages.is_empty()` → `std::process::exit(1)`.
-
-**Failure scenario:** A C++ project that pulls one npm utility runs `gyrseek npm install https://registry.example.com/tool.tgz`. No `package.json` exists. All args filtered → `packages=[]` → fallback fails → `exit(1)`. Valid install blocked.
-
-**Fix direction:** Same as Finding 11 — treat the all-non-registry-args case as a passthrough rather than fail-closed.
-
----
 
 ### Finding 14 — Low | `parsing.rs:880` | ⚠️ Open
 
@@ -42,17 +17,6 @@
 
 ---
 
-### Finding 21 — High | `sandbox.rs:629` | ⚠️ Open
-
-**Summary:** The container memory limit is hardcoded to 512 MB. Heavy npm/pnpm dependency trees with native compilation (node-gyp, esbuild, swc) routinely exceed this, causing OOM-killed probes and false-positive blocks.
-
-**Root cause:** `build_docker_run_args` appends `"--memory".to_string(), "512m".to_string()` (`sandbox.rs:629–630`) unconditionally. npm packages like `@parcel/watcher`, `esbuild`, `sharp`, or any Python package compiling C extensions can use 1–4 GB during install. A legitimate scan is OOM-killed, the trace is empty, and `scan_packages_versions` fails closed.
-
-**Failure scenario:** A CI pipeline scans `npm install @parcel/watcher`. The container is OOM-killed during native build. gyrseek sees an empty trace → blocks the install → engineer disables gyrseek entirely.
-
-**Fix direction:** Make the memory limit configurable via an env var (e.g. `GYRSEEK_MEM_LIMIT`, default `2g`), or remove the limit and let the container inherit the host Docker daemon limit. At minimum, a generous default like `2g` would cover 95% of packages.
-
----
 
 ### Finding 22 — Medium | `scanning.rs:188` | ⚠️ Open
 
@@ -193,17 +157,6 @@ if next.starts_with('-') {
 ---
 
 
-### Finding 33 — High | `sandbox.rs`, `scanning.rs` | ⚠️ Open
-
-**Summary:** `execveat` double gap — not in strace trace list AND not in parser regex.
-
-**Root cause:** `execveat` is omitted from the `-e trace=` list in `sandbox.rs`. Additionally, the `parse_execve_argvs` regex in `scanning.rs` only matches `execve(`.
-
-**Failure scenario:** Executing a payload via `execveat` with `AT_EMPTY_PATH` produces zero execve syscalls in the trace and zero argv parsing, leading to a fully invisible detection bypass.
-
-**Fix direction:** Add `execveat` to the strace `-e trace=` list AND extend the regex parser to `(?:execve|execveat)\(`.
-
----
 
 ### Finding 35 — High | `scanning.rs` | ⚠️ Open
 
@@ -494,17 +447,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 60 — High | `scanning.rs` | ⚠️ Open
-
-**Summary:** Failed `open()` counted as successful sensitive read (Baseline Poisoning).
-
-**Root cause:** The scanner calls `is_sensitive_file_read` unconditionally on extracted paths before verifying the syscall return value at lines 1346-1350.
-
-**Failure scenario:** An attacker ships v1.0.0 with failed reads on every sensitive path. Since failed opens populate baselines without any allowlist interaction, all seed the baseline. When v1.0.1 reads the same paths successfully (via alternate interfaces), `find_new_sensitive_reads` returns empty since paths are already in the baseline.
-
-**Fix direction:** Skip tracking or separately classify reads where `ret_val < 0`.
-
----
 
 ### Finding 61 — Medium | `sandbox.rs` | ⚠️ Open
 
