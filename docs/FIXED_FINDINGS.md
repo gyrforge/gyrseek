@@ -188,6 +188,8 @@
 | 374 | `docs/ARCHITECTURE.md` | Medium | Config-loading helper layer (`validate_allowlist_pkg_key`, `option_zero_to_none`, `parse_list_map`) undocumented in ARCHITECTURE.md — the section covered allowlist decision semantics (step 5) but not why these helpers were extracted or what invariants they enforce | Added "Config-loading helpers" subsection describing each helper's purpose, validation semantics, and the call site that uses it | ✅ Fixed |
 | 376 | `src/lib.rs:210` | Low | `option_zero_to_none` lacked a dedicated unit test — now has 3 callers (`release_burst_threshold`, `release_burst_window_hours`, `minimum_release_age_package`); a regression in the 3-arm match would silently affect all three config fields with no direct test to catch it | Added `option_zero_to_none_direct` test: `Some(0)→None`, `Some(42)→Some(42)`, `None→None` | ✅ Fixed |
 | 375 | `docs/FIXED_FINDINGS.md`, `AGENTS.md` | Low | No convention documented that line numbers in finding entries are navigational aids that drift — reviewers had no guidance on whether to treat them as approximate or exact references | Added note to AGENTS.md step 9: omit line numbers from finding entries; they drift and are not a contract | ✅ Fixed |
+| 32 | `src/scanning.rs` | Critical | NUL-byte path truncation bypass in strace path unescaping allowed bypassing sensitive file read detection | Truncated unescaped strace string at first NUL byte matching Linux C-string semantics | ✅ Fixed |
+| 178 | `src/sandbox.rs` | Critical | `pidfd_open` and `pidfd_getfd` not blocked in seccomp profile, allowing file descriptor theft | Added `pidfd_open` and `pidfd_getfd` to seccomp blocklist and test | ✅ Fixed |
 
 
 
