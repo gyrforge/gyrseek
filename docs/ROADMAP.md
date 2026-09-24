@@ -46,7 +46,7 @@
 
 ### Hardening & Infrastructure
 
-- [x] **CI Pipeline Privilege Separation** — Split the CI code review pipeline into an untrusted generator phase (read-only) and a trusted publisher phase (`workflow_run`) to establish a hard boundary against prompt injection and supply chain attacks.
+- [x] **External AI Code Review Migration** — Replaced in-repository AI review workflows and privileged `workflow_run` comment publishers with external CodeRabbit reviews (`.coderabbit.yaml`), isolating review feedback from runner execution contexts.
 - Prebuilt scanner images as the default path — unblocks read-only rootfs, tighter capability drops, and stronger seccomp/apparmor defaults (see [`DOCKER_SECURITY.md`](DOCKER_SECURITY.md)).
 - Improve resilience to strace output variations.
 - Optional egress mediation/proxy mode for runtime scans (after no-execution-first stable).

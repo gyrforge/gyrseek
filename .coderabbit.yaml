@@ -1,0 +1,9 @@
+---
+
+reviews:
+  path_filters:
+    - "!graphify-out/**"
+    - "!.agents/**"
+    - "!.claude/**"
+    - "!.github/skills/**"
+    - "!.opencode/**"
