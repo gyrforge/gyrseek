@@ -21,6 +21,7 @@ New skills added under `.agents/skills/` are automatically picked up by all tool
 
 ## Sandbox Mode
 - Default: `GYRSEEK_SANDBOX=docker`
+- Kernel Capability: `GYRSEEK_SANDBOX=nono` (Landlock LSM on Linux 5.13+, Seatbelt on macOS; pure capability sandbox with audit logging and zero `strace`/`ptrace` overhead)
 - Fallback: `GYRSEEK_SANDBOX=host` (reduced safety)
 - Isolated: `GYRSEEK_SANDBOX=microvm` (requires MicroVM-capable Docker runtime on Linux)
 - Initialization failure is fail-closed (process exits non-zero).

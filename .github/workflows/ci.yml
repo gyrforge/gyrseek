@@ -278,6 +278,178 @@ jobs:
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-pnpm
 
+  linux-nono-uv-test:
+    name: (Linux) (nono) Test CLI with (uv)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install nono
+        run: |
+          curl -fsSLO https://github.com/nolabs-ai/nono/releases/download/v0.78.0/nono-cli_0.78.0_amd64.deb
+          echo "f1a46e68dd06cbef1039fc82738b4b8dbff47e48f0a6d1c2243638d9c9424fbf  nono-cli_0.78.0_amd64.deb" | sha256sum -c -
+          sudo dpkg -i nono-cli_0.78.0_amd64.deb
+          rm nono-cli_0.78.0_amd64.deb
+
+      - name: Install latest version of uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Just test uv with nono
+        run: just test-nono-uv
+
+  linux-nono-pip-test:
+    name: (Linux) (nono) Test CLI with (pip)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install nono
+        run: |
+          curl -fsSLO https://github.com/nolabs-ai/nono/releases/download/v0.78.0/nono-cli_0.78.0_amd64.deb
+          echo "f1a46e68dd06cbef1039fc82738b4b8dbff47e48f0a6d1c2243638d9c9424fbf  nono-cli_0.78.0_amd64.deb" | sha256sum -c -
+          sudo dpkg -i nono-cli_0.78.0_amd64.deb
+          rm nono-cli_0.78.0_amd64.deb
+
+      - name: Install latest version of pip
+        uses: actions/setup-python@v5
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Just test pip with nono
+        run: just test-nono-pip
+
+  linux-nono-poetry-test:
+    name: (Linux) (nono) Test CLI with (poetry)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install nono
+        run: |
+          curl -fsSLO https://github.com/nolabs-ai/nono/releases/download/v0.78.0/nono-cli_0.78.0_amd64.deb
+          echo "f1a46e68dd06cbef1039fc82738b4b8dbff47e48f0a6d1c2243638d9c9424fbf  nono-cli_0.78.0_amd64.deb" | sha256sum -c -
+          sudo dpkg -i nono-cli_0.78.0_amd64.deb
+          rm nono-cli_0.78.0_amd64.deb
+
+      - name: Install latest python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install latest version of poetry
+        uses: abatilo/actions-poetry@v4
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Just test poetry with nono
+        run: just test-nono-poetry
+
+  linux-nono-npm-test:
+    name: (Linux) (nono) Test CLI with (npm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install nono
+        run: |
+          curl -fsSLO https://github.com/nolabs-ai/nono/releases/download/v0.78.0/nono-cli_0.78.0_amd64.deb
+          echo "f1a46e68dd06cbef1039fc82738b4b8dbff47e48f0a6d1c2243638d9c9424fbf  nono-cli_0.78.0_amd64.deb" | sha256sum -c -
+          sudo dpkg -i nono-cli_0.78.0_amd64.deb
+          rm nono-cli_0.78.0_amd64.deb
+
+      - name: Install latest version of npm
+        uses: actions/setup-node@v6
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Just test npm with nono
+        run: just test-nono-npm
+
+  linux-nono-pnpm-test:
+    name: (Linux) (nono) Test CLI with (pnpm)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install nono
+        run: |
+          curl -fsSLO https://github.com/nolabs-ai/nono/releases/download/v0.78.0/nono-cli_0.78.0_amd64.deb
+          echo "f1a46e68dd06cbef1039fc82738b4b8dbff47e48f0a6d1c2243638d9c9424fbf  nono-cli_0.78.0_amd64.deb" | sha256sum -c -
+          sudo dpkg -i nono-cli_0.78.0_amd64.deb
+          rm nono-cli_0.78.0_amd64.deb
+
+      - name: Install latest version of pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: '1.52.0'
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Just test pnpm with nono
+        run: just test-nono-pnpm
+
   cargo-audit:
     name: Dependency advisory scan
     runs-on: ubuntu-latest
