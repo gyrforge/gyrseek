@@ -1187,7 +1187,11 @@ fn extract_process_exec_signatures(trace: &str) -> HashSet<String> {
         // executable_basename / is_harness_command match correctly.
         let unescaped: Vec<String> = args
             .iter()
-            .map(|a| String::from_utf8_lossy(&unescape_strace_string(a)).to_string())
+            .map(|a| {
+                let bytes = unescape_strace_string(a);
+                let c_bytes = bytes.split(|&b| b == 0).next().unwrap_or(&[]);
+                String::from_utf8_lossy(c_bytes).to_string()
+            })
             .collect();
         let exe = executable_basename(&unescaped[0]);
         if is_harness_command(&exe, &unescaped[1..]) {
@@ -1476,7 +1480,8 @@ fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
                     if let Some(end_idx) = end_quote {
                         let raw_str = &args_str[start_quote + 1..end_idx];
                         let unescaped_bytes = unescape_strace_string(raw_str);
-                        extracted_paths.push(String::from_utf8_lossy(&unescaped_bytes).to_string());
+                        let path_bytes = unescaped_bytes.split(|&b| b == 0).next().unwrap_or(&[]);
+                        extracted_paths.push(String::from_utf8_lossy(path_bytes).to_string());
                         i = end_idx + 1;
                     } else {
                         break;
@@ -2493,6 +2498,30 @@ openat(AT_FDCWD, "\x2f\x6f\x70\x74\x2f\x61\x70\x70\x2f\x69\x6e\x64\x65\x78\x2e\x
         assert!(reads.contains(".env"));
         assert!(!reads.contains("/opt/app/index.js"));
         assert_eq!(reads.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_sensitive_file_reads_nul_byte_truncation() {
+        // Finding 32: Kernel truncates pathname at NUL byte. An attacker path like
+        // /etc/passwd\x00harmless.txt resolves to /etc/passwd in the kernel, so
+        // strace unescaping must truncate at \0 to prevent evasion.
+        let trace = r#"
+openat(AT_FDCWD, "\x2f\x65\x74\x63\x2f\x70\x61\x73\x73\x77\x64\x00\x68\x61\x72\x6d\x6c\x65\x73\x73\x2e\x74\x78\x74", O_RDONLY|O_CLOEXEC) = 3
+open("\x2e\x65\x6e\x76\x00\x2e\x62\x61\x6b", O_RDONLY) = 4
+"#;
+        let reads = extract_sensitive_file_reads(trace);
+        assert!(reads.contains("/etc/passwd"));
+        assert!(reads.contains(".env"));
+        assert_eq!(reads.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_process_exec_signatures_nul_byte_truncation() {
+        let trace = r#"
+execve("/usr/bin/bun\x00extra", ["bun\x00extra", "run\x00extra", "index.js"], 0x7ffd) = 0
+"#;
+        let sigs = extract_process_exec_signatures(trace);
+        assert!(sigs.contains("bun|run|index.js"));
     }
 
     #[test]

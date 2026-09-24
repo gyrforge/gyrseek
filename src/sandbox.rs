@@ -85,6 +85,8 @@ const EMBEDDED_SECCOMP_PROFILE_JSON: &str = r#"{
                 "open_by_handle_at",
                 "open_tree",
                 "perf_event_open",
+                "pidfd_getfd",
+                "pidfd_open",
                 "pivot_root",
                 "process_vm_writev",
                 "umount2",
@@ -1398,6 +1400,8 @@ mod tests {
         let mut found_enter = false;
         let mut found_register = false;
         let mut found_vm_writev = false;
+        let mut found_pidfd_open = false;
+        let mut found_pidfd_getfd = false;
 
         for rule in syscalls {
             if rule["action"] == "SCMP_ACT_ERRNO" {
@@ -1411,6 +1415,8 @@ mod tests {
                             "io_uring_enter" => found_enter = true,
                             "io_uring_register" => found_register = true,
                             "process_vm_writev" => found_vm_writev = true,
+                            "pidfd_open" => found_pidfd_open = true,
+                            "pidfd_getfd" => found_pidfd_getfd = true,
                             _ => {}
                         }
                     }
@@ -1422,6 +1428,8 @@ mod tests {
         assert!(found_enter, "io_uring_enter must be blocked");
         assert!(found_register, "io_uring_register must be blocked");
         assert!(found_vm_writev, "process_vm_writev must be blocked");
+        assert!(found_pidfd_open, "pidfd_open must be blocked");
+        assert!(found_pidfd_getfd, "pidfd_getfd must be blocked");
     }
 
     #[test]

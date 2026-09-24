@@ -192,29 +192,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 178 — Critical | `sandbox.rs` | ⚠️ Open
-
-**Summary:** `pidfd_open` and `pidfd_getfd` not blocked.
-
-**Root cause:** Missing from seccomp blocklist and strace trace list.
-
-**Failure scenario:** A process can steal file descriptors from a child process using `pidfd_getfd` and read from them without the original path opening being traced to the parent.
-
-**Fix direction:** Block `pidfd_open` and `pidfd_getfd` via seccomp.
-
----
-
-### Finding 32 — Critical | `scanning.rs` | ⚠️ Open
-
-**Summary:** NUL-byte path truncation bypass in strace path unescaping.
-
-**Root cause:** `unescape_strace_string` converts `\x00` to byte `0`, then `String::from_utf8_lossy` replaces it with `U+FFFD`.
-
-**Failure scenario:** An attacker path like `/etc/passwd\x00harmless.txt` resolves to `/etc/passwd` in the kernel but evades the string suffix match because the rust string contains `\u{FFFD}harmless.txt`.
-
-**Fix direction:** Truncate the unescaped byte string at the first NUL byte before converting to String.
-
----
 
 ### Finding 33 — High | `sandbox.rs`, `scanning.rs` | ⚠️ Open
 
