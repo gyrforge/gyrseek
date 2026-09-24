@@ -1,5 +1,3 @@
-# WARNING: This workflow name is tightly coupled to post_review.yml
-# If you rename it, you MUST update the `workflows: ["..."]` array in post_review.yml or the bot will silently break.
 name: CI
 
 on:
@@ -10,12 +8,9 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 env:
   CARGO_TERM_COLOR: always
-  OPENCODE_VERSION: '1.18.32'
-  OPENCODE_INSTALL_SHA256: 'fc3c1b2123f49b6df545a7622e5127d21cd794b15134fc3b66e1ca49f7fb297e'
 
 jobs:
   rust-checks:
@@ -40,9 +35,6 @@ jobs:
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@master
 
-      - name: Run Python Syntax Check
-        run: python3 -m py_compile .github/scripts/*.py
-
       - name: Install just
         uses: extractions/setup-just@v4
         with:
@@ -61,22 +53,6 @@ jobs:
 
       - name: Just Test
         run: just test
-
-  test-pipeline-scripts:
-    name: Smoke Test Pipeline Scripts
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: Checkout Script
-        uses: actions/checkout@v7
-
-      - name: Test Diff Logic
-        run: bash .github/scripts/test_check_diff.sh
-
-      - name: Test Sanitize Review Logic
-        run: |
-          python3 .github/scripts/test_sanitize_review.py
-          python3 .github/scripts/test_cap_ledger.py
 
   linux-docker-uv-test:
     name: (Linux) (Docker) Test CLI with (uv)
