@@ -190,6 +190,11 @@
 | 375 | `docs/FIXED_FINDINGS.md`, `AGENTS.md` | Low | No convention documented that line numbers in finding entries are navigational aids that drift — reviewers had no guidance on whether to treat them as approximate or exact references | Added note to AGENTS.md step 9: omit line numbers from finding entries; they drift and are not a contract | ✅ Fixed |
 | 32 | `src/scanning.rs` | Critical | NUL-byte path truncation bypass in strace path unescaping allowed bypassing sensitive file read detection | Truncated unescaped strace string at first NUL byte matching Linux C-string semantics | ✅ Fixed |
 | 178 | `src/sandbox.rs` | Critical | `pidfd_open` and `pidfd_getfd` not blocked in seccomp profile, allowing file descriptor theft | Added `pidfd_open` and `pidfd_getfd` to seccomp blocklist and test | ✅ Fixed |
+| 11 | `src/parsing.rs` | High | All-non-registry npm CLI args trigger package.json fallback | Prevent package.json fallback when non-registry CLI args are provided; forward directly | ✅ Fixed |
+| 12 | `src/lib.rs` | High | All-non-registry npm CLI args + no package.json → valid install blocked | Forward all-non-registry npm/pnpm commands directly without scan or exit 1 | ✅ Fixed |
+| 21 | `src/sandbox.rs` | High | Hardcoded 512 MB container memory & tmpfs limit causing OOM-kills on heavy native npm/pnpm builds | Made container memory & tmpfs configurable via `GYRSEEK_MEM_LIMIT` (default 2g) | ✅ Fixed |
+| 33 | `src/sandbox.rs`, `src/scanning.rs` | High | `execveat` double gap: absent from trace list and parser regex | Added `?execveat` to strace commands and updated regex in `parse_execve_argvs` | ✅ Fixed |
+| 60 | `src/scanning.rs` | High | Failed `open()` populates baselines without allowlist check (Baseline Poisoning) | Parse syscall return code and record sensitive file reads only on successful syscalls (`ret_val >= 0`) | ✅ Fixed |
 
 
 

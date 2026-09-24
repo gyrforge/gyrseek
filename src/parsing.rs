@@ -427,14 +427,22 @@ fn normalize_npm_version_spec(spec: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-fn is_non_registry_npm_spec(spec: &str) -> bool {
+pub(crate) fn is_non_registry_npm_spec(spec: &str) -> bool {
     let trimmed = spec.trim();
     trimmed.starts_with("file:")
         || trimmed.starts_with("git+")
+        || trimmed.starts_with("git://")
         || trimmed.starts_with("http://")
         || trimmed.starts_with("https://")
         || trimmed.starts_with("workspace:")
         || trimmed.starts_with("link:")
+        || trimmed.starts_with("./")
+        || trimmed.starts_with("../")
+        || trimmed == "."
+        || trimmed == ".."
+        || (trimmed.starts_with('/') && !trimmed.starts_with("/@"))
+        || trimmed.ends_with(".tgz")
+        || trimmed.ends_with(".tar.gz")
 }
 
 fn is_npm_family_manager(manager: &str) -> bool {
@@ -474,6 +482,32 @@ pub(crate) fn parse_npm_packages_from_package_json_content(
     .collect()
 }
 
+pub(crate) fn has_only_non_registry_npm_specs(args: &[String]) -> bool {
+    if !args
+        .first()
+        .map(String::as_str)
+        .is_some_and(is_npm_family_manager)
+    {
+        return false;
+    }
+    let manager = args.first().map(String::as_str).unwrap_or_default();
+    if !is_npm_family_package_command(manager, args.get(1).map(String::as_str)) {
+        return false;
+    }
+
+    let positional_args: Vec<&str> = args
+        .iter()
+        .skip(2)
+        .map(String::as_str)
+        .filter(|arg| !arg.starts_with('-'))
+        .collect();
+
+    !positional_args.is_empty()
+        && positional_args
+            .iter()
+            .all(|arg| is_non_registry_npm_spec(arg))
+}
+
 pub(crate) fn parse_npm_install_packages_from_args(
     args: &[String],
 ) -> Vec<(String, Option<String>)> {
@@ -489,18 +523,22 @@ pub(crate) fn parse_npm_install_packages_from_args(
         return Vec::new();
     }
 
-    let packages: Vec<_> = args
+    let positional_args: Vec<&str> = args
         .iter()
         .skip(2)
-        .filter(|arg| !arg.starts_with('-') && !is_non_registry_npm_spec(arg))
-        .map(|arg| {
-            let (name, version) = parse_npm_spec(arg);
-            (name, version.and_then(|v| normalize_npm_version_spec(&v)))
-        })
+        .map(String::as_str)
+        .filter(|arg| !arg.starts_with('-'))
         .collect();
 
-    if !packages.is_empty() {
-        return packages;
+    if !positional_args.is_empty() {
+        return positional_args
+            .into_iter()
+            .filter(|arg| !is_non_registry_npm_spec(arg))
+            .map(|arg| {
+                let (name, version) = parse_npm_spec(arg);
+                (name, version.and_then(|v| normalize_npm_version_spec(&v)))
+            })
+            .collect();
     }
 
     if let Ok(content) = fs::read_to_string("package.json") {
@@ -717,6 +755,9 @@ pub(crate) fn should_enforce_package_detection(manager: &str, args: &[String]) -
     }
 
     if is_npm_family_manager(manager) {
+        if has_only_non_registry_npm_specs(args) {
+            return false;
+        }
         return is_npm_family_package_command(manager, args.get(1).map(String::as_str));
     }
 
@@ -1077,6 +1118,59 @@ version = "2.31.0"
         let a = vec!["npm".to_string(), "add".to_string(), "lodash".to_string()];
         assert!(parse_npm_install_packages_from_args(&a).is_empty());
         assert!(!should_enforce_package_detection("npm", &a));
+    }
+
+    #[test]
+    fn npm_install_all_non_registry_specs_detected_and_skips_package_json_fallback() {
+        // Findings 11 & 12: When all args are non-registry specs (e.g. file:, git+, https://),
+        // parse_npm_install_packages_from_args returns empty and must NOT fall back to package.json.
+        // has_only_non_registry_npm_specs returns true, and should_enforce_package_detection returns false.
+        let a = vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "file:../local-pkg".to_string(),
+        ];
+        assert!(parse_npm_install_packages_from_args(&a).is_empty());
+        assert!(has_only_non_registry_npm_specs(&a));
+        assert!(!should_enforce_package_detection("npm", &a));
+
+        let b = vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "--save-dev".to_string(),
+            "https://registry.example.com/tool.tgz".to_string(),
+        ];
+        assert!(parse_npm_install_packages_from_args(&b).is_empty());
+        assert!(has_only_non_registry_npm_specs(&b));
+        assert!(!should_enforce_package_detection("npm", &b));
+
+        let c = vec![
+            "pnpm".to_string(),
+            "add".to_string(),
+            "./local-pkg.tgz".to_string(),
+        ];
+        assert!(parse_npm_install_packages_from_args(&c).is_empty());
+        assert!(has_only_non_registry_npm_specs(&c));
+        assert!(!should_enforce_package_detection("pnpm", &c));
+
+        // Mixed case: registry + non-registry must NOT report only-non-registry
+        let mixed = vec![
+            "npm".to_string(),
+            "install".to_string(),
+            "lodash".to_string(),
+            "file:../local-pkg".to_string(),
+        ];
+        assert_eq!(
+            parse_npm_install_packages_from_args(&mixed),
+            vec![("lodash".to_string(), None)]
+        );
+        assert!(!has_only_non_registry_npm_specs(&mixed));
+        assert!(should_enforce_package_detection("npm", &mixed));
+
+        // Bare install: no positional args must NOT report only-non-registry
+        let bare = vec!["npm".to_string(), "install".to_string()];
+        assert!(!has_only_non_registry_npm_specs(&bare));
+        assert!(should_enforce_package_detection("npm", &bare));
     }
 
     #[test]

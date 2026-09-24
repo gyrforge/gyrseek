@@ -1,16 +1,16 @@
-# Graph Report - gyrseek  (2026-09-24)
+# Graph Report - gyrseek  (2026-09-25)
 
 ## Corpus Check
-- 106 files · ~194,564 words
+- 92 files · ~188,841 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1965 nodes · 2907 edges · 153 communities (106 shown, 47 thin omitted)
-- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 39 edges (avg confidence: 0.82)
+- 1920 nodes · 2873 edges · 141 communities (99 shown, 42 thin omitted)
+- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 35 edges (avg confidence: 0.82)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `5318c074`
+- Built from commit: `e10f120a`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -127,6 +127,11 @@
 - [[_COMMUNITY_Community 112|Community 112]]
 - [[_COMMUNITY_Community 113|Community 113]]
 - [[_COMMUNITY_Community 114|Community 114]]
+- [[_COMMUNITY_Community 115|Community 115]]
+- [[_COMMUNITY_Community 116|Community 116]]
+- [[_COMMUNITY_Community 117|Community 117]]
+- [[_COMMUNITY_Community 118|Community 118]]
+- [[_COMMUNITY_Community 119|Community 119]]
 - [[_COMMUNITY_Community 120|Community 120]]
 - [[_COMMUNITY_Community 121|Community 121]]
 - [[_COMMUNITY_Community 122|Community 122]]
@@ -135,24 +140,12 @@
 - [[_COMMUNITY_Community 125|Community 125]]
 - [[_COMMUNITY_Community 126|Community 126]]
 - [[_COMMUNITY_Community 127|Community 127]]
-- [[_COMMUNITY_Community 129|Community 129]]
 - [[_COMMUNITY_Community 130|Community 130]]
 - [[_COMMUNITY_Community 131|Community 131]]
 - [[_COMMUNITY_Community 132|Community 132]]
 - [[_COMMUNITY_Community 133|Community 133]]
 - [[_COMMUNITY_Community 134|Community 134]]
 - [[_COMMUNITY_Community 135|Community 135]]
-- [[_COMMUNITY_Community 136|Community 136]]
-- [[_COMMUNITY_Community 137|Community 137]]
-- [[_COMMUNITY_Community 138|Community 138]]
-- [[_COMMUNITY_Community 139|Community 139]]
-- [[_COMMUNITY_Community 140|Community 140]]
-- [[_COMMUNITY_Community 141|Community 141]]
-- [[_COMMUNITY_Community 142|Community 142]]
-- [[_COMMUNITY_Community 143|Community 143]]
-- [[_COMMUNITY_Community 145|Community 145]]
-- [[_COMMUNITY_Community 146|Community 146]]
-- [[_COMMUNITY_Community 147|Community 147]]
 - [[_COMMUNITY_Community 148|Community 148]]
 - [[_COMMUNITY_Community 149|Community 149]]
 - [[_COMMUNITY_Community 150|Community 150]]
@@ -160,12 +153,12 @@
 - [[_COMMUNITY_Community 152|Community 152]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `Review history` - 168 edges
+1. `Review history` - 173 edges
 2. `Won't Fix Findings - Detailed` - 118 edges
-3. `Detailed Findings` - 101 edges
+3. `Detailed Findings` - 96 edges
 4. `scan_packages_versions()` - 59 edges
 5. `String` - 56 edges
-6. `run()` - 37 edges
+6. `run()` - 38 edges
 7. `load()` - 35 edges
 8. `Code Security` - 31 edges
 9. `find_new_connections_domain_aware()` - 30 edges
@@ -199,11 +192,11 @@
 - **Three Behavioral Signal Classes (network/git-clone/watched-process)** — src_scanning_extract_connection_ips, src_scanning_extract_process_exec_signatures, docs_architecture_behavioral_diffing [EXTRACTED 1.00]
 - **Binary-Spawning CLI Integration Tests** — cli_burst_exit_tests_exits_with_code_1_release_burst_threshold, forward_fail_closed_tests_forwarding_propagates_host_nonzero_exit_status, lock_routing_tests_poetry_lock_is_routed_to_lockfile_scan, version_flag_tests_version_flag_prints_crate_version_and_exits_zero [EXTRACTED 1.00]
 
-## Communities (153 total, 47 thin omitted)
+## Communities (141 total, 42 thin omitted)
 
 ### Community 0 - "Community 0"
 Cohesion: 0.06
-Nodes (75): PEP 508 Extras Stripping, Forwarded-Command Version Pinning, Finding 11: Non-Registry npm Args Trigger package.json Fallback (Open), Finding 12: Non-Registry npm Args + No package.json Blocks Install (Open), Finding 5: Poetry Non-Develop Local Path Leak, Finding 6: PEP 508 Extras Cause PyPI 404, Finding 7: Extras Key Mismatch Breaks Pinning, Resolved-Version Pinning (+67 more)
+Nodes (76): PEP 508 Extras Stripping, Forwarded-Command Version Pinning, Finding 11: Non-Registry npm Args Trigger package.json Fallback (Open), Finding 12: Non-Registry npm Args + No package.json Blocks Install (Open), Finding 5: Poetry Non-Develop Local Path Leak, Finding 6: PEP 508 Extras Cause PyPI 404, Finding 7: Extras Key Mismatch Breaks Pinning, Resolved-Version Pinning (+68 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.09
@@ -211,19 +204,19 @@ Nodes (48): NamedTempFile, accepts_new_package_exemptions_empty_list_as_no_exemp
 
 ### Community 2 - "Community 2"
 Cohesion: 0.06
-Nodes (70): Box, Empty-Trace Hard Error, CAP_SYS_PTRACE for Cross-UID Tracing, Unprivileged-Payload Trace Integrity (strace -u), Finding 1: Empty Trace Passes As Clean, Finding 4: || true Suppresses strace Failures, MicroVM Sandbox Backend (planned hardening), announce_apparmor_status() (+62 more)
+Nodes (71): Box, Empty-Trace Hard Error, CAP_SYS_PTRACE for Cross-UID Tracing, Unprivileged-Payload Trace Integrity (strace -u), Finding 1: Empty Trace Passes As Clean, Finding 4: || true Suppresses strace Failures, MicroVM Sandbox Backend (planned hardening), announce_apparmor_status() (+63 more)
 
 ### Community 3 - "Community 3"
-Cohesion: 0.03
-Nodes (77): Finding 10: Self-Referencing Baseline Override (Open), G, IpAddr, artifact_delimiter_pipe_in_path_is_not_injected(), baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_does_not_fail_closed(), baseline_count_zero_returns_no_effective_baselines(), baseline_count_zero_with_override_equal_to_current_returns_empty() (+69 more)
+Cohesion: 0.04
+Nodes (60): G, IpAddr, artifact_delimiter_pipe_in_path_is_not_injected(), classify_inventory_benign_pth(), classify_inventory_binary_elf(), classify_inventory_empty_input(), classify_inventory_large_file(), classify_inventory_lines() (+52 more)
 
 ### Community 4 - "Community 4"
-Cohesion: 0.17
-Nodes (11): D, Error, config_equals_form_preserves_equals_in_path(), config_path_starting_with_dash_is_accepted(), danger_disable_seccomp_parsing_edge_cases(), deserialize_new_package_exemptions(), keeps_args_untouched_when_no_global_options_present(), NoopRunner (+3 more)
+Cohesion: 0.18
+Nodes (10): D, Error, config_equals_form_preserves_equals_in_path(), config_path_starting_with_dash_is_accepted(), danger_disable_seccomp_parsing_edge_cases(), deserialize_new_package_exemptions(), keeps_args_untouched_when_no_global_options_present(), parse_global_options() (+2 more)
 
 ### Community 5 - "Community 5"
-Cohesion: 0.10
-Nodes (39): Adding a New Supported Command, Behavioral Diffing, active_test_env_vars(), active_test_env_vars_none_set_returns_empty(), active_test_env_vars_set_var_is_detected(), allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline() (+31 more)
+Cohesion: 0.11
+Nodes (37): Behavioral Diffing, active_test_env_vars(), active_test_env_vars_none_set_returns_empty(), active_test_env_vars_set_var_is_detected(), allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline(), artifact_allowlist_unblocks_new_findings() (+29 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.22
@@ -231,7 +224,7 @@ Nodes (8): Agent Portability Symlinks, Agents Memory and Workflow, graphify, Man
 
 ### Community 7 - "Community 7"
 Cohesion: 0.08
-Nodes (39): BaselineOverrides, DateTime, Default, age_filter_includes_versions_exactly_at_cutoff(), age_filter_keeps_only_versions_older_than_cutoff(), age_filter_skips_candidates_without_publish_timestamps(), age_filter_still_respects_baseline_count_limit(), BaselineHistory (+31 more)
+Nodes (39): BaselineOverrides, DateTime, age_filter_includes_versions_exactly_at_cutoff(), age_filter_keeps_only_versions_older_than_cutoff(), age_filter_skips_candidates_without_publish_timestamps(), age_filter_still_respects_baseline_count_limit(), BaselineHistory, burst_count_is_not_inflated_by_created_modified() (+31 more)
 
 ### Community 8 - "Community 8"
 Cohesion: 0.05
@@ -246,16 +239,16 @@ Cohesion: 0.11
 Nodes (21): Cloud Metadata IP Exemption (169.254.169.254), Sandbox-Local IP Filtering, extract_connection_ips(), extract_connection_ips_captures_ipv4(), extract_connection_ips_captures_ipv6_inet_pton(), extract_connection_ips_collapses_ipv4_mapped_ipv6(), extract_connection_ips_drops_loopback_link_local_and_private(), extract_connection_ips_handles_mixed_v4_and_v6() (+13 more)
 
 ### Community 11 - "Community 11"
-Cohesion: 0.22
-Nodes (9): Backout plan, Current hardening limitations, Docker Security, Overview, Platform support matrix, Prebuilt scanner images, Regression signals, Related env vars (+1 more)
+Cohesion: 0.06
+Nodes (34): Allowed operations, AppArmor, Backout plan, Capabilities and privileges, Configuration, Configuration, Current hardening limitations, Docker Security (+26 more)
 
 ### Community 12 - "Community 12"
 Cohesion: 0.09
-Nodes (18): Command, Output, exits_with_code_1_and_rejects_versions_newer_than_72_hours_by_default(), exits_with_code_1_and_uses_configured_release_burst_window_hours(), exits_with_code_1_and_warning_when_release_burst_threshold_triggers(), exits_with_code_1_when_minimum_release_age_package_is_not_met(), minimum_release_age_package_runs_before_burst_threshold(), run_with_config() (+10 more)
+Nodes (19): Command, Output, exits_with_code_1_and_rejects_versions_newer_than_72_hours_by_default(), exits_with_code_1_and_uses_configured_release_burst_window_hours(), exits_with_code_1_and_warning_when_release_burst_threshold_triggers(), exits_with_code_1_when_minimum_release_age_package_is_not_met(), minimum_release_age_package_runs_before_burst_threshold(), run_with_config() (+11 more)
 
 ### Community 13 - "Community 13"
 Cohesion: 0.15
-Nodes (12): Architecture, CI/CD Pipeline Architecture, Core Components, Current Limitations, Decision Model, Docker Sandbox Security, Goal, Internal Package Exemption (+4 more)
+Nodes (13): Adding a New Supported Command, Agent Portability Symlinks, Build and Test, CI/CD Security Architecture, Developer Guide, just Task Runner, Local Setup, Policy Config Surface (+5 more)
 
 ### Community 14 - "Community 14"
 Cohesion: 0.29
@@ -263,7 +256,7 @@ Nodes (5): Complexity & Over-Engineering Findings, Open Findings - Detailed, Ope
 
 ### Community 15 - "Community 15"
 Cohesion: 0.01
-Nodes (168): Finding 100 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 101 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 102 — Medium | `.github/workflows/post_review.yml` | ✅ Fixed, Finding 103 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 104 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 105 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 106 — High | `.github/workflows/ci.yml` | ✅ Fixed, Finding 107 — Low | `docs/ARCHITECTURE.md` | ✅ Fixed (+160 more)
+Nodes (173): Finding 100 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 101 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 102 — Medium | `.github/workflows/post_review.yml` | ✅ Fixed, Finding 103 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 104 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 105 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 106 — High | `.github/workflows/ci.yml` | ✅ Fixed, Finding 107 — Low | `docs/ARCHITECTURE.md` | ✅ Fixed (+165 more)
 
 ### Community 16 - "Community 16"
 Cohesion: 0.09
@@ -274,24 +267,24 @@ Cohesion: 0.02
 Nodes (108): Finding 179 — `accepted-risk` | `.github/scripts/post_comment.sh` + `.github/workflows/post_review.yml` | 🛑 Wont Fix, Finding 190 — `shrink` | `lib.rs:64-95` | 🚫 Won't Fix, Finding 191 — `yagni` | `lib.rs:572-583` | 🚫 Won't Fix, Finding 192 — `shrink` | `lib.rs:701-717` | 🚫 Won't Fix, Finding 193 — `yagni` | `lib.rs:802-810` | 🚫 Won't Fix, Finding 194 — `shrink` | `parsing.rs:79-239` | 🚫 Won't Fix, Finding 195 — `shrink` | `sandbox.rs:462-477` | 🚫 Won't Fix, Finding 196 — `shrink` | `sandbox.rs:517-538` | 🚫 Won't Fix (+100 more)
 
 ### Community 18 - "Community 18"
-Cohesion: 0.06
-Nodes (36): Basic Pattern Matching, Basic Taint Structure, Common Fixes, Common Redundancies to Remove, Debug Failures, Debug Taint Rules, Directory Structure, Example: Complete Taint Rule (+28 more)
+Cohesion: 0.25
+Nodes (8): Common Fixes, Example: Complete Taint Rule, Semgrep Rule Creation Workflow, Step 1: Analyze the Problem, Step 3: Analyze AST Structure, Step 7: Iterate Until Pass, When to Use Pattern Matching, When to Use Taint Mode
 
 ### Community 20 - "Community 20"
 Cohesion: 0.06
 Nodes (34): Critical Impact, High Impact, Sections, 10. Insecure Cryptography (insecure-crypto), 11. Insecure Transport (insecure-transport), 12. Server-Side Request Forgery (ssrf), 13. JWT Authentication (authentication-jwt), 14. Cross-Site Request Forgery (csrf) (+26 more)
 
 ### Community 28 - "Community 28"
-Cohesion: 0.11
-Nodes (21): Shai-Hulud Attack Class, Watched-Process Execution Detection, Shai-Hulud Attack, case_1_new_bun_is_flagged_against_clean_baseline(), case_2_existing_bun_plus_additional_invocation_is_flagged(), case_2b_changed_bun_arguments_are_flagged(), executable_basename(), extract_process_exec_captures_all_executables() (+13 more)
+Cohesion: 0.10
+Nodes (22): Shai-Hulud Attack Class, Watched-Process Execution Detection, Shai-Hulud Attack, case_1_new_bun_is_flagged_against_clean_baseline(), case_2_existing_bun_plus_additional_invocation_is_flagged(), case_2b_changed_bun_arguments_are_flagged(), executable_basename(), extract_process_exec_captures_all_executables() (+14 more)
 
 ### Community 30 - "Community 30"
 Cohesion: 0.02
-Nodes (101): Detailed Findings, Finding 11 — High | `parsing.rs:468` | ⚠️ Open, Finding 12 — High | `lib.rs:1021` | ⚠️ Open, Finding 14 — Low | `parsing.rs:880` | ⚠️ Open, Finding 170 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 171 — High | `scanning.rs` | ⚠️ Open, Finding 172 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 173 — Medium | `ARCHITECTURE.md` | ⚠️ Open (+93 more)
+Nodes (96): Detailed Findings, Finding 14 — Low | `parsing.rs:880` | ⚠️ Open, Finding 170 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 171 — High | `scanning.rs` | ⚠️ Open, Finding 172 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 173 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 177 — Low | `*_DETAILED.md` | ⚠️ Open, Finding 180 — Low | `lib.rs:1092-1173` | ⚠️ Open (+88 more)
 
 ### Community 31 - "Community 31"
-Cohesion: 0.25
-Nodes (8): Commands, Metadata Fields, Path Filtering, Required Rule Fields, Semgrep Quick Reference, Supported Languages, Test Annotations, Testing
+Cohesion: 0.07
+Nodes (27): Basic Matching, Basic Structure, Command Injection, Commands, Common Patterns by Vulnerability, Dangerous Functions (Pattern Matching), Deep Matching, Hardcoded Secrets (Pattern Matching) (+19 more)
 
 ### Community 32 - "Community 32"
 Cohesion: 0.17
@@ -482,8 +475,8 @@ Cohesion: 0.50
 Nodes (3): Key Prevention Patterns, Prevent Code Injection, References
 
 ### Community 110 - "Community 110"
-Cohesion: 0.17
-Nodes (12): Agent Portability Symlinks, Build and Test, CI/CD Security Architecture, Developer Guide, just Task Runner, Local Setup, Policy Config Surface, Practical Review Checklist (+4 more)
+Cohesion: 0.22
+Nodes (9): Architecture, CI/CD Pipeline Architecture, Core Components, Current Limitations, Decision Model, Docker Sandbox Security, Goal, Internal Package Exemption (+1 more)
 
 ### Community 112 - "Community 112"
 Cohesion: 0.33
@@ -493,89 +486,81 @@ Nodes (5): Approach, Checklist, Goal, Understand Code, Verification
 Cohesion: 0.20
 Nodes (9): Activation, Answer Handling, Boundaries, Branch Resolution, Depth Control, Interrogation, Termination, The Method (+1 more)
 
+### Community 115 - "Community 115"
+Cohesion: 0.12
+Nodes (17): Finding 10: Self-Referencing Baseline Override (Open), baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_does_not_fail_closed(), baseline_count_zero_returns_no_effective_baselines(), baseline_count_zero_with_override_equal_to_current_returns_empty(), both_override_slots_none_falls_through_to_fetched_baselines(), both_overrides_equal_to_current_skipped_and_filled_from_fetched(), duplicate_override_versions_are_deduped_and_truncated() (+9 more)
+
+### Community 116 - "Community 116"
+Cohesion: 0.33
+Nodes (6): Debug Failures, Debug Taint Rules, Expected Output, Run Tests, Step 6: Validate and Test, Validate YAML Syntax
+
+### Community 117 - "Community 117"
+Cohesion: 0.17
+Nodes (12): extract_sensitive_file_reads(), is_sensitive_file_read(), lexical_clean_path(), test_appsec_evasion_bypasses(), test_appsec_evasion_exhaustive_variants(), test_extract_sensitive_file_reads(), test_extract_sensitive_file_reads_at_fdcwd_and_minus_100(), test_extract_sensitive_file_reads_edge_cases() (+4 more)
+
+### Community 118 - "Community 118"
+Cohesion: 0.40
+Nodes (5): Basic Pattern Matching, Focus Metavariable, Metavariable Filters, Scope Operators, Step 4: Choose Pattern Operators
+
+### Community 119 - "Community 119"
+Cohesion: 0.40
+Nodes (5): Basic Taint Structure, Step 5: Write Taint Rules, Taint Sanitizer Options, Taint Sink with Focus, Taint Source Options
+
 ### Community 120 - "Community 120"
 Cohesion: 0.13
 Nodes (17): Forward-Confirmed Reverse DNS (FCrDNS), Finding 2: PTR-Record Allowlist Bypass, F, R, Forward-Confirmed Reverse DNS, domain_allowlist_does_not_filter_when_lookup_fails(), domain_allowlist_filters_resolved_domains_before_blocking(), domain_allowlist_normalization_matches_case_whitespace_and_trailing_dot() (+9 more)
 
 ### Community 121 - "Community 121"
 Cohesion: 0.11
-Nodes (32): Finding 3: Argv Regex Truncation at ], PyPiReleaseFile, artifact_allowlist_does_not_leak_across_packages(), artifact_allowlist_matches_exact_finding_and_prefix(), domain_is_allowlisted(), extract_git_clone_signatures(), filter_allowlisted_artifact_findings(), filter_allowlisted_git_clone_signatures() (+24 more)
+Nodes (33): Finding 3: Argv Regex Truncation at ], PyPiReleaseFile, artifact_allowlist_does_not_leak_across_packages(), artifact_allowlist_matches_exact_finding_and_prefix(), domain_is_allowlisted(), extract_git_clone_signatures(), filter_allowlisted_artifact_findings(), filter_allowlisted_git_clone_signatures() (+25 more)
 
 ### Community 122 - "Community 122"
-Cohesion: 0.20
-Nodes (9): Completed, Detection & Analysis, Hardening & Infrastructure, Hardening & Infrastructure, Long Term, Mid Term, Near Term, Reliability & UX (+1 more)
+Cohesion: 0.50
+Nodes (4): Common Redundancies to Remove, Optimization Checklist, Semgrep Pattern Equivalences, Step 8: Optimize the Rule
 
 ### Community 123 - "Community 123"
-Cohesion: 0.23
-Nodes (12): load_policy_config(), missing_default_config_returns_empty_allowlist(), missing_explicit_config_fails_closed(), parse_list(), parse_list_map(), parses_new_package_exemptions_invalid_map_rejected_with_custom_error(), rejects_new_package_exemptions_list_only_whitespace_entries(), rejects_new_package_exemptions_list_single_entry() (+4 more)
+Cohesion: 0.20
+Nodes (14): DummyExemptionConfig, load_policy_config(), missing_default_config_returns_empty_allowlist(), missing_explicit_config_fails_closed(), parse_list(), parse_list_map(), parses_new_package_exemptions_invalid_map_rejected_with_custom_error(), rejects_new_package_exemptions_list_only_whitespace_entries() (+6 more)
 
 ### Community 124 - "Community 124"
-Cohesion: 0.23
-Nodes (13): In-Run Scan Cache, PolicyConfig, ScanReport, DummyExemptionConfig, Drop, HashMap, SandboxRunner, Self (+5 more)
+Cohesion: 0.22
+Nodes (16): Default, In-Run Scan Cache, PolicyConfig, ScanReport, NoopRunner, Drop, SandboxRunner, Self (+8 more)
 
 ### Community 125 - "Community 125"
-Cohesion: 0.17
-Nodes (16): When input is exactly 0 bytes, sanitize() writes 0 bytes., sanitize() calls sys.exit(1) when the input file does not exist., Context manager yielding (inp_path, out_path); cleans both on exit even if unlin, Basic round-trip: sanitize writes stripped content to output file., Files over MAX_REVIEW_BYTES are truncated and a warning is appended.     Verifie, Partial multi-byte UTF-8 at the read boundary is silently dropped (errors='ignor, When all content is markdown links, sanitize() produces empty/whitespace-only ou, When input is solely reference definitions, sanitize() produces empty output. (+8 more)
+Cohesion: 0.20
+Nodes (9): Completed, Detection & Analysis, Hardening & Infrastructure, Hardening & Infrastructure, Long Term, Mid Term, Near Term, Reliability & UX (+1 more)
 
 ### Community 126 - "Community 126"
 Cohesion: 0.20
 Nodes (10): Semantic Version Ordering (semver / PEP 440), Ordering, compare_version_strings(), is_npm_family_manager(), npm_versions_sort_semantically_not_lexically(), parse_and_cmp(), pnpm_versions_use_npm_semver_ordering(), pypi_versions_sort_by_pep440_not_lexically() (+2 more)
 
 ### Community 127 - "Community 127"
-Cohesion: 0.22
-Nodes (13): cap_ledger(), Context manager yielding filepath; cleans on exit even if unlink raises., Empty file should remain empty., File with 6 reviews should be capped to 5., File with 5 reviews should not be truncated., Embedded '=== REVIEW FROM RUN' in text should not cause a split., Test that OSError from file operations triggers sys.exit(1)., test_delimiter_collision() (+5 more)
-
-### Community 129 - "Community 129"
-Cohesion: 0.29
-Nodes (7): Basic Matching, Deep Matching, Metavariable Filters, Metavariables, Negation, Pattern Operators, Scope Operators
+Cohesion: 0.25
+Nodes (8): Test Locations, Finding 8: Child Exit Status Discarded, test: missing host binary fails closed, test: forwarding preserves host success exit, test: forwarding propagates host non-zero exit, forward_args, forward_original_command, forward_pinned_command
 
 ### Community 130 - "Community 130"
-Cohesion: 0.17
-Nodes (12): extract_first_arg_fd(), extract_sensitive_file_reads(), is_sensitive_file_read(), lexical_clean_path(), test_appsec_evasion_bypasses(), test_appsec_evasion_exhaustive_variants(), test_extract_sensitive_file_reads(), test_extract_sensitive_file_reads_at_fdcwd_and_minus_100() (+4 more)
+Cohesion: 0.50
+Nodes (3): Runtime Entry Flow, Structured Logging Mode (planned), main()
 
 ### Community 131 - "Community 131"
 Cohesion: 0.20
 Nodes (7): CI/CD Integration, GitHub Actions, Installation (CLI), MCP Tools Available, Resources, Semgrep Static Analysis, When to Use Semgrep
 
 ### Community 132 - "Community 132"
-Cohesion: 0.25
-Nodes (8): Test Locations, Finding 8: Child Exit Status Discarded, test: missing host binary fails closed, test: forwarding preserves host success exit, test: forwarding propagates host non-zero exit, forward_args, forward_original_command, forward_pinned_command
+Cohesion: 0.50
+Nodes (4): Directory Structure, Step 2: Create Test Cases First, Test Annotations, Test Case Design
 
 ### Community 133 - "Community 133"
-Cohesion: 0.25
-Nodes (8): Allowed operations, AppArmor, Configuration, Platform note, Recommendation, Requirements, Setup, Status output
+Cohesion: 0.50
+Nodes (4): Pattern Not Matching, Taint Not Propagating, Too Many False Positives, Troubleshooting
 
 ### Community 134 - "Community 134"
-Cohesion: 0.29
-Nodes (7): Step 1: Baseline sanity (no custom seccomp/apparmor), Step 2: Validate seccomp profile syntax, Step 3: Smoke test ptrace with network access, Step 4: Run gyrseek e2e with seccomp, Step 5: AppArmor validation (Linux hosts), Step 5a: Troubleshooting, Validation checklist
+Cohesion: 0.40
+Nodes (5): 1. External AI Code Review, 2. Sandbox Syscall Permissiveness, 3. CI/CD Architecture Trade-offs, 4. DNS Exfiltration Boundaries, Threat Model & Accepted Risks
 
 ### Community 135 - "Community 135"
 Cohesion: 0.25
 Nodes (8): Configuration, Output Formats, Part 1: Running Scans, Quick Scan, Scan Specific Paths, .semgrepignore, Suppress False Positives, Using Rulesets
-
-### Community 136 - "Community 136"
-Cohesion: 0.29
-Nodes (7): Command Injection, Common Patterns by Vulnerability, Dangerous Functions (Pattern Matching), Hardcoded Secrets (Pattern Matching), Path Traversal, SQL Injection, XSS
-
-### Community 137 - "Community 137"
-Cohesion: 0.40
-Nodes (5): Capabilities and privileges, Probe batching, Sandbox Infrastructure, strace configuration, Unprivileged payload integrity
-
-### Community 138 - "Community 138"
-Cohesion: 0.40
-Nodes (5): Configuration, Platform note, Profile behavior, Seccomp, Status output
-
-### Community 139 - "Community 139"
-Cohesion: 0.40
-Nodes (5): 1. AI Reviewer Sandbox and Prompt Injection, 2. Sandbox Syscall Permissiveness, 3. CI/CD Architecture Trade-offs, 4. DNS Exfiltration Boundaries, Threat Model & Accepted Risks
-
-### Community 140 - "Community 140"
-Cohesion: 0.50
-Nodes (3): Strips markdown links and neutralizes images to prevent phishing.      >>> strip, sanitize(), strip_markdown_links()
-
-### Community 141 - "Community 141"
-Cohesion: 0.40
-Nodes (5): Basic Structure, Propagators, Source/Sink Options, Taint Components, Taint Mode
 
 ### Community 149 - "Community 149"
 Cohesion: 0.15
@@ -586,24 +571,24 @@ Cohesion: 0.33
 Nodes (4): EnvVarGuard, Drop, MutexGuard, Self
 
 ## Knowledge Gaps
-- **1021 isolated node(s):** `check_diff.sh script`, `consolidate_reviews.sh script`, `generate_review.sh script`, `post_comment.sh script`, `test_check_diff.sh script` (+1016 more)
+- **1015 isolated node(s):** `$schema`, `plugin`, `D`, `Error`, `BaselineOverrideConfig` (+1010 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **47 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **42 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `run()` connect `Community 149` to `Community 0`, `Community 1`, `Community 2`, `Community 132`, `Community 4`, `Community 13`, `Community 123`, `Community 124`?**
-  _High betweenness centrality (0.050) - this node is a cross-community bridge._
-- **Why does `Developer Guide` connect `Community 110` to `Community 144`, `Community 132`, `Community 5`?**
-  _High betweenness centrality (0.029) - this node is a cross-community bridge._
-- **Why does `Architecture` connect `Community 13` to `Community 144`, `Community 139`, `Community 149`?**
-  _High betweenness centrality (0.025) - this node is a cross-community bridge._
-- **What connects `check_diff.sh script`, `consolidate_reviews.sh script`, `generate_review.sh script` to the rest of the system?**
-  _1038 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Why does `run()` connect `Community 149` to `Community 0`, `Community 1`, `Community 130`, `Community 2`, `Community 4`, `Community 123`, `Community 124`, `Community 127`?**
+  _High betweenness centrality (0.055) - this node is a cross-community bridge._
+- **Why does `Developer Guide` connect `Community 13` to `Community 129`, `Community 127`?**
+  _High betweenness centrality (0.033) - this node is a cross-community bridge._
+- **Why does `gyrseek` connect `Community 8` to `Community 129`?**
+  _High betweenness centrality (0.026) - this node is a cross-community bridge._
+- **What connects `$schema`, `plugin`, `D` to the rest of the system?**
+  _1017 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.061708860759493674 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06052393857271906 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
   _Cohesion score 0.08896103896103896 - nodes in this community are weakly interconnected._
 - **Should `Community 2` be split into smaller, more focused modules?**
-  _Cohesion score 0.05616509926854754 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.05515832482124617 - nodes in this community are weakly interconnected._

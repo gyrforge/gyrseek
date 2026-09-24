@@ -1692,3 +1692,23 @@ The following chains document how independent bugs created compounded attack sur
 ### Finding 178: `pidfd_open` and `pidfd_getfd` not blocked in seccomp profile
 - **Root Cause**: The embedded seccomp profile blocklist in `src/sandbox.rs` omitted `pidfd_open` and `pidfd_getfd`. An unprivileged process in the sandbox could use `pidfd_open` to target another process and `pidfd_getfd` to duplicate its file descriptors without triggering traceable `open`/`openat` calls, bypassing file access tracking.
 - **Fix**: Added `"pidfd_open"` and `"pidfd_getfd"` to the syscall blocklist in `EMBEDDED_SECCOMP_PROFILE_JSON` (returning `EPERM`). Updated the unit test `embedded_seccomp_profile_structurally_blocks_dangerous_syscalls` to assert that both syscalls are blocked.
+
+### Finding 11: All-non-registry npm CLI args trigger package.json fallback
+- **Root Cause**: `parse_npm_install_packages_from_args` filtered non-registry specs (`file:`, `git+`, `https://`, `link:`, etc.), but when all CLI targets were non-registry, `packages` was empty and erroneously fell through to the `package.json` fallback. This scanned all dependencies in `package.json` — none of which were part of the user's install command.
+- **Fix**: Updated `parse_npm_install_packages_from_args` to only execute the `package.json` fallback when no positional package targets were passed on the CLI. If positional targets are supplied and all are non-registry specs, it returns an empty vector without reading `package.json`. Added `has_only_non_registry_npm_specs` to detect this state and forward the original command directly.
+
+### Finding 12: All-non-registry npm CLI args + no package.json → valid install blocked
+- **Root Cause**: When all npm CLI args were non-registry specs and no `package.json` existed in the working directory, `parse_npm_install_packages_from_args` returned an empty vector, causing `lib.rs` to fail closed with exit code 1, blocking valid local or URL-based package installations.
+- **Fix**: Added fast-path check using `has_only_non_registry_npm_specs` in `lib.rs` that detects when all positional arguments are non-registry specs and forwards the original command directly to npm/pnpm without failing closed.
+
+### Finding 21: Hardcoded 512 MB container memory & tmpfs limit causing OOM-kills on heavy native npm/pnpm builds
+- **Root Cause**: `build_docker_run_args` unconditionally appended `--memory 512m` and `--tmpfs /work:...,size=512m`. Heavy npm/pnpm dependency trees with native builds (e.g. node-gyp, esbuild, sharp) routinely exceeded 512 MB, causing the probe container to be OOM-killed and failing closed on clean packages.
+- **Fix**: Made the container memory and `/work` tmpfs limit configurable via the `GYRSEEK_MEM_LIMIT` environment variable, defaulting to a generous `2g`. Added a unit test validating default `2g` and custom environment overrides.
+
+### Finding 33: `execveat` double gap: absent from trace list and parser regex
+- **Root Cause**: `execveat` was missing from the strace `-e trace=` arguments in `src/sandbox.rs`, and the `parse_execve_argvs` regex in `src/scanning.rs` only matched `execve(...)`. An attacker executing a binary via `execveat` (e.g. with `AT_EMPTY_PATH`) left zero exec traces and bypassed git-clone and process-exec detection entirely.
+- **Fix**: Added `?execveat` to the strace trace list in `src/sandbox.rs` and updated `EXECVE_RE` in `src/scanning.rs` to `(?:execve\([^,]+|execveat\([^,]+,\s*[^,]+),\s*\[(?P<argv>...)\]`. Added unit tests verifying process-exec and git-clone signature extraction from `execveat` traces.
+
+### Finding 60: Failed `open()` populates baselines without allowlist check (Baseline Poisoning)
+- **Root Cause**: `extract_sensitive_file_reads` extracted paths and inserted them into `reads` without verifying the syscall return code. Failed syscalls (`open(...) = -1 ENOENT` or `-1 EACCES`) populated baseline reads without triggering warnings, allowing an attacker to probe sensitive paths in baseline versions and then read them in current versions without detection.
+- **Fix**: Added `parse_syscall_return` to extract the integer return value from strace output. Restricted `reads.insert` and `fd_table.insert` to only execute when `ret_val >= 0`. Resumed syscalls unconditionally clear pending entries and only register reads upon successful completion. Added unit tests verifying that failed `openat`, `open`, and `symlink` syscalls are ignored.

@@ -6,10 +6,7 @@
 
 | #  | File          | Line | Severity | Description                                                           | Status    |
 |----|---------------|------|----------|-----------------------------------------------------------------------|-----------|
-| 11 | `parsing.rs`  | 468  | High     | All-non-registry npm CLI args trigger package.json fallback           | ⚠️ Open  |
-| 12 | `lib.rs`      | 1021 | High     | All-non-registry npm CLI args + no package.json → valid install blocked | ⚠️ Open |
 | 14 | `parsing.rs`  | 880  | Low      | Temp file not cleaned up on test assertion failure                    | ⚠️ Open  |
-| 21 | `sandbox.rs`  | 629  | High     | Hardcoded 512 MB container memory — npm/pnpm native builds routinely OOM-killed | ⚠️ Open  |
 | 22 | `scanning.rs` | 222  | Medium   | IPv6 ULA (`fc00::/7`) not filtered as local — internal container traffic flagged as exfiltration | ⚠️ Open  |
 | 23 | `sandbox.rs`  | 191  | Medium   | Host mode selected silently — no stderr warning that sandbox protection is disabled | ⚠️ Open  |
 | 24 | `sandbox.rs`  | 555  | Medium   | Artifact scan spawns 3 processes per file — O(N) subprocess overhead on large node_modules | ⚠️ Open  |
@@ -21,7 +18,6 @@
 | 84  | `scanning.rs` | —    | High     | Async cache race in baseline counting during concurrent `scan_with_cache` calls | ⚠️ Open  |
 | 85  | `scanning.rs` | —    | Medium   | Blocking DNS I/O inside async runtime causes tokio worker-thread DoS   | ⚠️ Open  |
 | 86  | `scanning.rs` | —    | Low      | `scan_package_versions` fallback returns generic `scan_failed` with zero diagnostics | ⚠️ Open  |
-| 33 | `sandbox.rs`  | —    | High     | `execveat` double gap: absent from trace list and parser regex         | ⚠️ Open  |
 | 35 | `scanning.rs` | —    | High     | `close` and `execve` omitted from strace causing stale fd_table        | ⚠️ Open  |
 | 36 | `scanning.rs` | —    | High     | `F_DUPFD` numeric check missing; `F_DUPFD_CLOEXEC` ignored             | ⚠️ Open  |
 | 37 | `scanning.rs` | —    | Medium   | `is_harness_command` `env` delegation footgun                          | ⚠️ Open  |
@@ -44,7 +40,6 @@
 | 57 | `scanning.rs` | —    | Low      | `_allowed_sensitive_reads` destructure is noise                        | ⚠️ Open  |
 | 58 | `scanning.rs` | —    | Medium   | `is_sensitive_file_read` overlapping lists create a maintenance trap   | ⚠️ Open  |
 | 59 | `scanning.rs` | —    | Medium   | Test traces do not exercise real strace `-xx` hex-escape path          | ⚠️ Open  |
-| 60 | `scanning.rs` | —    | High     | Failed `open()` populates baselines without allowlist check            | ⚠️ Open  |
 | 61 | `sandbox.rs`  | —    | Medium   | Performance regression from expanded strace trace set                  | ⚠️ Open  |
 | 62 | `scanning.rs` | —    | Low      | `warn_and_block` unconditionally pushes without deduplication          | ⚠️ Open  |
 | 63 | `scanning.rs` | —    | Low      | `blocked_reasons` fragile string literal comparisons                   | ⚠️ Open  |

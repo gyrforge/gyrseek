@@ -255,7 +255,7 @@ impl SandboxRunner for HostRunner {
             let mut args = vec![
                 "-f".to_string(),
                 "-e".to_string(),
-                "trace=network,execve,open,openat,openat2,openat64,link,linkat,symlink,symlinkat,clone,clone3,fork,vfork,dup,dup2,dup3,fcntl".to_string(),
+                "trace=network,execve,?execveat,open,openat,openat2,openat64,link,linkat,symlink,symlinkat,clone,clone3,fork,vfork,dup,dup2,dup3,fcntl".to_string(),
                 manager.to_string(),
                 npm_family_install_subcommand(manager).to_string(),
                 format!("{}@{}", package, version),
@@ -272,7 +272,7 @@ impl SandboxRunner for HostRunner {
             vec![
                 "-f".to_string(),
                 "-e".to_string(),
-                "trace=network,execve,open,openat,openat2,openat64,link,linkat,symlink,symlinkat,clone,clone3,fork,vfork,dup,dup2,dup3,fcntl".to_string(),
+                "trace=network,execve,?execveat,open,openat,openat2,openat64,link,linkat,symlink,symlinkat,clone,clone3,fork,vfork,dup,dup2,dup3,fcntl".to_string(),
                 "uv".to_string(),
                 "pip".to_string(),
                 "install".to_string(),
@@ -550,7 +550,7 @@ fn install_invocation(manager: &str, pkg_spec: &str) -> String {
 /// stderr.
 fn strace_install_command(manager: &str, pkg_spec: &str, out_log: Option<&str>) -> String {
     let mut cmd = format!(
-        "strace -f -s 4096 -v -xx -u {u} -e trace=network,execve,open,openat,?openat2,?openat64,link,linkat,symlink,symlinkat,clone,?clone3,fork,vfork,dup,dup2,?dup3,fcntl",
+        "strace -f -s 4096 -v -xx -u {u} -e trace=network,execve,?execveat,open,openat,?openat2,?openat64,link,linkat,symlink,symlinkat,clone,?clone3,fork,vfork,dup,dup2,?dup3,fcntl",
         u = SCANNER_USER
     );
     if let Some(path) = out_log {
@@ -649,6 +649,14 @@ fn build_single_script(manager: &str, package: &str, version: &str, prebuilt: bo
     steps.join("; ")
 }
 
+fn sandbox_mem_limit() -> String {
+    std::env::var("GYRSEEK_MEM_LIMIT")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "2g".to_string())
+}
+
 /// Builds the `docker run` argument vector. When `out_dir_path` is non-empty it
 /// is bind-mounted at /out (root-owned) to receive trace logs.
 fn build_docker_run_args(
@@ -658,6 +666,7 @@ fn build_docker_run_args(
     script: &str,
     danger_disable_seccomp: bool,
 ) -> Result<Vec<String>, String> {
+    let mem_limit = sandbox_mem_limit();
     let mut args = vec![
         "run".to_string(),
         "--rm".to_string(),
@@ -676,7 +685,7 @@ fn build_docker_run_args(
         "--pids-limit".to_string(),
         "256".to_string(),
         "--memory".to_string(),
-        "512m".to_string(),
+        mem_limit.clone(),
         "--cpus".to_string(),
         "1".to_string(),
         "--user".to_string(),
@@ -684,7 +693,7 @@ fn build_docker_run_args(
         "--tmpfs".to_string(),
         "/tmp:rw,noexec,nosuid,size=128m".to_string(),
         "--tmpfs".to_string(),
-        "/work:rw,noexec,nosuid,size=512m".to_string(),
+        format!("/work:rw,noexec,nosuid,size={mem_limit}"),
     ];
     if !danger_disable_seccomp {
         let profile_path = embedded_seccomp_profile_path()?;
@@ -1017,7 +1026,7 @@ mod tests {
         assert!(cmd.contains(" -v "), "missing -v flag: {cmd}");
         assert!(cmd.contains(" -xx "), "missing -xx flag: {cmd}");
         assert!(
-            cmd.contains("trace=network,execve,open,openat,?openat2,?openat64,link,linkat,symlink,symlinkat,clone,?clone3,fork,vfork,dup,dup2,?dup3,fcntl"),
+            cmd.contains("trace=network,execve,?execveat,open,openat,?openat2,?openat64,link,linkat,symlink,symlinkat,clone,?clone3,fork,vfork,dup,dup2,?dup3,fcntl"),
             "strace must trace exactly the required syscalls, found: {cmd}"
         );
     }
@@ -1118,6 +1127,41 @@ mod tests {
             .position(|a| a == "--runtime")
             .expect("runtime flag present");
         assert_eq!(args.get(pos + 1).map(String::as_str), Some("kata-runtime"));
+    }
+
+    #[test]
+    fn docker_args_memory_limit_defaults_to_2g_and_is_configurable() {
+        {
+            let _env = SandboxEnvVarGuard::remove("GYRSEEK_MEM_LIMIT");
+            let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
+                .expect("docker args should build");
+            let mem_pos = args
+                .iter()
+                .position(|a| a == "--memory")
+                .expect("--memory flag present");
+            assert_eq!(args.get(mem_pos + 1).map(String::as_str), Some("2g"));
+            assert!(args.iter().any(|a| a == "/work:rw,noexec,nosuid,size=2g"));
+        }
+
+        {
+            let _guard = SandboxEnvVarGuard::set("GYRSEEK_MEM_LIMIT", "4g");
+            let args_custom =
+                build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
+                    .expect("docker args should build");
+            let mem_pos_custom = args_custom
+                .iter()
+                .position(|a| a == "--memory")
+                .expect("--memory flag present");
+            assert_eq!(
+                args_custom.get(mem_pos_custom + 1).map(String::as_str),
+                Some("4g")
+            );
+            assert!(
+                args_custom
+                    .iter()
+                    .any(|a| a == "/work:rw,noexec,nosuid,size=4g")
+            );
+        }
     }
 
     #[test]
