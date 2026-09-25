@@ -83,11 +83,18 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just fmt` | Formats the Rust code. |
 | `just test` | Runs `cargo test --all-features --locked`. |
 | `just lint` | Runs `cargo check`, clippy for all targets/features, and a format check. Use this before committing. |
-| `just test-npm` | End-to-end test: scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. |
-| `just test-pnpm` | End-to-end test: scans and adds `lodash`, then runs `pnpm update` and `pnpm i` against the test fixture in `tests/pnpm/`. Builds the release binary first. |
-| `just test-pip` | End-to-end test: creates a venv, then scans and installs `black`, the packages from `tests/pip/requirements.txt`, and runs `pip3 install --upgrade pip` via `pip3`. Builds the release binary first. |
-| `just test-poetry` | End-to-end test: scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
-| `just test-uv` | End-to-end test: scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
+| `just test-npm` | End-to-end test (Docker): scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. |
+| `just test-pnpm` | End-to-end test (Docker): scans and adds `lodash`, then runs `pnpm update` and `pnpm i` against the test fixture in `tests/pnpm/`. Builds the release binary first. |
+| `just test-pip` | End-to-end test (Docker): creates a venv, then scans and installs `black`, the packages from `tests/pip/requirements.txt`, and runs `pip3 install --upgrade pip` via `pip3`. Builds the release binary first. |
+| `just test-poetry` | End-to-end test (Docker): scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
+| `just test-uv` | End-to-end test (Docker): scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
+| `just test-docker` | Runs all Docker end-to-end tests (`test-npm`, `test-pnpm`, `test-pip`, `test-poetry`, `test-uv`). |
+| `just test-nono-npm` | End-to-end test (nono): runs npm install/update/i in `tests/npm/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono-pnpm` | End-to-end test (nono): runs pnpm add/update/i in `tests/pnpm/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono-pip` | End-to-end test (nono): runs pip3 install/update in `tests/pip/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono-poetry` | End-to-end test (nono): runs poetry add/install/update/lock in `tests/poetry/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono-uv` | End-to-end test (nono): runs uv add/pip install/sync/lock in `tests/uv/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono` | Runs all nono end-to-end tests (`test-nono-npm`, `test-nono-pnpm`, `test-nono-pip`, `test-nono-poetry`, `test-nono-uv`). |
 | `just docker-build-python` | Builds the Python scanner image from `docker/Dockerfile.python` as `gyrseek-python-scanner:latest`. |
 | `just docker-build-npm` | Builds the npm/pnpm scanner image from `docker/Dockerfile.npm` as `gyrseek-npm-scanner:latest`. |
 
@@ -512,15 +519,25 @@ sensitive_file_access_allowlist:
 | -------------------- | ----------------- | -------------------------------------------------------------------- |
 | **Docker** (default) | `docker`          | Safer default. Requires Docker CLI.                                  |
 | **MicroVM**          | `microvm`         | Strongest isolation; needs a MicroVM-capable Docker runtime (Linux). |
+| **nono**             | `nono`            | Kernel-enforced sandbox using Landlock (Linux) or Seatbelt (macOS).  |
 | **Host**             | `host`            | Fastest, **reduced safety** — see warning below.                     |
 
 ```bash
 GYRSEEK_SANDBOX=docker ./target/release/gyrseek npm install
-GYRSEEK_SANDBOX=host  ./target/release/gyrseek pip3 install -r requirements.txt
+GYRSEEK_SANDBOX=nono   ./target/release/gyrseek uv pip install requests
+GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 ```
 
 - If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
 - ⚠️ **Host mode does not provide meaningful isolation.** If the package is malicious, you are effectively running it directly on your machine and only getting a warning from `gyrseek`. Use it only for local development or environments without Docker.
+
+### nono configuration
+
+- `GYRSEEK_SANDBOX=nono` runs probes under [`nono`](https://github.com/nolabs-ai/nono), providing kernel-enforced capability sandboxing via Linux Landlock (kernel 5.13+) and macOS Seatbelt without requiring Docker or root privileges.
+- Each probe runs in a dedicated directory with `--allow <probe_dir>` and network access (`--allow-net`), capturing execution events in an audit log without `strace` or `ptrace` context-switch overhead.
+- Post-install artifact analysis (detecting binaries, unexpected runtimes like Bun/Deno, suspicious `.pth` files, and large files) runs directly against the isolated probe tree.
+- `GYRSEEK_NONO_PATH` specifies a custom binary path (defaults to searching `PATH`).
+- If `nono` is not found when `GYRSEEK_SANDBOX=nono` is configured, `gyrseek` fails closed with an explicit error.
 
 ### MicroVM configuration
 
@@ -534,6 +551,7 @@ GYRSEEK_SANDBOX=host  ./target/release/gyrseek pip3 install -r requirements.txt
 | Mode      | macOS (Docker Desktop)                                   | Linux host/VM                                                |
 | --------- | -------------------------------------------------------- | ------------------------------------------------------------ |
 | `docker`  | Supported                                                | Supported                                                    |
+| `nono`    | Supported (uses macOS Seatbelt)                          | Supported (uses Linux Landlock)                              |
 | `host`    | Supported (requires local `strace`)                      | Supported (requires local `strace`)                          |
 | `microvm` | Usually unavailable (Kata/runtime typically not exposed) | Supported when a MicroVM-capable Docker runtime is installed |
 

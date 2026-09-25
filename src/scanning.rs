@@ -150,6 +150,8 @@ struct NpmResponse {
     versions: std::collections::HashMap<String, serde_json::Value>,
     #[serde(default)]
     time: std::collections::HashMap<String, String>,
+    #[serde(rename = "dist-tags", default)]
+    dist_tags: std::collections::HashMap<String, String>,
 }
 
 pub(crate) const HARD_MINIMUM_AGE_HOURS: i64 = 24;
@@ -360,6 +362,27 @@ where
     } else {
         None
     }
+}
+
+pub(crate) fn is_synthetic_ipv6(ip: &str) -> bool {
+    if let Ok(IpAddr::V6(v6)) = ip.parse::<IpAddr>() {
+        v6.segments()[0] == 0x2001 && v6.segments()[1] == 0x0db8
+    } else {
+        false
+    }
+}
+
+pub(crate) fn lookup_in_dns_map<'a>(
+    ip_str: &str,
+    dns_map: &'a HashMap<String, Vec<IpAddr>>,
+) -> Option<&'a str> {
+    let addr: IpAddr = ip_str.parse().ok()?;
+    for (domain, ips) in dns_map {
+        if ips.contains(&addr) {
+            return Some(domain.as_str());
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -763,9 +786,10 @@ pub(crate) async fn fetch_history_with_baselines(
             sort_versions_ascending(manager, &mut versions);
 
             let current = if target_v == "latest" {
-                versions
-                    .last()
+                data.dist_tags
+                    .get("latest")
                     .cloned()
+                    .or_else(|| versions.last().cloned())
                     .unwrap_or_else(|| target_v.to_string())
             } else {
                 target_v.to_string()
@@ -1077,7 +1101,13 @@ fn parse_execve_argvs(trace: &str) -> Vec<Vec<String>> {
             let argv = cap.name("argv").map(|m| m.as_str()).unwrap_or("");
             let args: Vec<String> = quoted_arg_re
                 .captures_iter(argv)
-                .filter_map(|m| m.get(1).map(|x| x.as_str().replace("\\\"", "\"")))
+                .filter_map(|m| {
+                    m.get(1).map(|x| {
+                        let unescaped = unescape_strace_string(x.as_str());
+                        let bytes = unescaped.split(|&b| b == 0).next().unwrap_or(&[]);
+                        String::from_utf8_lossy(bytes).to_string()
+                    })
+                })
                 .collect();
             if args.is_empty() { None } else { Some(args) }
         })
@@ -1167,7 +1197,26 @@ fn is_harness_command(exe: &str, args: &[String]) -> bool {
             // pnpm add <pkg>@<ver> --dir /work --lockfile=false
             args.len() >= 2 && args[0] == "add" && contains("--dir")
         }
-        e if e.starts_with("python") => contains("get_interpreter_info"),
+        "pip" | "pip3" => {
+            args.len() >= 2
+                && args[0] == "install"
+                && contains("--no-cache")
+                && args.iter().enumerate().any(|(i, a)| {
+                    (a == "--target" && args.get(i + 1).map(String::as_str) == Some("/work"))
+                        || a == "--target=/work"
+                })
+        }
+        e if e.starts_with("python") => {
+            contains("get_interpreter_info")
+                || (args
+                    .windows(3)
+                    .any(|w| w[0] == "-m" && w[1] == "pip" && w[2] == "install")
+                    && contains("--no-cache")
+                    && args.iter().enumerate().any(|(i, a)| {
+                        (a == "--target" && args.get(i + 1).map(String::as_str) == Some("/work"))
+                            || a == "--target=/work"
+                    }))
+        }
         "env" => {
             if let Some(idx) = args.iter().position(|a| !a.contains('=')) {
                 let inner_exe = executable_basename(&args[idx]);
@@ -1185,25 +1234,19 @@ fn is_harness_command(exe: &str, args: &[String]) -> bool {
 /// new/extra arguments not seen before".
 fn extract_process_exec_signatures(trace: &str) -> HashSet<String> {
     let mut signatures = HashSet::new();
+
     for args in parse_execve_argvs(trace) {
-        // With strace -xx the argv is hex-escaped; unescape so
-        // executable_basename / is_harness_command match correctly.
-        let unescaped: Vec<String> = args
-            .iter()
-            .map(|a| {
-                let bytes = unescape_strace_string(a);
-                let c_bytes = bytes.split(|&b| b == 0).next().unwrap_or(&[]);
-                String::from_utf8_lossy(c_bytes).to_string()
-            })
-            .collect();
-        let exe = executable_basename(&unescaped[0]);
-        if is_harness_command(&exe, &unescaped[1..]) {
+        if args.is_empty() {
+            continue;
+        }
+        let exe = executable_basename(&args[0]);
+        if is_harness_command(&exe, &args[1..]) {
             continue;
         }
         // Signature = basename + remaining argv, so changed/extra args produce a
         // distinct signature that won't match the baseline set.
         let mut parts = vec![exe];
-        parts.extend(unescaped[1..].iter().cloned());
+        parts.extend(args[1..].iter().cloned());
         signatures.insert(parts.join("|"));
     }
     signatures
@@ -1665,6 +1708,38 @@ fn filter_allowlisted_process_exec_signatures(
         let exe = lower.split('|').next().unwrap_or("");
         !normalized_allowlist.contains(lower.as_str()) && !normalized_allowlist.contains(exe)
     })
+}
+
+/// Returns artifact findings present in the current version that are new compared
+/// to baselines. For `large_file` findings (`large_file|<path>|<size>`), the check
+/// is path-based: a file that was already large in baseline versions is not flagged
+/// even if its size changed, while a newly large file is flagged.
+pub(crate) fn new_artifact_findings_vs_baseline(
+    artifact_curr: &HashSet<String>,
+    baseline_artifact_findings: &HashSet<String>,
+) -> Vec<String> {
+    artifact_curr
+        .difference(baseline_artifact_findings)
+        .filter(|curr_finding| {
+            if let Some(rest) = curr_finding.strip_prefix("large_file|") {
+                if let Some((path, _size)) = rest.rsplit_once('|') {
+                    !baseline_artifact_findings.iter().any(|b| {
+                        if let Some(b_rest) = b.strip_prefix("large_file|")
+                            && let Some((b_path, _b_size)) = b_rest.rsplit_once('|')
+                        {
+                            return b_path == path;
+                        }
+                        false
+                    })
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 /// Splits artifact findings into (blocked, allowlisted). An entry is
@@ -2274,10 +2349,8 @@ pub(crate) async fn scan_packages_versions(
         // content, unexpected runtime binaries, and other file-level IoCs that
         // are identified by the in-container artifact scan (written to disk
         // during install, captured before the container exits).
-        let new_artifact_findings = artifact_curr
-            .difference(&baseline_artifact_findings)
-            .cloned()
-            .collect::<Vec<_>>();
+        let new_artifact_findings =
+            new_artifact_findings_vs_baseline(&artifact_curr, &baseline_artifact_findings);
         let (new_artifact_findings, allowlisted_artifact_findings) =
             filter_allowlisted_artifact_findings(
                 &plan.package,
@@ -2365,12 +2438,20 @@ pub(crate) async fn scan_packages_versions(
             new_connections,
             &policy.ip_allowlist,
         );
+        let resolve_endpoint = |ip: &str| -> Option<String> {
+            if is_synthetic_ipv6(ip) {
+                lookup_in_dns_map(ip, &dns_curr).map(|s| s.to_string())
+            } else {
+                reverse_dns_domain(ip)
+            }
+        };
+
         let (new_connections, allowlisted_domain_connections) =
             filter_domain_allowlisted_new_connections_with(
                 &plan.package,
                 new_connections,
                 &policy.domain_allowlist,
-                reverse_dns_domain,
+                resolve_endpoint,
             );
 
         if !allowlisted_connections.is_empty() {
@@ -2395,7 +2476,7 @@ pub(crate) async fn scan_packages_versions(
 
             let enriched: Vec<String> = new_connections
                 .iter()
-                .map(|ip| match reverse_dns_domain(ip) {
+                .map(|ip| match resolve_endpoint(ip) {
                     Some(d) => format!("{} -> {}", ip, d),
                     None => ip.clone(),
                 })
@@ -2467,9 +2548,10 @@ mod tests {
         find_new_connections_domain_aware, find_new_process_exec_signatures,
         find_new_sensitive_reads, forward_confirmed_hostname, is_harness_command,
         is_sandbox_local_ip, is_sensitive_file_read, minimum_release_age_policy_warning,
-        normalize_ip_string, npm_published_times, parse_dns_response, reverse_dns_domain,
-        scan_packages_versions, select_age_eligible_baselines, select_effective_baselines,
-        sort_versions_ascending, strip_artifact_section, unescape_strace_string,
+        new_artifact_findings_vs_baseline, normalize_ip_string, npm_published_times,
+        parse_dns_response, reverse_dns_domain, scan_packages_versions,
+        select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
+        strip_artifact_section, unescape_strace_string,
     };
 
     #[test]
@@ -2548,6 +2630,47 @@ execve("/usr/bin/bun\x00extra", ["bun\x00extra", "run\x00extra", "index.js"], 0x
 "#;
         let sigs = extract_process_exec_signatures(trace);
         assert!(sigs.contains("bun|run|index.js"));
+    }
+
+    #[test]
+    fn test_extract_process_exec_signatures_literal_escaped_nul() {
+        let trace = r#"
+execve("/usr/bin/bun", ["bun", "run", "payload\\x00retained"], 0x7ffd) = 0
+"#;
+        let sigs = extract_process_exec_signatures(trace);
+        assert!(
+            sigs.contains("bun|run|payload\\x00retained"),
+            "got: {sigs:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_process_exec_signatures_pip_install_harness_and_package() {
+        let trace = r#"
+execve("/usr/bin/env", ["env", "HOME=/work", "pip", "install", "pkg==1.0.0", "--target", "/work", "--no-cache"], 0x7ffd) = 0
+execve("/usr/bin/pip", ["pip", "install", "pkg==1.0.0", "--target", "/work", "--no-cache"], 0x7ffd) = 0
+execve("/usr/bin/python3", ["python3", "setup.py", "install"], 0x7ffd) = 0
+execve("/usr/bin/pip", ["pip", "install", "stage2"], 0x7ffd) = 0
+"#;
+        let sigs = extract_process_exec_signatures(trace);
+        assert!(sigs.contains("pip|install|stage2"), "got: {sigs:?}");
+        assert!(sigs.contains("python3|setup.py|install"), "got: {sigs:?}");
+        assert!(!sigs.contains("pip|install|pkg==1.0.0|--target|/work|--no-cache"));
+    }
+
+    #[test]
+    fn test_large_file_filter_handles_paths_with_pipe_characters() {
+        let mut curr = HashSet::new();
+        curr.insert("large_file|/work/dir|subdir/file.bin|20000000".to_string());
+        curr.insert("large_file|/work/new|file.bin|30000000".to_string());
+
+        let mut baseline = HashSet::new();
+        baseline.insert("large_file|/work/dir|subdir/file.bin|15000000".to_string());
+
+        let new_findings = new_artifact_findings_vs_baseline(&curr, &baseline);
+
+        assert_eq!(new_findings.len(), 1);
+        assert_eq!(new_findings[0], "large_file|/work/new|file.bin|30000000");
     }
 
     #[test]
@@ -6645,6 +6768,88 @@ read(6, "\x00\x44\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x03\x66\x6f\x6
                 "malware".to_string()
             ]
         ));
+        assert!(is_harness_command(
+            "pip",
+            &[
+                "install".to_string(),
+                "foo==1.0.0".to_string(),
+                "--target".to_string(),
+                "/work".to_string(),
+                "--no-cache".to_string(),
+            ]
+        ));
+        assert!(is_harness_command(
+            "pip3",
+            &[
+                "install".to_string(),
+                "foo==1.0.0".to_string(),
+                "--target".to_string(),
+                "/work".to_string(),
+                "--no-cache".to_string(),
+            ]
+        ));
+        assert!(is_harness_command(
+            "python3",
+            &[
+                "-m".to_string(),
+                "pip".to_string(),
+                "install".to_string(),
+                "foo==1.0.0".to_string(),
+                "--target".to_string(),
+                "/work".to_string(),
+                "--no-cache".to_string(),
+            ]
+        ));
+        assert!(!is_harness_command(
+            "pip",
+            &[
+                "install".to_string(),
+                "foo==1.0.0".to_string(),
+                "--target".to_string(),
+                "/work".to_string(),
+            ]
+        ));
+        assert!(!is_harness_command(
+            "pip",
+            &["install".to_string(), "malware".to_string()]
+        ));
+        assert!(!is_harness_command(
+            "pip",
+            &[
+                "install".to_string(),
+                "--target".to_string(),
+                "/tmp/s".to_string(),
+                "x".to_string()
+            ]
+        ));
+        assert!(!is_harness_command(
+            "pip",
+            &[
+                "install".to_string(),
+                "--target=/tmp/s".to_string(),
+                "x".to_string()
+            ]
+        ));
+        assert!(!is_harness_command(
+            "python3",
+            &[
+                "-m".to_string(),
+                "pip".to_string(),
+                "install".to_string(),
+                "--target".to_string(),
+                "/tmp/s".to_string(),
+                "x".to_string()
+            ]
+        ));
+        assert!(!is_harness_command(
+            "python3",
+            &[
+                "evil.py".to_string(),
+                "--arg=pip".to_string(),
+                "--action=install".to_string(),
+                "--target-dir=/tmp".to_string(),
+            ]
+        ));
     }
 
     #[test]
@@ -7135,5 +7340,69 @@ recvmsg(6, {msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\x00\x44\x00\x00\x
         let ip_strs: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
         assert!(ip_strs.contains(&"140.248.144.223".to_string()));
         assert!(ip_strs.contains(&"2a04:4e42:94::223".to_string()));
+    }
+
+    #[test]
+    fn trace_sandbox_install_matrix_parses_nono_generated_trace() {
+        let jsonl = r#"
+{"sequence":0,"event":{"type":"network","event":{"target":"93.184.216.34","port":443,"decision":"allow"}}}
+{"sequence":1,"event":{"type":"command_policy","command":"git clone https://github.com/evil/repo","decision":"allow"}}
+{"sequence":2,"event":{"type":"command_policy","command":["bun", "run", "stealer.js"],"decision":"allow"}}
+{"sequence":3,"event":{"type":"capability_decision","path":"/home/user/.aws/credentials","decision":"allow"}}
+{"sequence":4,"event":{"type":"capability_decision","path":"/home/user/.ssh/id_rsa","decision":"deny"}}
+"#;
+        let mut trace = crate::sandbox::parse_nono_audit_log(jsonl);
+        trace.push_str("\n=== gyrseek_artifacts ===\n");
+        trace.push_str("/work/bin/payload\x00123\0ELF 64-bit LSB executable\0fakecontent\n");
+        trace.push_str("/work/test.pth\x0050\0Python script text\0import urllib\n");
+
+        let mut traces = HashMap::new();
+        traces.insert(("test-pkg".to_string(), "1.0.0".to_string()), trace);
+        let runner = MockRunner { traces };
+
+        let result = super::trace_sandbox_install_matrix(
+            &runner,
+            "npm",
+            &[("test-pkg".to_string(), "1.0.0".to_string())],
+        )
+        .expect("matrix tracing should succeed");
+
+        let signals = result
+            .get(&("test-pkg".to_string(), "1.0.0".to_string()))
+            .expect("should have signals for probe");
+
+        assert!(signals.ips.contains("93.184.216.34"));
+        assert!(
+            signals
+                .git_clone_signatures
+                .contains("https://github.com/evil/repo|non-recursive")
+        );
+        assert!(
+            signals
+                .process_exec_signatures
+                .contains("bun|run|stealer.js")
+        );
+        assert!(
+            signals
+                .sensitive_file_reads
+                .contains("/home/user/.aws/credentials")
+        );
+        assert!(
+            !signals
+                .sensitive_file_reads
+                .contains("/home/user/.ssh/id_rsa")
+        );
+        assert!(
+            signals
+                .artifact_findings
+                .iter()
+                .any(|f| f.starts_with("binary|/work/bin/payload"))
+        );
+        assert!(
+            signals
+                .artifact_findings
+                .iter()
+                .any(|f| f.starts_with("suspicious_pth|/work/test.pth"))
+        );
     }
 }

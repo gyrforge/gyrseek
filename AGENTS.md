@@ -62,7 +62,8 @@ not the entire codebase.
   - just fmt — format Rust code
   - just test — run cargo test --all-features --locked
   - just lint — cargo check + clippy all targets/features + format check; run before committing (does NOT run cargo test — use just test for that)
-  - just test-{npm,pnpm,pip,uv,poetry} — end-to-end tests per manager using the release binary; require Docker
+  - just test-{npm,pnpm,pip,uv,poetry} / just test-docker — end-to-end tests per manager using the release binary (Docker)
+  - just test-nono-{npm,pnpm,pip,uv,poetry} / just test-nono — end-to-end tests per manager using the release binary (nono sandbox)
 - Test strategy:
   - All unit and integration tests that do not require spawning the compiled binary live inline in their src/ module under `#[cfg(test)]` — this follows Rust convention and lets tests access private items directly
   - Only tests that need to spawn the real binary (CLI exit-code checks, forward behavior) remain in tests/ as integration test files
@@ -153,7 +154,8 @@ not the entire codebase.
   - npm package.json fallback excludes local/non-registry dependency specs (file/workspace/git/url/link) from scanning
   - npm CLI arg parsing also excludes non-registry specs (`link:`, `file:`, `git+`, URL) — previously only the package.json fallback path filtered these; a `link:../local-pkg` CLI arg would leak through as a package name (fixed)
   - uv lock -P upgrade target parsing: when the value after -P starts with `-`, only one token is consumed (not two), so the next real package argument is not silently swallowed (fixed)
-  - Sandbox execution mode is selected via GYRSEEK_SANDBOX (`docker` default, `host` fallback)
+  - Sandbox execution mode is selected via GYRSEEK_SANDBOX (`docker` default, `nono`, `microvm`, `host` fallback)
+  - GYRSEEK_SANDBOX supports `nono` (Landlock LSM on Linux 5.13+, Seatbelt on macOS; pure capability sandbox with audit logging and zero strace overhead) via NonoRunner
   - Host sandbox mode prioritizes speed over isolation; a malicious latest package can execute on the host while gyrseek only emits warnings/signals
   - GYRSEEK_SANDBOX supports `microvm` mode via Docker runtime selection
   - GYRSEEK_MICROVM_RUNTIME selects the runtime for microvm mode (default `kata-runtime`), and initialization fails closed if runtime is unavailable

