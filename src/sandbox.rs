@@ -1,8 +1,10 @@
-use std::io::Read;
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use tempfile::TempDir;
 
 const EMBEDDED_SECCOMP_PROFILE_NAME: &str = "seccomp.gyrseek-tracing.json";
@@ -424,8 +426,758 @@ fn find_in_path(cmd: &str) -> Option<std::path::PathBuf> {
     None
 }
 
-impl SandboxRunner for NonoRunner {
-    fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String> {
+pub(crate) fn extract_host_from_url(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    let without_proto = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .unwrap_or(trimmed);
+    let host_port = without_proto.split('/').next()?.split('@').next_back()?;
+    let host = host_port.split(':').next()?.trim();
+    if !host.is_empty() && host.contains('.') {
+        Some(host.to_string())
+    } else {
+        None
+    }
+}
+
+pub(crate) fn default_allowed_domains_for_manager(manager: &str) -> Vec<String> {
+    if is_npm_family_manager(manager) {
+        vec![
+            "registry.npmjs.org".to_string(),
+            "*.npmjs.org".to_string(),
+            "registry.yarnpkg.com".to_string(),
+            "*.yarnpkg.com".to_string(),
+        ]
+    } else {
+        vec![
+            "pypi.org".to_string(),
+            "*.pypi.org".to_string(),
+            "files.pythonhosted.org".to_string(),
+            "*.pythonhosted.org".to_string(),
+        ]
+    }
+}
+
+pub(crate) fn discover_registry_domains_from_env() -> Vec<String> {
+    let mut domains = Vec::new();
+    for env_key in [
+        "NPM_CONFIG_REGISTRY",
+        "PIP_INDEX_URL",
+        "PIP_EXTRA_INDEX_URL",
+        "UV_INDEX_URL",
+        "POETRY_REPOSITORIES_DEFAULT_URL",
+    ] {
+        if let Ok(val) = std::env::var(env_key) {
+            for part in val.split([' ', ',', '\n']) {
+                if let Some(host) = extract_host_from_url(part) {
+                    domains.push(host);
+                }
+            }
+        }
+    }
+    if let Ok(allowed) = std::env::var("GYRSEEK_ALLOWED_DOMAINS") {
+        for part in allowed.split([',', ' ']) {
+            let trimmed = part.trim();
+            if !trimmed.is_empty() {
+                domains.push(trimmed.to_string());
+            }
+        }
+    }
+    domains.sort();
+    domains.dedup();
+    domains
+}
+
+pub(crate) fn extract_domains_from_nono_audit_log(audit_jsonl: &str) -> Vec<String> {
+    let mut domains = Vec::new();
+    for line in audit_jsonl.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            continue;
+        };
+        let event_obj = val.get("event");
+        let payload = if let Some(e) = event_obj {
+            if let Some(inner) = e.get("event") {
+                inner
+            } else {
+                e
+            }
+        } else {
+            &val
+        };
+
+        let is_denied = payload
+            .get("decision")
+            .and_then(|d| d.as_str())
+            .map(|d| d.eq_ignore_ascii_case("deny") || d.eq_ignore_ascii_case("block"))
+            .unwrap_or(false)
+            || payload
+                .get("allowed")
+                .and_then(|a| a.as_bool())
+                .map(|a| !a)
+                .unwrap_or(false)
+            || payload
+                .get("action")
+                .and_then(|a| a.as_str())
+                .map(|a| a.eq_ignore_ascii_case("deny") || a.eq_ignore_ascii_case("block"))
+                .unwrap_or(false)
+            || payload
+                .get("denied")
+                .and_then(|d| d.as_bool())
+                .unwrap_or(false)
+            || val
+                .get("decision")
+                .and_then(|d| d.as_str())
+                .map(|d| d.eq_ignore_ascii_case("deny") || d.eq_ignore_ascii_case("block"))
+                .unwrap_or(false)
+            || val
+                .get("action")
+                .and_then(|a| a.as_str())
+                .map(|a| a.eq_ignore_ascii_case("deny") || a.eq_ignore_ascii_case("block"))
+                .unwrap_or(false);
+
+        if is_denied {
+            continue;
+        }
+
+        if let Some(target_val) = payload
+            .get("target")
+            .or_else(|| payload.get("host"))
+            .and_then(|t| t.as_str())
+        {
+            let target = target_val.trim();
+            if !target.is_empty()
+                && !target.starts_with("unix:")
+                && target.parse::<IpAddr>().is_err()
+                && target.contains('.')
+            {
+                domains.push(target.to_string());
+            }
+        }
+    }
+    domains.sort();
+    domains.dedup();
+    domains
+}
+
+pub(crate) fn sandbox_mem_limit() -> String {
+    std::env::var("GYRSEEK_MEM_LIMIT")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "2g".to_string())
+}
+
+pub(crate) fn sandbox_max_processes() -> String {
+    std::env::var("GYRSEEK_MAX_PROCESSES")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            std::env::var("GYRSEEK_PIDS_LIMIT")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        })
+        .unwrap_or_else(|| "256".to_string())
+}
+
+pub(crate) fn nono_resource_limit_args() -> Vec<String> {
+    nono_resource_limit_args_for_os(std::env::consts::OS)
+}
+
+pub(crate) fn nono_resource_limit_args_for_os(os: &str) -> Vec<String> {
+    if os == "linux" {
+        vec![
+            "--memory".to_string(),
+            sandbox_mem_limit(),
+            "--max-processes".to_string(),
+            sandbox_max_processes(),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
+pub(crate) fn darwin_user_cache_dir() -> Option<String> {
+    if std::env::consts::OS == "macos" {
+        let output = Command::new("getconf")
+            .arg("DARWIN_USER_CACHE_DIR")
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let trimmed = path.trim_end_matches('/').to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn nono_profile_content_for_os(
+    os: &str,
+    darwin_cache_dir: Option<&str>,
+) -> Option<String> {
+    if os == "macos" {
+        let mut deny_rules = vec![
+            "      { \"path\": \"/tmp\" }".to_string(),
+            "      { \"path\": \"/private/tmp\" }".to_string(),
+        ];
+        if let Some(c) = darwin_cache_dir {
+            let clean = c.trim().trim_end_matches('/');
+            if !clean.is_empty() {
+                deny_rules.push(format!("      {{ \"path\": \"{}\" }}", clean));
+                if let Some(stripped) = clean.strip_prefix("/private") {
+                    deny_rules.push(format!("      {{ \"path\": \"{}\" }}", stripped));
+                } else {
+                    deny_rules.push(format!("      {{ \"path\": \"/private{}\" }}", clean));
+                }
+            }
+        }
+        Some(format!(
+            r#"{{
+  "meta": {{
+    "name": "gyrseek-profile"
+  }},
+  "filesystem": {{
+    "deny": [
+{}
+    ]
+  }}
+}}"#,
+            deny_rules.join(",\n")
+        ))
+    } else if os == "linux" {
+        Some(
+            r#"{
+  "meta": {
+    "name": "gyrseek-profile"
+  },
+  "groups": {
+    "exclude": [
+      "system_write_linux"
+    ]
+  },
+  "filesystem": {
+    "write": [
+      "/dev/null",
+      "/dev/zero",
+      "/dev/full",
+      "/dev/tty",
+      "/dev/stdout",
+      "/dev/stderr",
+      "/dev/fd",
+      "/dev/pts",
+      "/proc/self/fd"
+    ]
+  }
+}"#
+            .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
+pub(crate) struct CanaryTrap {
+    #[cfg(unix)]
+    paths: Vec<(PathBuf, String)>,
+    #[cfg(unix)]
+    accessed: Arc<Mutex<Vec<String>>>,
+    #[cfg(unix)]
+    stop: Arc<AtomicBool>,
+    #[cfg(unix)]
+    handles: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl CanaryTrap {
+    #[cfg(unix)]
+    pub(crate) fn setup(work_dir: &Path, home_dir: &Path, manager: &str) -> Result<Self, String> {
+        let mut targets = vec![
+            (work_dir.join(".env"), "/work/.env".to_string()),
+            (
+                work_dir.join(".aws").join("credentials"),
+                "/root/.aws/credentials".to_string(),
+            ),
+            (
+                work_dir.join(".ssh").join("id_rsa"),
+                "/root/.ssh/id_rsa".to_string(),
+            ),
+            (home_dir.join(".env"), "/work/.env".to_string()),
+            (
+                home_dir.join(".aws").join("credentials"),
+                "/root/.aws/credentials".to_string(),
+            ),
+            (
+                home_dir.join(".ssh").join("id_rsa"),
+                "/root/.ssh/id_rsa".to_string(),
+            ),
+        ];
+
+        // Skip .npmrc if the manager is an npm-family manager (npm, pnpm)
+        // because the manager itself reads .npmrc during startup.
+        if !is_npm_family_manager(manager) {
+            targets.push((work_dir.join(".npmrc"), "/root/.npmrc".to_string()));
+            targets.push((home_dir.join(".npmrc"), "/root/.npmrc".to_string()));
+        }
+
+        let accessed = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::new();
+        let mut active_paths = Vec::new();
+
+        for (fifo_path, virtual_path) in targets {
+            if let Some(parent) = fifo_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::remove_file(&fifo_path);
+
+            let c_path = match std::ffi::CString::new(fifo_path.to_string_lossy().as_bytes()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let res = unsafe { libc::mkfifo(c_path.as_ptr(), 0o666) };
+            if res != 0 {
+                continue;
+            }
+
+            active_paths.push((fifo_path.clone(), virtual_path.clone()));
+
+            let thread_fifo = fifo_path.clone();
+            let thread_virtual = virtual_path;
+            let thread_accessed = Arc::clone(&accessed);
+            let thread_stop = Arc::clone(&stop);
+
+            let handle = std::thread::spawn(move || {
+                use std::os::unix::fs::OpenOptionsExt;
+                let mut recorded = false;
+                while !thread_stop.load(Ordering::SeqCst) {
+                    let mut file = match std::fs::OpenOptions::new()
+                        .write(true)
+                        .custom_flags(libc::O_NONBLOCK)
+                        .open(&thread_fifo)
+                    {
+                        Ok(f) => f,
+                        Err(e) if e.raw_os_error() == Some(libc::ENXIO) => {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                            continue;
+                        }
+                        Err(_) => break,
+                    };
+                    if thread_stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if !recorded {
+                        if let Ok(mut guard) = thread_accessed.lock() {
+                            guard.push(thread_virtual.clone());
+                        }
+                        recorded = true;
+                    }
+                    let _ = file.write_all(b"KEY=gyrseek-canary-trap\n");
+                    let _ = file.flush();
+                    drop(file);
+                    // Leave a no-writer window so the reader observes EOF,
+                    // and avoid a busy loop while a reader holds the FIFO open.
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            });
+            handles.push(handle);
+        }
+
+        Ok(Self {
+            paths: active_paths,
+            accessed,
+            stop,
+            handles,
+        })
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn setup(
+        _work_dir: &Path,
+        _home_dir: &Path,
+        _manager: &str,
+    ) -> Result<Self, String> {
+        Ok(Self {})
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn teardown(mut self) -> Vec<String> {
+        self.stop.store(true, Ordering::SeqCst);
+
+        while self.handles.iter().any(|h| !h.is_finished()) {
+            for (fifo_path, _) in &self.paths {
+                if let Ok(c_path) = std::ffi::CString::new(fifo_path.to_string_lossy().as_bytes()) {
+                    let fd =
+                        unsafe { libc::open(c_path.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK) };
+                    if fd >= 0 {
+                        unsafe {
+                            libc::close(fd);
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        for handle in self.handles.drain(..) {
+            let _ = handle.join();
+        }
+
+        for (fifo_path, _) in &self.paths {
+            let _ = std::fs::remove_file(fifo_path);
+        }
+
+        let mut res = self
+            .accessed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        res.sort();
+        res.dedup();
+        res
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn teardown(self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+impl Drop for CanaryTrap {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            self.stop.store(true, Ordering::SeqCst);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            while self.handles.iter().any(|h| !h.is_finished())
+                && std::time::Instant::now() < deadline
+            {
+                for (fifo_path, _) in &self.paths {
+                    if let Ok(c_path) =
+                        std::ffi::CString::new(fifo_path.to_string_lossy().as_bytes())
+                    {
+                        let fd = unsafe {
+                            libc::open(c_path.as_ptr(), libc::O_RDONLY | libc::O_NONBLOCK)
+                        };
+                        if fd >= 0 {
+                            unsafe {
+                                libc::close(fd);
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+
+            for handle in self.handles.drain(..) {
+                let _ = handle.join();
+            }
+
+            for (fifo_path, _) in &self.paths {
+                let _ = std::fs::remove_file(fifo_path);
+            }
+        }
+    }
+}
+
+type ExecEvents = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+
+pub(crate) struct PathShims {
+    shims_dir: PathBuf,
+    fifo_path: PathBuf,
+    events: ExecEvents,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl PathShims {
+    #[cfg(unix)]
+    pub(crate) fn setup(shims_dir_parent: &Path, event_pipe_parent: &Path) -> Result<Self, String> {
+        let shims_dir = shims_dir_parent.join("shims");
+        std::fs::create_dir_all(&shims_dir)
+            .map_err(|e| format!("failed to create shims dir: {e}"))?;
+        let fifo_path = event_pipe_parent.join("gyrseek_exec.fifo");
+        let _ = std::fs::remove_file(&fifo_path);
+
+        let c_path = std::ffi::CString::new(fifo_path.to_string_lossy().as_bytes())
+            .map_err(|e| format!("invalid fifo path: {e}"))?;
+        let res = unsafe { libc::mkfifo(c_path.as_ptr(), 0o666) };
+        if res != 0 {
+            return Err(format!(
+                "failed to create exec fifo: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let watched = ["git", "bun", "deno", "curl", "wget"];
+        for exe in watched {
+            let shim_path = shims_dir.join(exe);
+            let script = format!(
+                r#"#!/bin/sh
+EXE="$(basename "$0")"
+{{ printf "%s\0" "$EXE" "$@"; printf "\n"; }} > "{}" 2>/dev/null
+REAL_PATH="$(echo "$PATH" | tr ':' '\n' | grep -v "{}" | tr '\n' ':')"
+REAL_BIN="$(PATH="$REAL_PATH" which "$EXE" 2>/dev/null)"
+if [ -n "$REAL_BIN" ] && [ -x "$REAL_BIN" ]; then
+    exec "$REAL_BIN" "$@"
+fi
+exit 127
+"#,
+                fifo_path.display(),
+                shims_dir.display(),
+            );
+            std::fs::write(&shim_path, script)
+                .map_err(|e| format!("failed to write shim for {exe}: {e}"))?;
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755));
+        }
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let thread_fifo = fifo_path.clone();
+        let thread_events = Arc::clone(&events);
+        let thread_stop = Arc::clone(&stop);
+
+        let handle = std::thread::spawn(move || {
+            let Ok(c_path) = std::ffi::CString::new(thread_fifo.to_string_lossy().as_bytes())
+            else {
+                return;
+            };
+
+            // Open with O_RDWR | O_NONBLOCK:
+            // 1. O_NONBLOCK ensures open() returns immediately without blocking.
+            // 2. Holding a write descriptor in the reader prevents premature POLLHUP / EOF
+            //    when external writers connect and disconnect.
+            let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_RDWR | libc::O_NONBLOCK) };
+            if fd < 0 {
+                return;
+            }
+
+            let mut buffer = Vec::new();
+            let mut read_buf = [0u8; 4096];
+
+            loop {
+                // If stop was requested, drain any remaining data from the FIFO and exit.
+                if thread_stop.load(Ordering::SeqCst) {
+                    loop {
+                        let n = unsafe {
+                            libc::read(
+                                fd,
+                                read_buf.as_mut_ptr() as *mut libc::c_void,
+                                read_buf.len(),
+                            )
+                        };
+                        if n > 0 {
+                            buffer.extend_from_slice(&read_buf[..n as usize]);
+                            Self::parse_buffer(&mut buffer, &thread_events);
+                        } else {
+                            break;
+                        }
+                    }
+                    if !buffer.is_empty() {
+                        Self::parse_line(&buffer, &thread_events);
+                    }
+                    break;
+                }
+
+                let mut pfd = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+
+                let ret = unsafe { libc::poll(&mut pfd, 1, 20) };
+                if ret > 0 && (pfd.revents & libc::POLLIN) != 0 {
+                    loop {
+                        let n = unsafe {
+                            libc::read(
+                                fd,
+                                read_buf.as_mut_ptr() as *mut libc::c_void,
+                                read_buf.len(),
+                            )
+                        };
+                        if n > 0 {
+                            buffer.extend_from_slice(&read_buf[..n as usize]);
+                            Self::parse_buffer(&mut buffer, &thread_events);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            unsafe {
+                libc::close(fd);
+            }
+        });
+
+        Ok(Self {
+            shims_dir,
+            fifo_path,
+            events,
+            stop,
+            handle: Some(handle),
+        })
+    }
+
+    #[cfg(unix)]
+    fn parse_buffer(buffer: &mut Vec<u8>, events: &ExecEvents) {
+        while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buffer.drain(..=pos).collect();
+            let content = &line[..line.len() - 1];
+            Self::parse_line(content, events);
+        }
+    }
+
+    #[cfg(unix)]
+    fn parse_line(line: &[u8], events: &ExecEvents) {
+        if line.is_empty() {
+            return;
+        }
+        let tokens: Vec<String> = line
+            .split(|&b| b == 0)
+            .filter(|tok| !tok.is_empty())
+            .map(|tok| String::from_utf8_lossy(tok).to_string())
+            .collect();
+        if !tokens.is_empty() {
+            let exe = tokens[0].clone();
+            let argv = tokens[1..].to_vec();
+            if let Ok(mut guard) = events.lock() {
+                guard.push((exe, argv));
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn setup(
+        shims_dir_parent: &Path,
+        _event_pipe_parent: &Path,
+    ) -> Result<Self, String> {
+        let shims_dir = shims_dir_parent.join("shims");
+        std::fs::create_dir_all(&shims_dir)
+            .map_err(|e| format!("failed to create shims dir: {e}"))?;
+        let fifo_path = shims_dir_parent.join("gyrseek_exec.log");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        Ok(Self {
+            shims_dir,
+            fifo_path,
+            events,
+            stop,
+            handle: None,
+        })
+    }
+
+    pub(crate) fn shims_dir(&self) -> &Path {
+        &self.shims_dir
+    }
+
+    pub(crate) fn fifo_path(&self) -> &Path {
+        &self.fifo_path
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn read_exec_events(mut self) -> Vec<(String, Vec<String>)> {
+        self.stop.store(true, Ordering::SeqCst);
+
+        if let Some(handle) = self.handle.take() {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+            while !handle.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+        }
+
+        let _ = std::fs::remove_file(&self.fifo_path);
+
+        self.events
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) fn read_exec_events(self) -> Vec<(String, Vec<String>)> {
+        Vec::new()
+    }
+}
+
+impl Drop for PathShims {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        #[cfg(unix)]
+        {
+            if let Some(handle) = self.handle.take() {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+                while !handle.is_finished() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                if handle.is_finished() {
+                    let _ = handle.join();
+                }
+            }
+            let _ = std::fs::remove_file(&self.fifo_path);
+        }
+    }
+}
+
+pub(crate) fn parse_nono_diagnostics_denials(stderr: &[u8]) -> Vec<String> {
+    let mut denied_paths = Vec::new();
+    let text = String::from_utf8_lossy(stderr);
+    let candidate_starts: Vec<usize> = text.match_indices('{').map(|(idx, _)| idx).collect();
+    for &start_idx in candidate_starts.iter().rev() {
+        let candidate = &text[start_idx..];
+        let mut de = serde_json::Deserializer::from_str(candidate).into_iter::<serde_json::Value>();
+        if let Some(Ok(val)) = de.next()
+            && let Some(session) = val.get("session")
+        {
+            if let Some(denials) = session.get("denials").and_then(|d| d.as_array()) {
+                for d in denials {
+                    if let Some(p) = d.get("path").and_then(|p| p.as_str()) {
+                        let trimmed = p.trim();
+                        if !trimmed.is_empty() {
+                            denied_paths.push(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+            if let Some(violations) = session.get("violations").and_then(|v| v.as_array()) {
+                for v in violations {
+                    if let Some(p) = v.get("target").and_then(|p| p.as_str()) {
+                        let trimmed = p.trim();
+                        if !trimmed.is_empty() {
+                            denied_paths.push(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+    denied_paths.sort();
+    denied_paths.dedup();
+    denied_paths
+}
+
+impl NonoRunner {
+    pub(crate) fn trace_install_with_domains(
+        &self,
+        manager: &str,
+        package: &str,
+        version: &str,
+        domain_constraint: Option<&[String]>,
+    ) -> Result<(String, Vec<String>), String> {
         let temp_dir =
             tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
         let allow_path = temp_dir.path().to_string_lossy().to_string();
@@ -536,19 +1288,61 @@ impl SandboxRunner for NonoRunner {
             (bin.to_string(), args)
         };
 
+        let path_shims = PathShims::setup(temp_dir.path(), state_path)
+            .map_err(|e| format!("failed to setup path shims: {e}"))?;
+
+        let canary_trap = CanaryTrap::setup(&work_dir, &home_dir, manager)
+            .map_err(|e| format!("failed to setup canary trap: {e}"))?;
+
+        let host_path = std::env::var("PATH").unwrap_or_default();
+        let shimmed_path = if host_path.is_empty() {
+            path_shims.shims_dir().to_string_lossy().to_string()
+        } else {
+            format!("{}:{}", path_shims.shims_dir().display(), host_path)
+        };
+
         let nono_bin = resolve_nono_bin();
         let mut nono_cmd = Command::new(&nono_bin);
         nono_cmd.current_dir(&work_dir);
         nono_cmd.args([
             "run",
             "--no-rollback-prompt",
-            "--no-diagnostics",
+            "--diagnostics-json",
             "--silent",
-            "--allow-domain",
-            "*",
             "--allow",
             &allow_path,
+            "--write-file",
+            &path_shims.fifo_path().to_string_lossy(),
         ]);
+
+        let cache_dir = darwin_user_cache_dir();
+        if let Some(profile_content) =
+            nono_profile_content_for_os(std::env::consts::OS, cache_dir.as_deref())
+        {
+            let profile_path = temp_dir.path().join("gyrseek_profile.json");
+            std::fs::write(&profile_path, profile_content)
+                .map_err(|e| format!("failed to write nono profile: {e}"))?;
+            nono_cmd.args(["-p", &profile_path.to_string_lossy()]);
+        }
+
+        let resource_args = nono_resource_limit_args();
+        nono_cmd.args(&resource_args);
+
+        if let Some(extra_domains) = domain_constraint {
+            let mut allowed_domains = default_allowed_domains_for_manager(manager);
+            allowed_domains.extend(discover_registry_domains_from_env());
+            allowed_domains.extend(extra_domains.iter().cloned());
+            allowed_domains.retain(|d| !d.trim().is_empty());
+            allowed_domains.sort();
+            allowed_domains.dedup();
+
+            for domain in &allowed_domains {
+                nono_cmd.args(["--allow-domain", domain]);
+            }
+        } else {
+            // Unconstrained baseline probe: enable proxy for all domains to discover legitimate dependencies
+            nono_cmd.args(["--allow-domain", "*"]);
+        }
 
         if let Some(bin_path) = find_in_path(&cmd_bin) {
             if let Some(parent) = bin_path.parent() {
@@ -595,15 +1389,20 @@ impl SandboxRunner for NonoRunner {
 
         nono_cmd.arg("--");
         nono_cmd.arg("env");
+        nono_cmd.arg(format!("PATH={}", shimmed_path));
         nono_cmd.arg(format!("HOME={}", target_path));
         nono_cmd.arg(format!("TMPDIR={}", home_path));
+        nono_cmd.arg(format!("XDG_CACHE_HOME={}/cache", target_path));
+        nono_cmd.arg(format!("XDG_CONFIG_HOME={}/config", target_path));
+        nono_cmd.arg(format!("XDG_DATA_HOME={}/data", target_path));
+        nono_cmd.arg(format!("NPM_CONFIG_CACHE={}/npm_cache", target_path));
+        nono_cmd.arg(format!("UV_CACHE_DIR={}/uv_cache", target_path));
+        nono_cmd.arg(format!("PNPM_HOME={}/pnpm_home", target_path));
         nono_cmd.arg(&cmd_bin);
         nono_cmd.args(&cmd_args);
 
         nono_cmd.env_clear();
-        if let Ok(path) = std::env::var("PATH") {
-            nono_cmd.env("PATH", path);
-        }
+        nono_cmd.env("PATH", &shimmed_path);
         if let Ok(home) = std::env::var("HOME") {
             nono_cmd.env("HOME", home);
         }
@@ -614,6 +1413,10 @@ impl SandboxRunner for NonoRunner {
             .stderr(Stdio::piped())
             .output()
             .map_err(|e| format!("failed to execute nono: {e}"))?;
+
+        let canary_reads = canary_trap.teardown();
+        let exec_events = path_shims.read_exec_events();
+        let diagnostic_denials = parse_nono_diagnostics_denials(&output.stderr);
 
         let audit_dir = state_path.join("nono").join("audit");
         let mut audit_content = String::new();
@@ -641,6 +1444,8 @@ impl SandboxRunner for NonoRunner {
             ));
         }
 
+        let observed_domains = extract_domains_from_nono_audit_log(&audit_content);
+
         let mut trace = parse_nono_audit_log(&audit_content).replace(&target_path, "/work");
         if trace.trim().is_empty() {
             return Err(format!(
@@ -651,13 +1456,111 @@ impl SandboxRunner for NonoRunner {
             ));
         }
 
+        for path in &canary_reads {
+            trace.push_str(&format!(
+                "openat(AT_FDCWD, \"{}\", O_RDONLY) = 3\n",
+                escape_strace_synthetic(path)
+            ));
+        }
+        for path in &diagnostic_denials {
+            trace.push_str(&format!(
+                "openat(AT_FDCWD, \"{}\", O_RDONLY) = -1 EACCES (Permission denied)\n",
+                escape_strace_synthetic(path)
+            ));
+        }
+        for (exe, args) in &exec_events {
+            let mut full_argv = vec![exe.clone()];
+            full_argv.extend(args.iter().cloned());
+            let quoted: Vec<String> = full_argv
+                .iter()
+                .map(|a| format!("\"{}\"", escape_strace_synthetic(a)))
+                .collect();
+            trace.push_str(&format!(
+                "execve(\"/usr/bin/{}\", [{}], 0x7ffd00000000) = 0\n",
+                escape_strace_synthetic(exe),
+                quoted.join(", ")
+            ));
+        }
+
         let artifact_lines = scan_target_artifacts(&work_dir);
         if !artifact_lines.is_empty() {
             trace.push_str("\n=== gyrseek_artifacts ===\n");
             trace.push_str(&artifact_lines);
         }
 
+        Ok((trace, observed_domains))
+    }
+}
+
+impl SandboxRunner for NonoRunner {
+    fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String> {
+        let (trace, _) = self.trace_install_with_domains(manager, package, version, Some(&[]))?;
         Ok(trace)
+    }
+
+    fn trace_install_matrix(
+        &self,
+        manager: &str,
+        probes: &[(String, String)],
+    ) -> Result<Vec<ProbeTrace>, String> {
+        if probes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut package_groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        let mut package_order = Vec::new();
+        for (pkg, ver) in probes {
+            if !package_groups.contains_key(pkg) {
+                package_order.push(pkg.clone());
+            }
+            package_groups
+                .entry(pkg.clone())
+                .or_default()
+                .push((pkg.clone(), ver.clone()));
+        }
+
+        let mut results_map: HashMap<(String, String), String> = HashMap::new();
+
+        for pkg in package_order {
+            let pkg_probes = package_groups.remove(&pkg).unwrap_or_default();
+            if pkg_probes.is_empty() {
+                continue;
+            }
+
+            let candidate = &pkg_probes[0];
+            let baselines = &pkg_probes[1..];
+
+            // 1. Run baseline probes unconstrained to discover legitimate endpoints used by known-good versions.
+            let mut baseline_domains = Vec::new();
+            for (b_pkg, b_ver) in baselines {
+                let (trace, domains) =
+                    self.trace_install_with_domains(manager, b_pkg, b_ver, None)?;
+                baseline_domains.extend(domains);
+                results_map.insert((b_pkg.clone(), b_ver.clone()), trace);
+            }
+            baseline_domains.sort();
+            baseline_domains.dedup();
+
+            // 2. Run candidate probe strictly constrained to registry domains + discovered baseline domains.
+            let (cand_trace, _) = self.trace_install_with_domains(
+                manager,
+                &candidate.0,
+                &candidate.1,
+                Some(&baseline_domains),
+            )?;
+            results_map.insert((candidate.0.clone(), candidate.1.clone()), cand_trace);
+        }
+
+        let mut ordered_results = Vec::new();
+        for probe in probes {
+            let trace = results_map
+                .get(probe)
+                .cloned()
+                .ok_or_else(|| format!("missing trace for probe {:?}", probe))?;
+            ordered_results.push((probe.clone(), trace));
+        }
+
+        Ok(ordered_results)
     }
 }
 
@@ -704,6 +1607,9 @@ pub(crate) fn scan_target_artifacts(target_dir: &Path) -> String {
                     || slice.starts_with(b"\xce\xfa\xed\xfe")
                     || slice.starts_with(b"\xcf\xfa\xed\xfe")
                     || slice.starts_with(b"\xca\xfe\xba\xbe")
+                    || slice.starts_with(b"\xbe\xba\xfe\xca")
+                    || slice.starts_with(b"\xca\xfe\xba\xbf")
+                    || slice.starts_with(b"\xbf\xba\xfe\xca")
                 {
                     "Mach-O 64-bit arm64 executable"
                 } else if slice.starts_with(b"MZ") {
@@ -1306,14 +2212,6 @@ fn build_single_script(manager: &str, package: &str, version: &str, prebuilt: bo
     steps.join("; ")
 }
 
-fn sandbox_mem_limit() -> String {
-    std::env::var("GYRSEEK_MEM_LIMIT")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "2g".to_string())
-}
-
 /// Builds the `docker run` argument vector. When `out_dir_path` is non-empty it
 /// is bind-mounted at /out (root-owned) to receive trace logs.
 fn build_docker_run_args(
@@ -1324,6 +2222,7 @@ fn build_docker_run_args(
     danger_disable_seccomp: bool,
 ) -> Result<Vec<String>, String> {
     let mem_limit = sandbox_mem_limit();
+    let max_procs = sandbox_max_processes();
     let mut args = vec![
         "run".to_string(),
         "--rm".to_string(),
@@ -1340,7 +2239,7 @@ fn build_docker_run_args(
         "--cap-add".to_string(),
         "SYS_PTRACE".to_string(),
         "--pids-limit".to_string(),
-        "256".to_string(),
+        max_procs,
         "--memory".to_string(),
         mem_limit.clone(),
         "--cpus".to_string(),
@@ -1629,12 +2528,15 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
-        EMBEDDED_SECCOMP_PROFILE_JSON, SCANNER_USER, build_artifact_scan_steps,
+        CanaryTrap, EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
+        EMBEDDED_SECCOMP_PROFILE_JSON, PathShims, SCANNER_USER, build_artifact_scan_steps,
         build_docker_run_args, build_matrix_script, build_runner_from_env, build_single_script,
-        build_synthetic_dns_response, docker_apparmor_enabled_from_env,
-        docker_apparmor_profile_name, format_synthetic_dns_trace_line, parse_nono_audit_log,
-        resolve_nono_bin, scan_target_artifacts, strace_install_command,
+        build_synthetic_dns_response, default_allowed_domains_for_manager,
+        discover_registry_domains_from_env, docker_apparmor_enabled_from_env,
+        docker_apparmor_profile_name, extract_domains_from_nono_audit_log, extract_host_from_url,
+        format_synthetic_dns_trace_line, nono_profile_content_for_os,
+        nono_resource_limit_args_for_os, parse_nono_audit_log, parse_nono_diagnostics_denials,
+        resolve_nono_bin, sandbox_max_processes, scan_target_artifacts, strace_install_command,
     };
     use std::sync::Mutex;
 
@@ -1650,7 +2552,9 @@ mod tests {
 
     impl SandboxEnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
-            let guard = env_lock().lock().expect("env lock poisoned");
+            let guard = env_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             unsafe {
                 std::env::set_var(key, value);
             }
@@ -1661,7 +2565,9 @@ mod tests {
         }
 
         fn set_many(vars: &[(&'static str, &str)]) -> Self {
-            let guard = env_lock().lock().expect("env lock poisoned");
+            let guard = env_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let mut keys = Vec::new();
             for (key, val) in vars {
                 unsafe {
@@ -1673,13 +2579,30 @@ mod tests {
         }
 
         fn remove(key: &'static str) -> Self {
-            let guard = env_lock().lock().expect("env lock poisoned");
+            let guard = env_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             unsafe {
                 std::env::remove_var(key);
             }
             Self {
                 _lock: guard,
                 keys: vec![key],
+            }
+        }
+
+        fn remove_many(keys: &[&'static str]) -> Self {
+            let guard = env_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for key in keys {
+                unsafe {
+                    std::env::remove_var(key);
+                }
+            }
+            Self {
+                _lock: guard,
+                keys: keys.to_vec(),
             }
         }
     }
@@ -2346,6 +3269,9 @@ Stderr: {}",
         let elf_path = bin_dir.join("payload");
         std::fs::write(&elf_path, b"\x7fELFfakeexecutablecontent").unwrap();
 
+        let macho_fat_path = bin_dir.join("macho_universal_64");
+        std::fs::write(&macho_fat_path, b"\xca\xfe\xba\xbfpayload64").unwrap();
+
         let pth_path = temp_dir.path().join("evil.pth");
         std::fs::write(
             &pth_path,
@@ -2362,6 +3288,8 @@ Stderr: {}",
         let artifacts = scan_target_artifacts(temp_dir.path());
         assert!(artifacts.contains("/work/bin/payload"));
         assert!(artifacts.contains("ELF 64-bit LSB executable"));
+        assert!(artifacts.contains("/work/bin/macho_universal_64"));
+        assert!(artifacts.contains("Mach-O 64-bit arm64 executable"));
         assert!(artifacts.contains("/work/evil.pth"));
         assert!(artifacts.contains("Python script text"));
         assert!(artifacts.contains("import urllib"));
@@ -2375,5 +3303,315 @@ Stderr: {}",
         let trace_line = format_synthetic_dns_trace_line(&packet);
         assert!(trace_line.contains("recvfrom(4, \""));
         assert!(trace_line.contains("sin_port=htons(53)"));
+    }
+
+    #[test]
+    fn test_extract_host_from_url() {
+        assert_eq!(
+            extract_host_from_url("https://registry.npmjs.org/"),
+            Some("registry.npmjs.org".to_string())
+        );
+        assert_eq!(
+            extract_host_from_url("http://user:pass@internal-pypi.company.com:8080/simple"),
+            Some("internal-pypi.company.com".to_string())
+        );
+        assert_eq!(
+            extract_host_from_url("pypi.company.internal"),
+            Some("pypi.company.internal".to_string())
+        );
+        assert_eq!(extract_host_from_url("invalid-no-dot"), None);
+    }
+
+    #[test]
+    fn test_default_allowed_domains_for_manager() {
+        let npm_domains = default_allowed_domains_for_manager("npm");
+        assert!(npm_domains.contains(&"registry.npmjs.org".to_string()));
+        assert!(npm_domains.contains(&"*.npmjs.org".to_string()));
+
+        let pnpm_domains = default_allowed_domains_for_manager("pnpm");
+        assert!(pnpm_domains.contains(&"registry.yarnpkg.com".to_string()));
+
+        let py_domains = default_allowed_domains_for_manager("pip");
+        assert!(py_domains.contains(&"pypi.org".to_string()));
+        assert!(py_domains.contains(&"files.pythonhosted.org".to_string()));
+    }
+
+    #[test]
+    fn test_discover_registry_domains_from_env() {
+        let _guard = SandboxEnvVarGuard::set_many(&[
+            (
+                "NPM_CONFIG_REGISTRY",
+                "https://artifactory.corp.internal/npm",
+            ),
+            ("PIP_INDEX_URL", "https://pypi.corp.internal/simple"),
+            ("GYRSEEK_ALLOWED_DOMAINS", "custom-cdn.net, extra.org"),
+        ]);
+        let discovered = discover_registry_domains_from_env();
+        assert!(discovered.contains(&"artifactory.corp.internal".to_string()));
+        assert!(discovered.contains(&"pypi.corp.internal".to_string()));
+        assert!(discovered.contains(&"custom-cdn.net".to_string()));
+        assert!(discovered.contains(&"extra.org".to_string()));
+    }
+
+    #[test]
+    fn test_extract_domains_from_nono_audit_log() {
+        let jsonl = r#"
+{"sequence":0,"event":{"type":"network","event":{"target":"files.pythonhosted.org","port":443,"decision":"allow"}}}
+{"sequence":1,"event":{"type":"network","event":{"target":"93.184.216.34","port":443,"decision":"allow"}}}
+{"sequence":2,"event":{"type":"network","event":{"target":"unix:/var/run/docker.sock","decision":"deny"}}}
+{"sequence":3,"event":{"type":"network","event":{"target":"github.com","port":443,"decision":"deny"}}}
+"#;
+        let domains = extract_domains_from_nono_audit_log(jsonl);
+        assert_eq!(domains, vec!["files.pythonhosted.org".to_string()]);
+        assert!(!domains.contains(&"github.com".to_string()));
+    }
+
+    #[test]
+    fn test_nono_resource_limits_on_linux() {
+        let _guard = SandboxEnvVarGuard::remove_many(&[
+            "GYRSEEK_MEM_LIMIT",
+            "GYRSEEK_MAX_PROCESSES",
+            "GYRSEEK_PIDS_LIMIT",
+        ]);
+        let args = nono_resource_limit_args_for_os("linux");
+        assert_eq!(
+            args,
+            vec![
+                "--memory".to_string(),
+                "2g".to_string(),
+                "--max-processes".to_string(),
+                "256".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_nono_resource_limits_disabled_on_non_linux() {
+        assert!(nono_resource_limit_args_for_os("macos").is_empty());
+        assert!(nono_resource_limit_args_for_os("darwin").is_empty());
+        assert!(nono_resource_limit_args_for_os("windows").is_empty());
+    }
+
+    #[test]
+    fn test_nono_resource_limits_respect_env_overrides() {
+        let _guard = SandboxEnvVarGuard::set_many(&[
+            ("GYRSEEK_MEM_LIMIT", "1g"),
+            ("GYRSEEK_MAX_PROCESSES", "128"),
+        ]);
+        let args = nono_resource_limit_args_for_os("linux");
+        assert_eq!(
+            args,
+            vec![
+                "--memory".to_string(),
+                "1g".to_string(),
+                "--max-processes".to_string(),
+                "128".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_sandbox_max_processes_env_fallback() {
+        let _guard = SandboxEnvVarGuard::set_many(&[
+            ("GYRSEEK_MAX_PROCESSES", ""),
+            ("GYRSEEK_PIDS_LIMIT", "512"),
+        ]);
+        assert_eq!(sandbox_max_processes(), "512");
+    }
+
+    #[test]
+    fn test_nono_profile_content_on_macos() {
+        let content = nono_profile_content_for_os("macos", Some("/var/folders/xx/yy/C"))
+            .expect("macos profile should exist");
+        assert!(content.contains("\"/tmp\""));
+        assert!(content.contains("\"/private/tmp\""));
+        assert!(content.contains("\"/var/folders/xx/yy/C\""));
+        assert!(content.contains("\"/private/var/folders/xx/yy/C\""));
+        assert!(content.contains("\"deny\""));
+
+        let content_without_cache =
+            nono_profile_content_for_os("macos", None).expect("macos profile should exist");
+        assert!(content_without_cache.contains("\"/tmp\""));
+        assert!(!content_without_cache.contains("var/folders"));
+    }
+
+    #[test]
+    fn test_nono_profile_content_on_linux() {
+        let content =
+            nono_profile_content_for_os("linux", None).expect("linux profile should exist");
+        assert!(content.contains("\"system_write_linux\""));
+        assert!(content.contains("\"exclude\""));
+        assert!(content.contains("\"/dev/null\""));
+        assert!(!content.contains("\"deny\""));
+    }
+
+    #[test]
+    fn test_nono_profile_content_disabled_on_other_os() {
+        assert!(nono_profile_content_for_os("windows", None).is_none());
+        assert!(nono_profile_content_for_os("unknown", None).is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_canary_trap_detects_read_and_clean_teardown() {
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("work");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+
+        let trap = CanaryTrap::setup(&work, &home, "pip").expect("setup canary trap");
+
+        let env_file = work.join(".env");
+        if env_file.exists() {
+            // First read
+            let content1 = std::fs::read_to_string(&env_file).unwrap_or_default();
+            assert!(content1.contains("KEY=gyrseek-canary-trap"));
+            // Repeated read must not block
+            let content2 = std::fs::read_to_string(&env_file).unwrap_or_default();
+            assert!(content2.contains("KEY=gyrseek-canary-trap"));
+        }
+
+        let accessed = trap.teardown();
+        assert!(accessed.contains(&"/work/.env".to_string()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_canary_trap_untouched_clean_teardown() {
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("work");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+
+        let trap = CanaryTrap::setup(&work, &home, "pip").expect("setup canary trap");
+        let accessed = trap.teardown();
+        assert!(accessed.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_canary_trap_skips_npmrc_for_npm() {
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("work");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+
+        let trap = CanaryTrap::setup(&work, &home, "npm").expect("setup canary trap");
+        assert!(!work.join(".npmrc").exists());
+        assert!(!home.join(".npmrc").exists());
+        let accessed = trap.teardown();
+        assert!(accessed.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_path_shims_logging_and_event_parsing() {
+        let temp = tempfile::tempdir().unwrap();
+        let shims = PathShims::setup(temp.path(), temp.path()).expect("setup shims");
+        assert!(shims.shims_dir().join("git").exists());
+        assert!(shims.shims_dir().join("bun").exists());
+        assert!(shims.shims_dir().join("curl").exists());
+
+        let output = std::process::Command::new(shims.shims_dir().join("bun"))
+            .args(["run", "dropper.js", "--flag"])
+            .output()
+            .expect("run bun shim");
+        assert_eq!(output.status.code(), Some(127));
+
+        let events = shims.read_exec_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "bun");
+        assert_eq!(
+            events[0].1,
+            vec![
+                "run".to_string(),
+                "dropper.js".to_string(),
+                "--flag".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_path_shims_shutdown_with_held_writer() {
+        let temp = tempfile::tempdir().unwrap();
+        let shims = PathShims::setup(temp.path(), temp.path()).expect("setup shims");
+        let fifo_path = shims.fifo_path().to_path_buf();
+
+        // Simulate a descendant process opening and holding the write end of the FIFO.
+        // Retry until the worker thread has opened the read end (otherwise O_NONBLOCK fails with ENXIO).
+        let c_path = std::ffi::CString::new(fifo_path.to_string_lossy().as_bytes()).unwrap();
+        let mut write_fd = -1;
+        for _ in 0..50 {
+            write_fd = unsafe { libc::open(c_path.as_ptr(), libc::O_WRONLY | libc::O_NONBLOCK) };
+            if write_fd >= 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert!(write_fd >= 0, "open write end");
+
+        // Write an event through the held descriptor
+        let msg = b"curl\0http://evil.com\0\n";
+        let written =
+            unsafe { libc::write(write_fd, msg.as_ptr() as *const libc::c_void, msg.len()) };
+        assert_eq!(written, msg.len() as isize);
+
+        // read_exec_events must finish promptly and read the event, despite write_fd still being held open
+        let start = std::time::Instant::now();
+        let events = shims.read_exec_events();
+        let elapsed = start.elapsed();
+
+        unsafe {
+            libc::close(write_fd);
+        }
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "must not block on held writer: elapsed {:?}",
+            elapsed
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "curl");
+        assert_eq!(events[0].1, vec!["http://evil.com".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_nono_diagnostics_denials() {
+        let stderr_fixture = br#"
+npm ERR! code {ERR_INVALID_PACKAGE_TARGET}
+compiler warning: { "syntax": false }
+cat: /Users/alice/.zshrc: Operation not permitted
+{
+  "session": {
+    "exit_code": 1,
+    "denials": [
+      {
+        "path": "/Users/alice/.zshrc",
+        "access": "Read",
+        "reason": "PolicyBlocked"
+      }
+    ],
+    "violations": [
+      {
+        "operation": "file-read-data",
+        "target": "/Users/alice/.aws/credentials"
+      }
+    ]
+  }
+}
+[nono] process exited with status 1
+"#;
+        let denied = parse_nono_diagnostics_denials(stderr_fixture);
+        assert_eq!(
+            denied,
+            vec![
+                "/Users/alice/.aws/credentials".to_string(),
+                "/Users/alice/.zshrc".to_string()
+            ]
+        );
     }
 }

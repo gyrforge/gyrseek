@@ -6,7 +6,7 @@ This document is the canonical reference for Docker sandbox security in gyrseek.
 
 gyrseek runs install probes inside Docker containers using `strace` to capture behavioral signals (network endpoints, process execution, git clones, installed artifacts). The Docker sandbox is tuned for practical compatibility with package managers and throughput, not maximum isolation — though seccomp and AppArmor profiles add defense-in-depth.
 
-Sandbox mode is selected via `GYRSEEK_SANDBOX` (`docker` default, `host` fallback, `microvm` via Docker runtime selection).
+Sandbox mode is selected via `GYRSEEK_SANDBOX` (`docker` default, `microvm` via Docker runtime selection, `nono` experimental kernel-capability sandbox, or `host` fallback).
 
 ## Sandbox Infrastructure
 

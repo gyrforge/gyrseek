@@ -26,6 +26,7 @@
 - Default baseline age gate set to 72 hours (`DEFAULT_MIN_BASELINE_AGE_HOURS`) with a hard floor of 24 (`HARD_MINIMUM_AGE_HOURS`); per-package values below the floor are silently clamped and a warning is emitted. Override versions younger than the hard floor are rejected in `check_override_ages`.
 - `new_package_exemptions` redesigned from a flat list (`Vec<String>`) to a version-pinned map (`HashMap<String, String>`) with a custom serde deserializer that accepts both formats for backward compatibility. Empty version values produce a warning and are dropped. The `tgt_version` branch in the exemption match was removed to prevent `"latest"` string bypass.
 - The "safe to remove" exemption message is now gated on `new_package_exempt` so it only fires when the exemption version actually matched the current install, not just because baselines happen to suffice.
+- Hardened kernel capability sandbox (`GYRSEEK_SANDBOX=nono`) via Landlock (Linux) and Seatbelt (macOS): scoped registry/baseline domain network isolation, FIFO canary traps for credential theft detection, PATH shims for dropper command tracking, nono supervisor diagnostics parsing, and host-side artifact scanning. *(Experimental)*.
 
 ## Near Term
 - Fetch and analyze registry metadata (npm and Python package indices) prior to executing the sandbox to fast-fail on obvious static anomalies (e.g. newly introduced suspicious dependencies or scripts).
