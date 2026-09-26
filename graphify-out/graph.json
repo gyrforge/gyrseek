@@ -184,7 +184,7 @@
       "source_location": "L29",
       "_origin": "ast",
       "id": "src_lib_rs_hashmap",
-      "community": 124,
+      "community": 123,
       "norm_label": "hashmap"
     },
     {
@@ -874,7 +874,7 @@
       "source_location": "L1483",
       "_origin": "ast",
       "id": "src_lib_nooprunner",
-      "community": 124,
+      "community": 4,
       "norm_label": "nooprunner"
     },
     {
@@ -1224,7 +1224,7 @@
       "source_location": "L2290",
       "_origin": "ast",
       "id": "src_lib_dummyexemptionconfig",
-      "community": 124,
+      "community": 123,
       "norm_label": "dummyexemptionconfig"
     },
     {
@@ -1274,7 +1274,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "src_main",
-      "community": 143,
+      "community": 149,
       "norm_label": "main.rs"
     },
     {
@@ -1284,7 +1284,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "src_main_main",
-      "community": 143,
+      "community": 149,
       "norm_label": "main()"
     },
     {
@@ -2044,7 +2044,7 @@
       "source_location": "L169",
       "_origin": "ast",
       "id": "src_sandbox_scannerimageconfig",
-      "community": 2,
+      "community": 116,
       "norm_label": "scannerimageconfig"
     },
     {
@@ -2074,7 +2074,7 @@
       "source_location": "L195",
       "_origin": "ast",
       "id": "src_sandbox_build_runner_from_env",
-      "community": 2,
+      "community": 119,
       "norm_label": "build_runner_from_env()"
     },
     {
@@ -2094,7 +2094,7 @@
       "source_location": "L195",
       "_origin": "ast",
       "id": "box",
-      "community": 2,
+      "community": 119,
       "norm_label": "box"
     },
     {
@@ -2104,7 +2104,7 @@
       "source_location": "L264",
       "_origin": "ast",
       "id": "src_sandbox_hostrunner",
-      "community": 110,
+      "community": 119,
       "norm_label": "hostrunner"
     },
     {
@@ -2114,7 +2114,7 @@
       "source_location": "L267",
       "_origin": "ast",
       "id": "src_sandbox_hostrunner_trace_install",
-      "community": 110,
+      "community": 119,
       "norm_label": ".trace_install()"
     },
     {
@@ -2218,6 +2218,16 @@
       "norm_label": "resolve_nono_bin()"
     },
     {
+      "label": "Option",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L369",
+      "_origin": "ast",
+      "id": "src_sandbox_rs_option",
+      "community": 141,
+      "norm_label": "option"
+    },
+    {
       "label": "PathBuf",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
@@ -2231,67 +2241,57 @@
       "label": "nono_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L400",
+      "source_location": "L405",
       "_origin": "ast",
       "id": "src_sandbox_nono_available",
-      "community": 2,
+      "community": 119,
       "norm_label": "nono_available()"
     },
     {
       "label": "find_in_path()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L411",
+      "source_location": "L418",
       "_origin": "ast",
       "id": "src_sandbox_find_in_path",
       "community": 141,
       "norm_label": "find_in_path()"
     },
     {
-      "label": "Option",
-      "file_type": "code",
-      "source_file": "src/sandbox.rs",
-      "source_location": "L411",
-      "_origin": "ast",
-      "id": "src_sandbox_rs_option",
-      "community": 141,
-      "norm_label": "option"
-    },
-    {
       "label": "extract_host_from_url()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L429",
+      "source_location": "L438",
       "_origin": "ast",
       "id": "src_sandbox_extract_host_from_url",
-      "community": 141,
+      "community": 2,
       "norm_label": "extract_host_from_url()"
     },
     {
       "label": "default_allowed_domains_for_manager()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L444",
+      "source_location": "L453",
       "_origin": "ast",
       "id": "src_sandbox_default_allowed_domains_for_manager",
-      "community": 118,
+      "community": 141,
       "norm_label": "default_allowed_domains_for_manager()"
     },
     {
       "label": "discover_registry_domains_from_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L462",
+      "source_location": "L471",
       "_origin": "ast",
       "id": "src_sandbox_discover_registry_domains_from_env",
-      "community": 141,
+      "community": 2,
       "norm_label": "discover_registry_domains_from_env()"
     },
     {
       "label": "extract_domains_from_nono_audit_log()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L492",
+      "source_location": "L501",
       "_origin": "ast",
       "id": "src_sandbox_extract_domains_from_nono_audit_log",
       "community": 118,
@@ -2301,7 +2301,7 @@
       "label": "sandbox_mem_limit()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L567",
+      "source_location": "L576",
       "_origin": "ast",
       "id": "src_sandbox_sandbox_mem_limit",
       "community": 117,
@@ -2311,17 +2311,17 @@
       "label": "sandbox_max_processes()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L575",
+      "source_location": "L584",
       "_origin": "ast",
       "id": "src_sandbox_sandbox_max_processes",
-      "community": 116,
+      "community": 117,
       "norm_label": "sandbox_max_processes()"
     },
     {
       "label": "nono_resource_limit_args()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L589",
+      "source_location": "L598",
       "_origin": "ast",
       "id": "src_sandbox_nono_resource_limit_args",
       "community": 118,
@@ -2331,7 +2331,7 @@
       "label": "nono_resource_limit_args_for_os()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L593",
+      "source_location": "L602",
       "_origin": "ast",
       "id": "src_sandbox_nono_resource_limit_args_for_os",
       "community": 118,
@@ -2341,7 +2341,7 @@
       "label": "darwin_user_cache_dir()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L606",
+      "source_location": "L615",
       "_origin": "ast",
       "id": "src_sandbox_darwin_user_cache_dir",
       "community": 141,
@@ -2351,7 +2351,7 @@
       "label": "nono_profile_content_for_os()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L623",
+      "source_location": "L632",
       "_origin": "ast",
       "id": "src_sandbox_nono_profile_content_for_os",
       "community": 141,
@@ -2361,7 +2361,7 @@
       "label": "CanaryTrap",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L688",
+      "source_location": "L697",
       "_origin": "ast",
       "id": "src_sandbox_canarytrap",
       "community": 122,
@@ -2371,7 +2371,7 @@
       "label": "Arc",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L692",
+      "source_location": "L701",
       "_origin": "ast",
       "id": "arc",
       "community": 122,
@@ -2381,7 +2381,7 @@
       "label": "Mutex",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L692",
+      "source_location": "L701",
       "_origin": "ast",
       "id": "src_sandbox_rs_mutex",
       "community": 122,
@@ -2391,7 +2391,7 @@
       "label": "AtomicBool",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L694",
+      "source_location": "L703",
       "_origin": "ast",
       "id": "atomicbool",
       "community": 122,
@@ -2401,7 +2401,7 @@
       "label": "JoinHandle",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L696",
+      "source_location": "L705",
       "_origin": "ast",
       "id": "joinhandle",
       "community": 122,
@@ -2411,17 +2411,17 @@
       "label": ".setup()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L701",
+      "source_location": "L710",
       "_origin": "ast",
       "id": "src_sandbox_canarytrap_setup",
-      "community": 116,
+      "community": 122,
       "norm_label": ".setup()"
     },
     {
       "label": "Path",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L701",
+      "source_location": "L710",
       "_origin": "ast",
       "id": "src_sandbox_rs_path",
       "community": 122,
@@ -2431,17 +2431,17 @@
       "label": "Self",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L701",
+      "source_location": "L710",
       "_origin": "ast",
       "id": "src_sandbox_rs_self",
-      "community": 116,
+      "community": 122,
       "norm_label": "self"
     },
     {
       "label": ".teardown()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L812",
+      "source_location": "L821",
       "_origin": "ast",
       "id": "src_sandbox_canarytrap_teardown",
       "community": 122,
@@ -2451,17 +2451,17 @@
       "label": "Drop",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L854",
+      "source_location": "L863",
       "_origin": "ast",
       "id": "src_sandbox_rs_drop",
-      "community": 116,
+      "community": 122,
       "norm_label": "drop"
     },
     {
       "label": ".drop()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L855",
+      "source_location": "L864",
       "_origin": "ast",
       "id": "src_sandbox_canarytrap_drop",
       "community": 122,
@@ -2471,7 +2471,7 @@
       "label": "PathShims",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L893",
+      "source_location": "L902",
       "_origin": "ast",
       "id": "src_sandbox_pathshims",
       "community": 122,
@@ -2481,7 +2481,7 @@
       "label": "ExecEvents",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L896",
+      "source_location": "L905",
       "_origin": "ast",
       "id": "execevents",
       "community": 122,
@@ -2491,7 +2491,7 @@
       "label": ".setup()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L903",
+      "source_location": "L912",
       "_origin": "ast",
       "id": "src_sandbox_pathshims_setup",
       "community": 122,
@@ -2501,7 +2501,7 @@
       "label": ".parse_buffer()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1033",
+      "source_location": "L1042",
       "_origin": "ast",
       "id": "src_sandbox_pathshims_parse_buffer",
       "community": 122,
@@ -2511,7 +2511,7 @@
       "label": ".parse_line()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1042",
+      "source_location": "L1051",
       "_origin": "ast",
       "id": "src_sandbox_pathshims_parse_line",
       "community": 122,
@@ -2521,7 +2521,7 @@
       "label": ".shims_dir()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1080",
+      "source_location": "L1089",
       "_origin": "ast",
       "id": "src_sandbox_pathshims_shims_dir",
       "community": 122,
@@ -2531,7 +2531,7 @@
       "label": ".fifo_path()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1084",
+      "source_location": "L1093",
       "_origin": "ast",
       "id": "src_sandbox_pathshims_fifo_path",
       "community": 122,
@@ -2541,7 +2541,7 @@
       "label": ".read_exec_events()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1089",
+      "source_location": "L1098",
       "_origin": "ast",
       "id": "src_sandbox_pathshims_read_exec_events",
       "community": 122,
@@ -2551,7 +2551,7 @@
       "label": ".drop()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1117",
+      "source_location": "L1126",
       "_origin": "ast",
       "id": "src_sandbox_pathshims_drop",
       "community": 122,
@@ -2561,7 +2561,7 @@
       "label": "parse_nono_diagnostics_denials()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1135",
+      "source_location": "L1144",
       "_origin": "ast",
       "id": "src_sandbox_parse_nono_diagnostics_denials",
       "community": 118,
@@ -2571,7 +2571,7 @@
       "label": ".trace_install_with_domains()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1174",
+      "source_location": "L1183",
       "_origin": "ast",
       "id": "src_sandbox_nonorunner_trace_install_with_domains",
       "community": 141,
@@ -2581,7 +2581,7 @@
       "label": ".trace_install()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1496",
+      "source_location": "L1506",
       "_origin": "ast",
       "id": "src_sandbox_nonorunner_trace_install",
       "community": 141,
@@ -2591,7 +2591,7 @@
       "label": ".trace_install_matrix()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1501",
+      "source_location": "L1511",
       "_origin": "ast",
       "id": "src_sandbox_nonorunner_trace_install_matrix",
       "community": 117,
@@ -2601,7 +2601,7 @@
       "label": "scan_target_artifacts()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1567",
+      "source_location": "L1577",
       "_origin": "ast",
       "id": "src_sandbox_scan_target_artifacts",
       "community": 141,
@@ -2611,7 +2611,7 @@
       "label": "build_synthetic_dns_response()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1637",
+      "source_location": "L1647",
       "_origin": "ast",
       "id": "src_sandbox_build_synthetic_dns_response",
       "community": 2,
@@ -2621,7 +2621,7 @@
       "label": "IpAddr",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1637",
+      "source_location": "L1647",
       "_origin": "ast",
       "id": "src_sandbox_rs_ipaddr",
       "community": 2,
@@ -2631,7 +2631,7 @@
       "label": "format_synthetic_dns_trace_line()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1681",
+      "source_location": "L1691",
       "_origin": "ast",
       "id": "src_sandbox_format_synthetic_dns_trace_line",
       "community": 2,
@@ -2641,7 +2641,7 @@
       "label": "escape_strace_synthetic()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1695",
+      "source_location": "L1705",
       "_origin": "ast",
       "id": "src_sandbox_escape_strace_synthetic",
       "community": 117,
@@ -2651,7 +2651,7 @@
       "label": "synthetic_ip_for_domain()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1714",
+      "source_location": "L1724",
       "_origin": "ast",
       "id": "src_sandbox_synthetic_ip_for_domain",
       "community": 2,
@@ -2661,7 +2661,7 @@
       "label": "parse_nono_audit_log()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1730",
+      "source_location": "L1740",
       "_origin": "ast",
       "id": "src_sandbox_parse_nono_audit_log",
       "community": 2,
@@ -2671,7 +2671,7 @@
       "label": "trace_install_docker_matrix_with_runtime()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L1912",
+      "source_location": "L1922",
       "_origin": "ast",
       "id": "src_sandbox_trace_install_docker_matrix_with_runtime",
       "community": 117,
@@ -2681,7 +2681,7 @@
       "label": "trace_install_docker_single_with_runtime()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2001",
+      "source_location": "L2011",
       "_origin": "ast",
       "id": "src_sandbox_trace_install_docker_single_with_runtime",
       "community": 117,
@@ -2691,17 +2691,17 @@
       "label": "is_npm_family_manager()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2046",
+      "source_location": "L2056",
       "_origin": "ast",
       "id": "src_sandbox_is_npm_family_manager",
-      "community": 110,
+      "community": 141,
       "norm_label": "is_npm_family_manager()"
     },
     {
       "label": "npm_family_install_subcommand()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2050",
+      "source_location": "L2060",
       "_origin": "ast",
       "id": "src_sandbox_npm_family_install_subcommand",
       "community": 2,
@@ -2711,7 +2711,7 @@
       "label": "npm_family_install_dir_flag()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2054",
+      "source_location": "L2064",
       "_origin": "ast",
       "id": "src_sandbox_npm_family_install_dir_flag",
       "community": 2,
@@ -2721,7 +2721,7 @@
       "label": "package_spec()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2063",
+      "source_location": "L2073",
       "_origin": "ast",
       "id": "src_sandbox_package_spec",
       "community": 110,
@@ -2731,7 +2731,7 @@
       "label": "scanner_user_setup_steps()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2073",
+      "source_location": "L2083",
       "_origin": "ast",
       "id": "src_sandbox_scanner_user_setup_steps",
       "community": 110,
@@ -2741,7 +2741,7 @@
       "label": "install_invocation()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2089",
+      "source_location": "L2099",
       "_origin": "ast",
       "id": "src_sandbox_install_invocation",
       "community": 117,
@@ -2751,7 +2751,7 @@
       "label": "strace_install_command()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2114",
+      "source_location": "L2124",
       "_origin": "ast",
       "id": "src_sandbox_strace_install_command",
       "community": 110,
@@ -2761,7 +2761,7 @@
       "label": "image_setup_steps()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2127",
+      "source_location": "L2137",
       "_origin": "ast",
       "id": "src_sandbox_image_setup_steps",
       "community": 110,
@@ -2771,7 +2771,7 @@
       "label": "build_artifact_scan_steps()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2154",
+      "source_location": "L2164",
       "_origin": "ast",
       "id": "src_sandbox_build_artifact_scan_steps",
       "community": 2,
@@ -2781,7 +2781,7 @@
       "label": "build_matrix_script()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2179",
+      "source_location": "L2189",
       "_origin": "ast",
       "id": "src_sandbox_build_matrix_script",
       "community": 110,
@@ -2791,7 +2791,7 @@
       "label": "build_single_script()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2205",
+      "source_location": "L2215",
       "_origin": "ast",
       "id": "src_sandbox_build_single_script",
       "community": 110,
@@ -2801,27 +2801,27 @@
       "label": "build_docker_run_args()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2217",
+      "source_location": "L2227",
       "_origin": "ast",
       "id": "src_sandbox_build_docker_run_args",
-      "community": 116,
+      "community": 117,
       "norm_label": "build_docker_run_args()"
     },
     {
       "label": "docker_apparmor_enabled_from_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2280",
+      "source_location": "L2290",
       "_origin": "ast",
       "id": "src_sandbox_docker_apparmor_enabled_from_env",
-      "community": 2,
+      "community": 116,
       "norm_label": "docker_apparmor_enabled_from_env()"
     },
     {
       "label": "try_load_apparmor()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2296",
+      "source_location": "L2306",
       "_origin": "ast",
       "id": "src_sandbox_try_load_apparmor",
       "community": 122,
@@ -2831,17 +2831,17 @@
       "label": "docker_apparmor_profile_name()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2350",
+      "source_location": "L2360",
       "_origin": "ast",
       "id": "src_sandbox_docker_apparmor_profile_name",
-      "community": 2,
+      "community": 116,
       "norm_label": "docker_apparmor_profile_name()"
     },
     {
       "label": "embedded_seccomp_profile_path()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2375",
+      "source_location": "L2385",
       "_origin": "ast",
       "id": "src_sandbox_embedded_seccomp_profile_path",
       "community": 117,
@@ -2851,77 +2851,77 @@
       "label": "announce_seccomp_status()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2398",
+      "source_location": "L2408",
       "_origin": "ast",
       "id": "src_sandbox_announce_seccomp_status",
-      "community": 2,
+      "community": 119,
       "norm_label": "announce_seccomp_status()"
     },
     {
       "label": "announce_apparmor_status()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2411",
+      "source_location": "L2421",
       "_origin": "ast",
       "id": "src_sandbox_announce_apparmor_status",
-      "community": 2,
+      "community": 116,
       "norm_label": "announce_apparmor_status()"
     },
     {
       "label": "docker_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2436",
+      "source_location": "L2446",
       "_origin": "ast",
       "id": "src_sandbox_docker_available",
-      "community": 2,
+      "community": 119,
       "norm_label": "docker_available()"
     },
     {
       "label": "docker_runtime_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2446",
+      "source_location": "L2456",
       "_origin": "ast",
       "id": "src_sandbox_docker_runtime_available",
-      "community": 2,
+      "community": 119,
       "norm_label": "docker_runtime_available()"
     },
     {
       "label": "scanner_image_config()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2452",
+      "source_location": "L2462",
       "_origin": "ast",
       "id": "src_sandbox_scanner_image_config",
-      "community": 2,
+      "community": 116,
       "norm_label": "scanner_image_config()"
     },
     {
       "label": "parse_bool_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2489",
+      "source_location": "L2499",
       "_origin": "ast",
       "id": "src_sandbox_parse_bool_env",
-      "community": 2,
+      "community": 116,
       "norm_label": "parse_bool_env()"
     },
     {
       "label": "list_docker_runtimes()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2496",
+      "source_location": "L2506",
       "_origin": "ast",
       "id": "src_sandbox_list_docker_runtimes",
-      "community": 2,
+      "community": 119,
       "norm_label": "list_docker_runtimes()"
     },
     {
       "label": "shell_single_quoted()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2524",
+      "source_location": "L2534",
       "_origin": "ast",
       "id": "src_sandbox_shell_single_quoted",
       "community": 117,
@@ -2931,87 +2931,87 @@
       "label": "env_lock()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2543",
+      "source_location": "L2553",
       "_origin": "ast",
       "id": "src_sandbox_env_lock",
-      "community": 116,
+      "community": 2,
       "norm_label": "env_lock()"
     },
     {
       "label": "SandboxEnvVarGuard",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2548",
+      "source_location": "L2558",
       "_origin": "ast",
       "id": "src_sandbox_sandboxenvvarguard",
-      "community": 116,
+      "community": 122,
       "norm_label": "sandboxenvvarguard"
     },
     {
       "label": "MutexGuard",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2549",
+      "source_location": "L2559",
       "_origin": "ast",
       "id": "src_sandbox_rs_mutexguard",
-      "community": 116,
+      "community": 122,
       "norm_label": "mutexguard"
     },
     {
       "label": ".set()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2554",
+      "source_location": "L2564",
       "_origin": "ast",
       "id": "src_sandbox_sandboxenvvarguard_set",
-      "community": 116,
+      "community": 122,
       "norm_label": ".set()"
     },
     {
       "label": ".set_many()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2567",
+      "source_location": "L2577",
       "_origin": "ast",
       "id": "src_sandbox_sandboxenvvarguard_set_many",
-      "community": 116,
+      "community": 2,
       "norm_label": ".set_many()"
     },
     {
       "label": ".remove()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2581",
+      "source_location": "L2591",
       "_origin": "ast",
       "id": "src_sandbox_sandboxenvvarguard_remove",
-      "community": 116,
+      "community": 117,
       "norm_label": ".remove()"
     },
     {
       "label": ".remove_many()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2594",
+      "source_location": "L2604",
       "_origin": "ast",
       "id": "src_sandbox_sandboxenvvarguard_remove_many",
-      "community": 116,
+      "community": 122,
       "norm_label": ".remove_many()"
     },
     {
       "label": ".drop()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2611",
+      "source_location": "L2621",
       "_origin": "ast",
       "id": "src_sandbox_sandboxenvvarguard_drop",
-      "community": 116,
+      "community": 122,
       "norm_label": ".drop()"
     },
     {
       "label": "strace_command_disables_string_truncation()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2623",
+      "source_location": "L2633",
       "_origin": "ast",
       "id": "src_sandbox_strace_command_disables_string_truncation",
       "community": 110,
@@ -3021,7 +3021,7 @@
       "label": "matrix_and_single_scripts_disable_truncation()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2637",
+      "source_location": "L2647",
       "_origin": "ast",
       "id": "src_sandbox_matrix_and_single_scripts_disable_truncation",
       "community": 110,
@@ -3031,7 +3031,7 @@
       "label": "strace_drops_payload_to_unprivileged_user()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2656",
+      "source_location": "L2666",
       "_origin": "ast",
       "id": "src_sandbox_strace_drops_payload_to_unprivileged_user",
       "community": 110,
@@ -3041,7 +3041,7 @@
       "label": "matrix_script_creates_scanner_user_before_install()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2669",
+      "source_location": "L2679",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_creates_scanner_user_before_install",
       "community": 110,
@@ -3051,7 +3051,7 @@
       "label": "pnpm_install_invocation_uses_pnpm_add()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2688",
+      "source_location": "L2698",
       "_origin": "ast",
       "id": "src_sandbox_pnpm_install_invocation_uses_pnpm_add",
       "community": 110,
@@ -3061,7 +3061,7 @@
       "label": "pnpm_non_prebuilt_image_enables_pnpm()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2695",
+      "source_location": "L2705",
       "_origin": "ast",
       "id": "src_sandbox_pnpm_non_prebuilt_image_enables_pnpm",
       "community": 110,
@@ -3071,67 +3071,67 @@
       "label": "docker_args_keep_out_mount_when_provided_and_omit_when_empty()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2706",
+      "source_location": "L2716",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_keep_out_mount_when_provided_and_omit_when_empty",
-      "community": 116,
+      "community": 2,
       "norm_label": "docker_args_keep_out_mount_when_provided_and_omit_when_empty()"
     },
     {
       "label": "docker_args_pass_runtime_when_set()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2718",
+      "source_location": "L2728",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_pass_runtime_when_set",
-      "community": 116,
+      "community": 2,
       "norm_label": "docker_args_pass_runtime_when_set()"
     },
     {
       "label": "docker_args_memory_limit_defaults_to_2g_and_is_configurable()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2735",
+      "source_location": "L2745",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_memory_limit_defaults_to_2g_and_is_configurable",
-      "community": 116,
+      "community": 117,
       "norm_label": "docker_args_memory_limit_defaults_to_2g_and_is_configurable()"
     },
     {
       "label": "docker_args_grant_sys_ptrace_capability()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2770",
+      "source_location": "L2780",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_grant_sys_ptrace_capability",
-      "community": 116,
+      "community": 2,
       "norm_label": "docker_args_grant_sys_ptrace_capability()"
     },
     {
       "label": "docker_args_adds_seccomp_profile_by_default()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2785",
+      "source_location": "L2795",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_adds_seccomp_profile_by_default",
-      "community": 116,
+      "community": 2,
       "norm_label": "docker_args_adds_seccomp_profile_by_default()"
     },
     {
       "label": "docker_args_disables_seccomp_when_danger_flag_true()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2803",
+      "source_location": "L2813",
       "_origin": "ast",
       "id": "src_sandbox_docker_args_disables_seccomp_when_danger_flag_true",
-      "community": 116,
+      "community": 117,
       "norm_label": "docker_args_disables_seccomp_when_danger_flag_true()"
     },
     {
       "label": "embedded_seccomp_profile_keeps_networking_available()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2813",
+      "source_location": "L2823",
       "_origin": "ast",
       "id": "src_sandbox_embedded_seccomp_profile_keeps_networking_available",
       "community": 2,
@@ -3141,7 +3141,7 @@
       "label": "embedded_apparmor_profile_mentions_cap_sys_ptrace()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2840",
+      "source_location": "L2850",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_mentions_cap_sys_ptrace",
       "community": 2,
@@ -3151,7 +3151,7 @@
       "label": "embedded_apparmor_profile_allows_network()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2848",
+      "source_location": "L2858",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_allows_network",
       "community": 2,
@@ -3161,7 +3161,7 @@
       "label": "embedded_apparmor_profile_allows_ptrace()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2861",
+      "source_location": "L2871",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_allows_ptrace",
       "community": 2,
@@ -3171,7 +3171,7 @@
       "label": "embedded_apparmor_profile_allows_work_out_tmp_writes()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2869",
+      "source_location": "L2879",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_allows_work_out_tmp_writes",
       "community": 2,
@@ -3181,7 +3181,7 @@
       "label": "embedded_apparmor_profile_valid_profile_name()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2885",
+      "source_location": "L2895",
       "_origin": "ast",
       "id": "src_sandbox_embedded_apparmor_profile_valid_profile_name",
       "community": 2,
@@ -3191,27 +3191,27 @@
       "label": "apparmor_env_var_default_false()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2890",
+      "source_location": "L2900",
       "_origin": "ast",
       "id": "src_sandbox_apparmor_env_var_default_false",
-      "community": 116,
+      "community": 2,
       "norm_label": "apparmor_env_var_default_false()"
     },
     {
       "label": "apparmor_disabled_wont_call_apparmor_parser()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2910",
+      "source_location": "L2920",
       "_origin": "ast",
       "id": "src_sandbox_apparmor_disabled_wont_call_apparmor_parser",
-      "community": 2,
+      "community": 116,
       "norm_label": "apparmor_disabled_wont_call_apparmor_parser()"
     },
     {
       "label": "matrix_script_captures_strace_stderr_not_devnull()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2920",
+      "source_location": "L2930",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_captures_strace_stderr_not_devnull",
       "community": 110,
@@ -3221,7 +3221,7 @@
       "label": "artifact_scan_steps_inventory_all_files()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2946",
+      "source_location": "L2956",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_inventory_all_files",
       "community": 2,
@@ -3231,7 +3231,7 @@
       "label": "artifact_scan_steps_pipe_char_in_content_replaced()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2968",
+      "source_location": "L2978",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_pipe_char_in_content_replaced",
       "community": 2,
@@ -3241,7 +3241,7 @@
       "label": "artifact_scan_steps_uses_null_byte_delimiter()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2978",
+      "source_location": "L2988",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_uses_null_byte_delimiter",
       "community": 2,
@@ -3251,7 +3251,7 @@
       "label": "artifact_scan_steps_output_to_correct_log()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L2999",
+      "source_location": "L3009",
       "_origin": "ast",
       "id": "src_sandbox_artifact_scan_steps_output_to_correct_log",
       "community": 2,
@@ -3261,7 +3261,7 @@
       "label": "matrix_script_includes_artifact_scan_after_each_probe()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3007",
+      "source_location": "L3017",
       "_origin": "ast",
       "id": "src_sandbox_matrix_script_includes_artifact_scan_after_each_probe",
       "community": 110,
@@ -3271,7 +3271,7 @@
       "label": "embedded_seccomp_profile_structurally_blocks_dangerous_syscalls()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3037",
+      "source_location": "L3047",
       "_origin": "ast",
       "id": "src_sandbox_embedded_seccomp_profile_structurally_blocks_dangerous_syscalls",
       "community": 2,
@@ -3281,57 +3281,77 @@
       "label": "docker_enforces_sandbox_constraints()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3082",
+      "source_location": "L3092",
       "_origin": "ast",
       "id": "src_sandbox_docker_enforces_sandbox_constraints",
-      "community": 116,
+      "community": 117,
       "norm_label": "docker_enforces_sandbox_constraints()"
     },
     {
       "label": "nono_runner_fails_closed_when_nono_unavailable()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3159",
+      "source_location": "L3169",
       "_origin": "ast",
       "id": "src_sandbox_nono_runner_fails_closed_when_nono_unavailable",
-      "community": 116,
+      "community": 2,
       "norm_label": "nono_runner_fails_closed_when_nono_unavailable()"
     },
     {
       "label": "resolve_nono_bin_prefers_explicit_env_path()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3173",
+      "source_location": "L3183",
       "_origin": "ast",
       "id": "src_sandbox_resolve_nono_bin_prefers_explicit_env_path",
       "community": 2,
       "norm_label": "resolve_nono_bin_prefers_explicit_env_path()"
     },
     {
+      "label": "resolve_nono_bin_rejects_relative_env_path()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L3193",
+      "_origin": "ast",
+      "id": "src_sandbox_resolve_nono_bin_rejects_relative_env_path",
+      "community": 2,
+      "norm_label": "resolve_nono_bin_rejects_relative_env_path()"
+    },
+    {
+      "label": "resolve_nono_bin_rejects_nonexistent_env_path()",
+      "file_type": "code",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L3199",
+      "_origin": "ast",
+      "id": "src_sandbox_resolve_nono_bin_rejects_nonexistent_env_path",
+      "community": 2,
+      "norm_label": "resolve_nono_bin_rejects_nonexistent_env_path()"
+    },
+    {
       "label": "resolve_nono_bin_checks_cargo_home()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3182",
+      "source_location": "L3205",
       "_origin": "ast",
       "id": "src_sandbox_resolve_nono_bin_checks_cargo_home",
-      "community": 116,
+      "community": 2,
       "norm_label": "resolve_nono_bin_checks_cargo_home()"
     },
     {
       "label": "unsupported_sandbox_mode_lists_nono()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3197",
+      "source_location": "L3220",
       "_origin": "ast",
       "id": "src_sandbox_unsupported_sandbox_mode_lists_nono",
-      "community": 2,
+      "community": 119,
       "norm_label": "unsupported_sandbox_mode_lists_nono()"
     },
     {
       "label": "parse_nono_audit_log_network_events()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3208",
+      "source_location": "L3231",
       "_origin": "ast",
       "id": "src_sandbox_parse_nono_audit_log_network_events",
       "community": 2,
@@ -3341,7 +3361,7 @@
       "label": "parse_nono_audit_log_captured_https_connect_fixture()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3222",
+      "source_location": "L3245",
       "_origin": "ast",
       "id": "src_sandbox_parse_nono_audit_log_captured_https_connect_fixture",
       "community": 2,
@@ -3351,7 +3371,7 @@
       "label": "parse_nono_audit_log_command_and_exec_events()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3235",
+      "source_location": "L3258",
       "_origin": "ast",
       "id": "src_sandbox_parse_nono_audit_log_command_and_exec_events",
       "community": 2,
@@ -3361,7 +3381,7 @@
       "label": "parse_nono_audit_log_sensitive_file_access()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3251",
+      "source_location": "L3274",
       "_origin": "ast",
       "id": "src_sandbox_parse_nono_audit_log_sensitive_file_access",
       "community": 2,
@@ -3371,7 +3391,7 @@
       "label": "scan_target_artifacts_finds_files_and_types()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3264",
+      "source_location": "L3287",
       "_origin": "ast",
       "id": "src_sandbox_scan_target_artifacts_finds_files_and_types",
       "community": 141,
@@ -3381,7 +3401,7 @@
       "label": "build_synthetic_dns_response_roundtrip()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3300",
+      "source_location": "L3323",
       "_origin": "ast",
       "id": "src_sandbox_build_synthetic_dns_response_roundtrip",
       "community": 2,
@@ -3391,7 +3411,7 @@
       "label": "test_extract_host_from_url()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3309",
+      "source_location": "L3332",
       "_origin": "ast",
       "id": "src_sandbox_test_extract_host_from_url",
       "community": 2,
@@ -3401,27 +3421,27 @@
       "label": "test_default_allowed_domains_for_manager()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3326",
+      "source_location": "L3349",
       "_origin": "ast",
       "id": "src_sandbox_test_default_allowed_domains_for_manager",
-      "community": 118,
+      "community": 141,
       "norm_label": "test_default_allowed_domains_for_manager()"
     },
     {
       "label": "test_discover_registry_domains_from_env()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3340",
+      "source_location": "L3363",
       "_origin": "ast",
       "id": "src_sandbox_test_discover_registry_domains_from_env",
-      "community": 141,
+      "community": 2,
       "norm_label": "test_discover_registry_domains_from_env()"
     },
     {
       "label": "test_extract_domains_from_nono_audit_log()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3357",
+      "source_location": "L3380",
       "_origin": "ast",
       "id": "src_sandbox_test_extract_domains_from_nono_audit_log",
       "community": 118,
@@ -3431,17 +3451,17 @@
       "label": "test_nono_resource_limits_on_linux()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3370",
+      "source_location": "L3393",
       "_origin": "ast",
       "id": "src_sandbox_test_nono_resource_limits_on_linux",
-      "community": 116,
+      "community": 122,
       "norm_label": "test_nono_resource_limits_on_linux()"
     },
     {
       "label": "test_nono_resource_limits_disabled_on_non_linux()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3389",
+      "source_location": "L3412",
       "_origin": "ast",
       "id": "src_sandbox_test_nono_resource_limits_disabled_on_non_linux",
       "community": 2,
@@ -3451,27 +3471,27 @@
       "label": "test_nono_resource_limits_respect_env_overrides()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3396",
+      "source_location": "L3419",
       "_origin": "ast",
       "id": "src_sandbox_test_nono_resource_limits_respect_env_overrides",
-      "community": 116,
+      "community": 2,
       "norm_label": "test_nono_resource_limits_respect_env_overrides()"
     },
     {
       "label": "test_sandbox_max_processes_env_fallback()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3414",
+      "source_location": "L3437",
       "_origin": "ast",
       "id": "src_sandbox_test_sandbox_max_processes_env_fallback",
-      "community": 116,
+      "community": 2,
       "norm_label": "test_sandbox_max_processes_env_fallback()"
     },
     {
       "label": "test_nono_profile_content_on_macos()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3423",
+      "source_location": "L3446",
       "_origin": "ast",
       "id": "src_sandbox_test_nono_profile_content_on_macos",
       "community": 141,
@@ -3481,7 +3501,7 @@
       "label": "test_nono_profile_content_on_linux()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3439",
+      "source_location": "L3462",
       "_origin": "ast",
       "id": "src_sandbox_test_nono_profile_content_on_linux",
       "community": 141,
@@ -3491,7 +3511,7 @@
       "label": "test_nono_profile_content_disabled_on_other_os()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3449",
+      "source_location": "L3472",
       "_origin": "ast",
       "id": "src_sandbox_test_nono_profile_content_disabled_on_other_os",
       "community": 2,
@@ -3501,7 +3521,7 @@
       "label": "test_canary_trap_detects_read_and_clean_teardown()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3456",
+      "source_location": "L3479",
       "_origin": "ast",
       "id": "src_sandbox_test_canary_trap_detects_read_and_clean_teardown",
       "community": 122,
@@ -3511,7 +3531,7 @@
       "label": "test_canary_trap_untouched_clean_teardown()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3481",
+      "source_location": "L3504",
       "_origin": "ast",
       "id": "src_sandbox_test_canary_trap_untouched_clean_teardown",
       "community": 122,
@@ -3521,7 +3541,7 @@
       "label": "test_canary_trap_skips_npmrc_for_npm()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3495",
+      "source_location": "L3518",
       "_origin": "ast",
       "id": "src_sandbox_test_canary_trap_skips_npmrc_for_npm",
       "community": 122,
@@ -3531,7 +3551,7 @@
       "label": "test_path_shims_logging_and_event_parsing()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3511",
+      "source_location": "L3534",
       "_origin": "ast",
       "id": "src_sandbox_test_path_shims_logging_and_event_parsing",
       "community": 122,
@@ -3541,7 +3561,7 @@
       "label": "test_path_shims_shutdown_with_held_writer()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3539",
+      "source_location": "L3562",
       "_origin": "ast",
       "id": "src_sandbox_test_path_shims_shutdown_with_held_writer",
       "community": 122,
@@ -3551,7 +3571,7 @@
       "label": "test_parse_nono_diagnostics_denials()",
       "file_type": "code",
       "source_file": "src/sandbox.rs",
-      "source_location": "L3583",
+      "source_location": "L3606",
       "_origin": "ast",
       "id": "src_sandbox_test_parse_nono_diagnostics_denials",
       "community": 118,
@@ -3614,7 +3634,7 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "src_scanning_rs_option",
-      "community": 28,
+      "community": 7,
       "norm_label": "option"
     },
     {
@@ -3984,7 +4004,7 @@
       "source_location": "L602",
       "_origin": "ast",
       "id": "src_scanning_exemption_behavior",
-      "community": 28,
+      "community": 127,
       "norm_label": "exemption_behavior()"
     },
     {
@@ -4214,7 +4234,7 @@
       "source_location": "L1347",
       "_origin": "ast",
       "id": "src_scanning_extract_first_arg_fd",
-      "community": 28,
+      "community": 7,
       "norm_label": "extract_first_arg_fd()"
     },
     {
@@ -4224,7 +4244,7 @@
       "source_location": "L1352",
       "_origin": "ast",
       "id": "src_scanning_parse_syscall_return",
-      "community": 28,
+      "community": 7,
       "norm_label": "parse_syscall_return()"
     },
     {
@@ -4374,7 +4394,7 @@
       "source_location": "L1899",
       "_origin": "ast",
       "id": "src_scanning_burst_policy_warning",
-      "community": 28,
+      "community": 7,
       "norm_label": "burst_policy_warning()"
     },
     {
@@ -4384,7 +4404,7 @@
       "source_location": "L1922",
       "_origin": "ast",
       "id": "src_scanning_minimum_release_age_policy_warning",
-      "community": 28,
+      "community": 7,
       "norm_label": "minimum_release_age_policy_warning()"
     },
     {
@@ -4394,7 +4414,7 @@
       "source_location": "L1946",
       "_origin": "ast",
       "id": "src_scanning_warn_and_block",
-      "community": 28,
+      "community": 7,
       "norm_label": "warn_and_block()"
     },
     {
@@ -5044,7 +5064,7 @@
       "source_location": "L3634",
       "_origin": "ast",
       "id": "src_scanning_burst_policy_emits_warning_when_triggered",
-      "community": 28,
+      "community": 7,
       "norm_label": "burst_policy_emits_warning_when_triggered()"
     },
     {
@@ -5064,7 +5084,7 @@
       "source_location": "L3650",
       "_origin": "ast",
       "id": "src_scanning_minimum_release_age_policy_warns_when_release_is_too_new",
-      "community": 28,
+      "community": 7,
       "norm_label": "minimum_release_age_policy_warns_when_release_is_too_new()"
     },
     {
@@ -6584,7 +6604,7 @@
       "source_location": "L7183",
       "_origin": "ast",
       "id": "src_scanning_exemption_behavior_no_exemption_returns_false_empty",
-      "community": 28,
+      "community": 127,
       "norm_label": "exemption_behavior_no_exemption_returns_false_empty()"
     },
     {
@@ -6594,7 +6614,7 @@
       "source_location": "L7190",
       "_origin": "ast",
       "id": "src_scanning_exemption_behavior_match_version_exempt",
-      "community": 28,
+      "community": 127,
       "norm_label": "exemption_behavior_match_version_exempt()"
     },
     {
@@ -6604,7 +6624,7 @@
       "source_location": "L7200",
       "_origin": "ast",
       "id": "src_scanning_exemption_behavior_mismatch_version_not_exempt",
-      "community": 28,
+      "community": 127,
       "norm_label": "exemption_behavior_mismatch_version_not_exempt()"
     },
     {
@@ -6614,7 +6634,7 @@
       "source_location": "L7208",
       "_origin": "ast",
       "id": "src_scanning_exemption_behavior_sufficient_baselines_prints_cleanup",
-      "community": 28,
+      "community": 127,
       "norm_label": "exemption_behavior_sufficient_baselines_prints_cleanup()"
     },
     {
@@ -6624,7 +6644,7 @@
       "source_location": "L7216",
       "_origin": "ast",
       "id": "src_scanning_exemption_behavior_zero_baseline_count_always_fires",
-      "community": 28,
+      "community": 127,
       "norm_label": "exemption_behavior_zero_baseline_count_always_fires()"
     },
     {
@@ -12974,7 +12994,7 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "references_quick_reference_pattern_operators",
-      "community": 132,
+      "community": 31,
       "norm_label": "pattern operators"
     },
     {
@@ -12984,7 +13004,7 @@
       "source_location": "L26",
       "_origin": "ast",
       "id": "references_quick_reference_basic_matching",
-      "community": 132,
+      "community": 31,
       "norm_label": "basic matching"
     },
     {
@@ -12994,7 +13014,7 @@
       "source_location": "L48",
       "_origin": "ast",
       "id": "references_quick_reference_metavariables",
-      "community": 132,
+      "community": 31,
       "norm_label": "metavariables"
     },
     {
@@ -13004,7 +13024,7 @@
       "source_location": "L65",
       "_origin": "ast",
       "id": "references_quick_reference_deep_matching",
-      "community": 132,
+      "community": 31,
       "norm_label": "deep matching"
     },
     {
@@ -13014,7 +13034,7 @@
       "source_location": "L78",
       "_origin": "ast",
       "id": "references_quick_reference_scope_operators",
-      "community": 132,
+      "community": 31,
       "norm_label": "scope operators"
     },
     {
@@ -13024,7 +13044,7 @@
       "source_location": "L96",
       "_origin": "ast",
       "id": "references_quick_reference_negation",
-      "community": 132,
+      "community": 31,
       "norm_label": "negation"
     },
     {
@@ -13034,7 +13054,7 @@
       "source_location": "L109",
       "_origin": "ast",
       "id": "references_quick_reference_metavariable_filters",
-      "community": 132,
+      "community": 31,
       "norm_label": "metavariable filters"
     },
     {
@@ -13044,7 +13064,7 @@
       "source_location": "L130",
       "_origin": "ast",
       "id": "references_quick_reference_taint_mode",
-      "community": 138,
+      "community": 31,
       "norm_label": "taint mode"
     },
     {
@@ -13054,7 +13074,7 @@
       "source_location": "L132",
       "_origin": "ast",
       "id": "references_quick_reference_basic_structure",
-      "community": 138,
+      "community": 31,
       "norm_label": "basic structure"
     },
     {
@@ -13064,7 +13084,7 @@
       "source_location": "L149",
       "_origin": "ast",
       "id": "references_quick_reference_taint_components",
-      "community": 138,
+      "community": 31,
       "norm_label": "taint components"
     },
     {
@@ -13074,7 +13094,7 @@
       "source_location": "L158",
       "_origin": "ast",
       "id": "references_quick_reference_source_sink_options",
-      "community": 138,
+      "community": 31,
       "norm_label": "source/sink options"
     },
     {
@@ -13084,7 +13104,7 @@
       "source_location": "L177",
       "_origin": "ast",
       "id": "references_quick_reference_propagators",
-      "community": 138,
+      "community": 31,
       "norm_label": "propagators"
     },
     {
@@ -13124,7 +13144,7 @@
       "source_location": "L213",
       "_origin": "ast",
       "id": "references_quick_reference_common_patterns_by_vulnerability",
-      "community": 127,
+      "community": 31,
       "norm_label": "common patterns by vulnerability"
     },
     {
@@ -13134,7 +13154,7 @@
       "source_location": "L215",
       "_origin": "ast",
       "id": "references_quick_reference_sql_injection",
-      "community": 127,
+      "community": 31,
       "norm_label": "sql injection"
     },
     {
@@ -13144,7 +13164,7 @@
       "source_location": "L230",
       "_origin": "ast",
       "id": "references_quick_reference_command_injection",
-      "community": 127,
+      "community": 31,
       "norm_label": "command injection"
     },
     {
@@ -13154,7 +13174,7 @@
       "source_location": "L244",
       "_origin": "ast",
       "id": "references_quick_reference_xss",
-      "community": 127,
+      "community": 31,
       "norm_label": "xss"
     },
     {
@@ -13164,7 +13184,7 @@
       "source_location": "L258",
       "_origin": "ast",
       "id": "references_quick_reference_path_traversal",
-      "community": 127,
+      "community": 31,
       "norm_label": "path traversal"
     },
     {
@@ -13174,7 +13194,7 @@
       "source_location": "L272",
       "_origin": "ast",
       "id": "references_quick_reference_hardcoded_secrets_pattern_matching",
-      "community": 127,
+      "community": 31,
       "norm_label": "hardcoded secrets (pattern matching)"
     },
     {
@@ -13184,7 +13204,7 @@
       "source_location": "L286",
       "_origin": "ast",
       "id": "references_quick_reference_dangerous_functions_pattern_matching",
-      "community": 127,
+      "community": 31,
       "norm_label": "dangerous functions (pattern matching)"
     },
     {
@@ -13264,7 +13284,7 @@
       "source_location": "L38",
       "_origin": "ast",
       "id": "references_workflow_step_2_create_test_cases_first",
-      "community": 18,
+      "community": 133,
       "norm_label": "step 2: create test cases first"
     },
     {
@@ -13274,7 +13294,7 @@
       "source_location": "L42",
       "_origin": "ast",
       "id": "references_workflow_directory_structure",
-      "community": 18,
+      "community": 133,
       "norm_label": "directory structure"
     },
     {
@@ -13284,7 +13304,7 @@
       "source_location": "L50",
       "_origin": "ast",
       "id": "references_workflow_test_annotations",
-      "community": 18,
+      "community": 133,
       "norm_label": "test annotations"
     },
     {
@@ -13294,7 +13314,7 @@
       "source_location": "L68",
       "_origin": "ast",
       "id": "references_workflow_test_case_design",
-      "community": 18,
+      "community": 133,
       "norm_label": "test case design"
     },
     {
@@ -13314,7 +13334,7 @@
       "source_location": "L90",
       "_origin": "ast",
       "id": "references_workflow_step_4_choose_pattern_operators",
-      "community": 18,
+      "community": 129,
       "norm_label": "step 4: choose pattern operators"
     },
     {
@@ -13324,7 +13344,7 @@
       "source_location": "L92",
       "_origin": "ast",
       "id": "references_workflow_basic_pattern_matching",
-      "community": 18,
+      "community": 129,
       "norm_label": "basic pattern matching"
     },
     {
@@ -13334,7 +13354,7 @@
       "source_location": "L111",
       "_origin": "ast",
       "id": "references_workflow_scope_operators",
-      "community": 18,
+      "community": 129,
       "norm_label": "scope operators"
     },
     {
@@ -13344,7 +13364,7 @@
       "source_location": "L124",
       "_origin": "ast",
       "id": "references_workflow_metavariable_filters",
-      "community": 18,
+      "community": 129,
       "norm_label": "metavariable filters"
     },
     {
@@ -13354,7 +13374,7 @@
       "source_location": "L137",
       "_origin": "ast",
       "id": "references_workflow_focus_metavariable",
-      "community": 18,
+      "community": 129,
       "norm_label": "focus metavariable"
     },
     {
@@ -13364,7 +13384,7 @@
       "source_location": "L147",
       "_origin": "ast",
       "id": "references_workflow_step_5_write_taint_rules",
-      "community": 18,
+      "community": 130,
       "norm_label": "step 5: write taint rules"
     },
     {
@@ -13374,7 +13394,7 @@
       "source_location": "L149",
       "_origin": "ast",
       "id": "references_workflow_basic_taint_structure",
-      "community": 18,
+      "community": 130,
       "norm_label": "basic taint structure"
     },
     {
@@ -13384,7 +13404,7 @@
       "source_location": "L169",
       "_origin": "ast",
       "id": "references_workflow_taint_source_options",
-      "community": 18,
+      "community": 130,
       "norm_label": "taint source options"
     },
     {
@@ -13394,7 +13414,7 @@
       "source_location": "L178",
       "_origin": "ast",
       "id": "references_workflow_taint_sanitizer_options",
-      "community": 18,
+      "community": 130,
       "norm_label": "taint sanitizer options"
     },
     {
@@ -13404,7 +13424,7 @@
       "source_location": "L188",
       "_origin": "ast",
       "id": "references_workflow_taint_sink_with_focus",
-      "community": 18,
+      "community": 130,
       "norm_label": "taint sink with focus"
     },
     {
@@ -13414,7 +13434,7 @@
       "source_location": "L198",
       "_origin": "ast",
       "id": "references_workflow_step_6_validate_and_test",
-      "community": 18,
+      "community": 125,
       "norm_label": "step 6: validate and test"
     },
     {
@@ -13424,7 +13444,7 @@
       "source_location": "L200",
       "_origin": "ast",
       "id": "references_workflow_validate_yaml_syntax",
-      "community": 18,
+      "community": 125,
       "norm_label": "validate yaml syntax"
     },
     {
@@ -13434,7 +13454,7 @@
       "source_location": "L206",
       "_origin": "ast",
       "id": "references_workflow_run_tests",
-      "community": 18,
+      "community": 125,
       "norm_label": "run tests"
     },
     {
@@ -13444,7 +13464,7 @@
       "source_location": "L213",
       "_origin": "ast",
       "id": "references_workflow_expected_output",
-      "community": 18,
+      "community": 125,
       "norm_label": "expected output"
     },
     {
@@ -13454,7 +13474,7 @@
       "source_location": "L219",
       "_origin": "ast",
       "id": "references_workflow_debug_failures",
-      "community": 18,
+      "community": 125,
       "norm_label": "debug failures"
     },
     {
@@ -13464,7 +13484,7 @@
       "source_location": "L229",
       "_origin": "ast",
       "id": "references_workflow_debug_taint_rules",
-      "community": 18,
+      "community": 125,
       "norm_label": "debug taint rules"
     },
     {
@@ -13494,7 +13514,7 @@
       "source_location": "L258",
       "_origin": "ast",
       "id": "references_workflow_step_8_optimize_the_rule",
-      "community": 18,
+      "community": 132,
       "norm_label": "step 8: optimize the rule"
     },
     {
@@ -13504,7 +13524,7 @@
       "source_location": "L262",
       "_origin": "ast",
       "id": "references_workflow_semgrep_pattern_equivalences",
-      "community": 18,
+      "community": 132,
       "norm_label": "semgrep pattern equivalences"
     },
     {
@@ -13514,7 +13534,7 @@
       "source_location": "L270",
       "_origin": "ast",
       "id": "references_workflow_common_redundancies_to_remove",
-      "community": 18,
+      "community": 132,
       "norm_label": "common redundancies to remove"
     },
     {
@@ -13524,7 +13544,7 @@
       "source_location": "L319",
       "_origin": "ast",
       "id": "references_workflow_optimization_checklist",
-      "community": 18,
+      "community": 132,
       "norm_label": "optimization checklist"
     },
     {
@@ -13544,7 +13564,7 @@
       "source_location": "L390",
       "_origin": "ast",
       "id": "references_workflow_troubleshooting",
-      "community": 18,
+      "community": 134,
       "norm_label": "troubleshooting"
     },
     {
@@ -13554,7 +13574,7 @@
       "source_location": "L392",
       "_origin": "ast",
       "id": "references_workflow_pattern_not_matching",
-      "community": 18,
+      "community": 134,
       "norm_label": "pattern not matching"
     },
     {
@@ -13564,7 +13584,7 @@
       "source_location": "L399",
       "_origin": "ast",
       "id": "references_workflow_taint_not_propagating",
-      "community": 18,
+      "community": 134,
       "norm_label": "taint not propagating"
     },
     {
@@ -13574,7 +13594,7 @@
       "source_location": "L406",
       "_origin": "ast",
       "id": "references_workflow_too_many_false_positives",
-      "community": 18,
+      "community": 134,
       "norm_label": "too many false positives"
     },
     {
@@ -13804,7 +13824,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "readme",
-      "community": 125,
+      "community": 13,
       "norm_label": "readme.md"
     },
     {
@@ -14274,7 +14294,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_architecture",
-      "community": 125,
+      "community": 13,
       "norm_label": "architecture.md"
     },
     {
@@ -14304,7 +14324,7 @@
       "source_location": "L6",
       "_origin": "ast",
       "id": "docs_architecture_runtime_entry_flow",
-      "community": 143,
+      "community": 149,
       "norm_label": "runtime entry flow"
     },
     {
@@ -14434,7 +14454,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_dev_guide",
-      "community": 125,
+      "community": 13,
       "norm_label": "dev_guide.md"
     },
     {
@@ -14444,7 +14464,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_dev_guide_developer_guide",
-      "community": 119,
+      "community": 13,
       "norm_label": "developer guide"
     },
     {
@@ -14454,7 +14474,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "docs_dev_guide_local_setup",
-      "community": 119,
+      "community": 13,
       "norm_label": "local setup"
     },
     {
@@ -14464,7 +14484,7 @@
       "source_location": "L10",
       "_origin": "ast",
       "id": "docs_dev_guide_agent_portability_symlinks",
-      "community": 119,
+      "community": 13,
       "norm_label": "agent portability symlinks"
     },
     {
@@ -14474,7 +14494,7 @@
       "source_location": "L22",
       "_origin": "ast",
       "id": "docs_dev_guide_sandbox_mode",
-      "community": 119,
+      "community": 13,
       "norm_label": "sandbox mode"
     },
     {
@@ -14484,7 +14504,7 @@
       "source_location": "L29",
       "_origin": "ast",
       "id": "docs_dev_guide_sandbox_security_hardening",
-      "community": 119,
+      "community": 13,
       "norm_label": "sandbox security & hardening"
     },
     {
@@ -14494,7 +14514,7 @@
       "source_location": "L39",
       "_origin": "ast",
       "id": "docs_dev_guide_ci_cd_security_architecture",
-      "community": 119,
+      "community": 13,
       "norm_label": "ci/cd security architecture"
     },
     {
@@ -14504,7 +14524,7 @@
       "source_location": "L46",
       "_origin": "ast",
       "id": "docs_dev_guide_build_and_test",
-      "community": 119,
+      "community": 13,
       "norm_label": "build and test"
     },
     {
@@ -14514,7 +14534,7 @@
       "source_location": "L58",
       "_origin": "ast",
       "id": "docs_dev_guide_policy_config_surface",
-      "community": 119,
+      "community": 13,
       "norm_label": "policy config surface"
     },
     {
@@ -14524,7 +14544,7 @@
       "source_location": "L75",
       "_origin": "ast",
       "id": "docs_dev_guide_adding_a_new_supported_command",
-      "community": 119,
+      "community": 13,
       "norm_label": "adding a new supported command"
     },
     {
@@ -14534,7 +14554,7 @@
       "source_location": "L84",
       "_origin": "ast",
       "id": "docs_dev_guide_version_ordering_notes",
-      "community": 119,
+      "community": 13,
       "norm_label": "version ordering notes"
     },
     {
@@ -14544,7 +14564,7 @@
       "source_location": "L88",
       "_origin": "ast",
       "id": "docs_dev_guide_test_locations",
-      "community": 140,
+      "community": 13,
       "norm_label": "test locations"
     },
     {
@@ -14554,7 +14574,7 @@
       "source_location": "L93",
       "_origin": "ast",
       "id": "docs_dev_guide_required_change_hygiene",
-      "community": 119,
+      "community": 13,
       "norm_label": "required change hygiene"
     },
     {
@@ -14564,7 +14584,7 @@
       "source_location": "L102",
       "_origin": "ast",
       "id": "docs_dev_guide_practical_review_checklist",
-      "community": 119,
+      "community": 13,
       "norm_label": "practical review checklist"
     },
     {
@@ -14574,7 +14594,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_docker_security",
-      "community": 125,
+      "community": 13,
       "norm_label": "docker_security.md"
     },
     {
@@ -14604,7 +14624,7 @@
       "source_location": "L11",
       "_origin": "ast",
       "id": "docs_docker_security_sandbox_infrastructure",
-      "community": 147,
+      "community": 11,
       "norm_label": "sandbox infrastructure"
     },
     {
@@ -14614,7 +14634,7 @@
       "source_location": "L13",
       "_origin": "ast",
       "id": "docs_docker_security_capabilities_and_privileges",
-      "community": 147,
+      "community": 11,
       "norm_label": "capabilities and privileges"
     },
     {
@@ -14624,7 +14644,7 @@
       "source_location": "L20",
       "_origin": "ast",
       "id": "docs_docker_security_unprivileged_payload_integrity",
-      "community": 147,
+      "community": 11,
       "norm_label": "unprivileged payload integrity"
     },
     {
@@ -14634,7 +14654,7 @@
       "source_location": "L24",
       "_origin": "ast",
       "id": "docs_docker_security_probe_batching",
-      "community": 147,
+      "community": 11,
       "norm_label": "probe batching"
     },
     {
@@ -14644,7 +14664,7 @@
       "source_location": "L28",
       "_origin": "ast",
       "id": "docs_docker_security_strace_configuration",
-      "community": 147,
+      "community": 11,
       "norm_label": "strace configuration"
     },
     {
@@ -14654,7 +14674,7 @@
       "source_location": "L35",
       "_origin": "ast",
       "id": "docs_docker_security_seccomp",
-      "community": 153,
+      "community": 11,
       "norm_label": "seccomp"
     },
     {
@@ -14664,7 +14684,7 @@
       "source_location": "L39",
       "_origin": "ast",
       "id": "docs_docker_security_configuration",
-      "community": 153,
+      "community": 11,
       "norm_label": "configuration"
     },
     {
@@ -14674,7 +14694,7 @@
       "source_location": "L48",
       "_origin": "ast",
       "id": "docs_docker_security_profile_behavior",
-      "community": 153,
+      "community": 11,
       "norm_label": "profile behavior"
     },
     {
@@ -14684,7 +14704,7 @@
       "source_location": "L54",
       "_origin": "ast",
       "id": "docs_docker_security_status_output",
-      "community": 153,
+      "community": 11,
       "norm_label": "status output"
     },
     {
@@ -14694,7 +14714,7 @@
       "source_location": "L59",
       "_origin": "ast",
       "id": "docs_docker_security_platform_note",
-      "community": 153,
+      "community": 11,
       "norm_label": "platform note"
     },
     {
@@ -14704,7 +14724,7 @@
       "source_location": "L63",
       "_origin": "ast",
       "id": "docs_docker_security_apparmor",
-      "community": 142,
+      "community": 11,
       "norm_label": "apparmor"
     },
     {
@@ -14714,7 +14734,7 @@
       "source_location": "L67",
       "_origin": "ast",
       "id": "docs_docker_security_configuration_67",
-      "community": 142,
+      "community": 11,
       "norm_label": "configuration"
     },
     {
@@ -14724,7 +14744,7 @@
       "source_location": "L79",
       "_origin": "ast",
       "id": "docs_docker_security_requirements",
-      "community": 142,
+      "community": 11,
       "norm_label": "requirements"
     },
     {
@@ -14734,7 +14754,7 @@
       "source_location": "L89",
       "_origin": "ast",
       "id": "docs_docker_security_allowed_operations",
-      "community": 142,
+      "community": 11,
       "norm_label": "allowed operations"
     },
     {
@@ -14744,7 +14764,7 @@
       "source_location": "L95",
       "_origin": "ast",
       "id": "docs_docker_security_setup",
-      "community": 142,
+      "community": 11,
       "norm_label": "setup"
     },
     {
@@ -14754,7 +14774,7 @@
       "source_location": "L119",
       "_origin": "ast",
       "id": "docs_docker_security_status_output_119",
-      "community": 142,
+      "community": 11,
       "norm_label": "status output"
     },
     {
@@ -14764,7 +14784,7 @@
       "source_location": "L125",
       "_origin": "ast",
       "id": "docs_docker_security_platform_note_125",
-      "community": 142,
+      "community": 11,
       "norm_label": "platform note"
     },
     {
@@ -14774,7 +14794,7 @@
       "source_location": "L129",
       "_origin": "ast",
       "id": "docs_docker_security_recommendation",
-      "community": 142,
+      "community": 11,
       "norm_label": "recommendation"
     },
     {
@@ -14814,7 +14834,7 @@
       "source_location": "L179",
       "_origin": "ast",
       "id": "docs_docker_security_validation_checklist",
-      "community": 144,
+      "community": 11,
       "norm_label": "validation checklist"
     },
     {
@@ -14824,7 +14844,7 @@
       "source_location": "L183",
       "_origin": "ast",
       "id": "docs_docker_security_step_1_baseline_sanity_no_custom_seccomp_apparmor",
-      "community": 144,
+      "community": 11,
       "norm_label": "step 1: baseline sanity (no custom seccomp/apparmor)"
     },
     {
@@ -14834,7 +14854,7 @@
       "source_location": "L192",
       "_origin": "ast",
       "id": "docs_docker_security_step_2_validate_seccomp_profile_syntax",
-      "community": 144,
+      "community": 11,
       "norm_label": "step 2: validate seccomp profile syntax"
     },
     {
@@ -14844,7 +14864,7 @@
       "source_location": "L216",
       "_origin": "ast",
       "id": "docs_docker_security_step_3_smoke_test_ptrace_with_network_access",
-      "community": 144,
+      "community": 11,
       "norm_label": "step 3: smoke test ptrace with network access"
     },
     {
@@ -14854,7 +14874,7 @@
       "source_location": "L227",
       "_origin": "ast",
       "id": "docs_docker_security_step_4_run_gyrseek_e2e_with_seccomp",
-      "community": 144,
+      "community": 11,
       "norm_label": "step 4: run gyrseek e2e with seccomp"
     },
     {
@@ -14864,7 +14884,7 @@
       "source_location": "L238",
       "_origin": "ast",
       "id": "docs_docker_security_step_5_apparmor_validation_linux_hosts",
-      "community": 144,
+      "community": 11,
       "norm_label": "step 5: apparmor validation (linux hosts)"
     },
     {
@@ -14874,7 +14894,7 @@
       "source_location": "L261",
       "_origin": "ast",
       "id": "docs_docker_security_step_5a_troubleshooting",
-      "community": 144,
+      "community": 11,
       "norm_label": "step 5a: troubleshooting"
     },
     {
@@ -14924,7 +14944,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_fixed_findings",
-      "community": 145,
+      "community": 16,
       "norm_label": "fixed_findings.md"
     },
     {
@@ -14934,7 +14954,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_fixed_findings_fixed_findings",
-      "community": 145,
+      "community": 16,
       "norm_label": "fixed findings"
     },
     {
@@ -14944,7 +14964,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "docs_fixed_findings_summary",
-      "community": 145,
+      "community": 16,
       "norm_label": "summary"
     },
     {
@@ -14954,7 +14974,7 @@
       "source_location": "L205",
       "_origin": "ast",
       "id": "docs_fixed_findings_cross_finding_chains_architectural_context",
-      "community": 145,
+      "community": 16,
       "norm_label": "cross-finding chains (architectural context)"
     },
     {
@@ -14964,7 +14984,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_fixed_findings_detailed",
-      "community": 145,
+      "community": 16,
       "norm_label": "fixed_findings_detailed.md"
     },
     {
@@ -14974,7 +14994,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_fixed_findings_detailed_fixed_findings_detailed",
-      "community": 145,
+      "community": 16,
       "norm_label": "fixed findings (detailed)"
     },
     {
@@ -17914,7 +17934,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_roadmap",
-      "community": 125,
+      "community": 13,
       "norm_label": "roadmap.md"
     },
     {
@@ -17924,7 +17944,7 @@
       "source_location": "L1",
       "_origin": "ast",
       "id": "docs_roadmap_roadmap",
-      "community": 125,
+      "community": 13,
       "norm_label": "roadmap"
     },
     {
@@ -17934,7 +17954,7 @@
       "source_location": "L3",
       "_origin": "ast",
       "id": "docs_roadmap_completed",
-      "community": 125,
+      "community": 13,
       "norm_label": "completed"
     },
     {
@@ -17944,7 +17964,7 @@
       "source_location": "L31",
       "_origin": "ast",
       "id": "docs_roadmap_near_term",
-      "community": 125,
+      "community": 13,
       "norm_label": "near term"
     },
     {
@@ -17954,7 +17974,7 @@
       "source_location": "L38",
       "_origin": "ast",
       "id": "docs_roadmap_mid_term",
-      "community": 125,
+      "community": 13,
       "norm_label": "mid term"
     },
     {
@@ -17964,7 +17984,7 @@
       "source_location": "L40",
       "_origin": "ast",
       "id": "docs_roadmap_detection_analysis",
-      "community": 125,
+      "community": 13,
       "norm_label": "detection & analysis"
     },
     {
@@ -17974,7 +17994,7 @@
       "source_location": "L48",
       "_origin": "ast",
       "id": "docs_roadmap_hardening_infrastructure",
-      "community": 125,
+      "community": 13,
       "norm_label": "hardening & infrastructure"
     },
     {
@@ -17984,7 +18004,7 @@
       "source_location": "L56",
       "_origin": "ast",
       "id": "docs_roadmap_reliability_ux",
-      "community": 125,
+      "community": 13,
       "norm_label": "reliability & ux"
     },
     {
@@ -17994,7 +18014,7 @@
       "source_location": "L62",
       "_origin": "ast",
       "id": "docs_roadmap_long_term",
-      "community": 125,
+      "community": 13,
       "norm_label": "long term"
     },
     {
@@ -18004,7 +18024,7 @@
       "source_location": "L64",
       "_origin": "ast",
       "id": "docs_roadmap_hardening_infrastructure_64",
-      "community": 125,
+      "community": 13,
       "norm_label": "hardening & infrastructure"
     },
     {
@@ -19736,7 +19756,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 140,
+      "community": 13,
       "norm_label": "forward_args",
       "id": "src_lib_forward_args"
     },
@@ -19749,7 +19769,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 140,
+      "community": 13,
       "norm_label": "forward_pinned_command",
       "id": "src_lib_forward_pinned_command"
     },
@@ -19762,7 +19782,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 140,
+      "community": 13,
       "norm_label": "forward_original_command",
       "id": "src_lib_forward_original_command"
     },
@@ -20035,7 +20055,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 119,
+      "community": 13,
       "norm_label": "just task runner",
       "id": "docs_dev_guide_just_task_runner"
     },
@@ -20074,7 +20094,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 2,
+      "community": 119,
       "norm_label": "microvm sandbox backend (planned hardening)",
       "id": "docs_roadmap_microvm_backend"
     },
@@ -20087,7 +20107,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 143,
+      "community": 149,
       "norm_label": "structured logging mode (planned)",
       "id": "docs_roadmap_structured_logging"
     },
@@ -20191,7 +20211,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 140,
+      "community": 13,
       "norm_label": "finding 8: child exit status discarded",
       "id": "docs_findings_finding_8_exit_status_discarded"
     },
@@ -20334,7 +20354,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 140,
+      "community": 13,
       "norm_label": "test: missing host binary fails closed",
       "id": "forward_fail_closed_tests_forwarding_missing_host_binary_fails_closed"
     },
@@ -20347,7 +20367,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 140,
+      "community": 13,
       "norm_label": "test: forwarding propagates host non-zero exit",
       "id": "forward_fail_closed_tests_forwarding_propagates_host_nonzero_exit_status"
     },
@@ -20360,7 +20380,7 @@
       "captured_at": null,
       "author": null,
       "contributor": null,
-      "community": 140,
+      "community": 13,
       "norm_label": "test: forwarding preserves host success exit",
       "id": "forward_fail_closed_tests_forwarding_preserves_host_success_exit_status"
     },
@@ -27327,6 +27347,26 @@
       "target": "src_sandbox_resolve_nono_bin_prefers_explicit_env_path"
     },
     {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L3199",
+      "weight": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_resolve_nono_bin_rejects_nonexistent_env_path",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L3193",
+      "weight": 1.0,
+      "source": "src_sandbox",
+      "target": "src_sandbox_resolve_nono_bin_rejects_relative_env_path",
+      "confidence_score": 1.0
+    },
+    {
       "relation": "imports_from",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
@@ -29251,67 +29291,12 @@
       "relation": "references",
       "confidence": "EXTRACTED",
       "source_file": "src/sandbox.rs",
-      "source_location": "L656",
-      "weight": 1.0,
-      "context": "generic_arg",
-      "confidence_score": 1.0,
-      "source": "src_sandbox_canarytrap",
-      "target": "pathbuf"
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "source_file": "src/sandbox.rs",
-      "source_location": "L376",
-      "weight": 1.0,
-      "context": "generic_arg",
-      "confidence_score": 1.0,
-      "source": "src_sandbox_find_in_path",
-      "target": "pathbuf"
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "source_file": "src/sandbox.rs",
-      "source_location": "L786",
-      "weight": 1.0,
-      "context": "field",
-      "confidence_score": 1.0,
-      "source": "src_sandbox_pathshims",
-      "target": "pathbuf"
-    },
-    {
-      "relation": "references",
-      "confidence": "EXTRACTED",
-      "source_file": "src/sandbox.rs",
-      "source_location": "L376",
+      "source_location": "L369",
       "weight": 1.0,
       "context": "return_type",
       "confidence_score": 1.0,
-      "source": "src_sandbox_find_in_path",
+      "source": "src_sandbox_resolve_nono_bin",
       "target": "src_sandbox_rs_option"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "src/sandbox.rs",
-      "source_location": "L513",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "src_sandbox_nonorunner_trace_install",
-      "target": "src_sandbox_find_in_path"
-    },
-    {
-      "relation": "calls",
-      "context": "call",
-      "confidence": "EXTRACTED",
-      "source_file": "src/sandbox.rs",
-      "source_location": "L681",
-      "weight": 1.0,
-      "confidence_score": 1.0,
-      "source": "src_sandbox_nonorunner_trace_install_with_domains",
-      "target": "src_sandbox_find_in_path"
     },
     {
       "relation": "references",
@@ -29355,6 +29340,17 @@
       "context": "return_type",
       "confidence_score": 1.0,
       "source": "src_sandbox_extract_host_from_url",
+      "target": "src_sandbox_rs_option"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L376",
+      "weight": 1.0,
+      "context": "return_type",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_find_in_path",
       "target": "src_sandbox_rs_option"
     },
     {
@@ -29422,6 +29418,61 @@
       "confidence_score": 1.0,
       "source": "src_sandbox_trace_install_docker_single_with_runtime",
       "target": "src_sandbox_rs_option"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L656",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_canarytrap",
+      "target": "pathbuf"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L376",
+      "weight": 1.0,
+      "context": "generic_arg",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_find_in_path",
+      "target": "pathbuf"
+    },
+    {
+      "relation": "references",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L786",
+      "weight": 1.0,
+      "context": "field",
+      "confidence_score": 1.0,
+      "source": "src_sandbox_pathshims",
+      "target": "pathbuf"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L513",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_nonorunner_trace_install",
+      "target": "src_sandbox_find_in_path"
+    },
+    {
+      "relation": "calls",
+      "context": "call",
+      "confidence": "EXTRACTED",
+      "source_file": "src/sandbox.rs",
+      "source_location": "L681",
+      "weight": 1.0,
+      "confidence_score": 1.0,
+      "source": "src_sandbox_nonorunner_trace_install_with_domains",
+      "target": "src_sandbox_find_in_path"
     },
     {
       "relation": "calls",
@@ -29789,9 +29840,9 @@
       "source_file": "src/sandbox.rs",
       "source_location": "L785",
       "weight": 1.0,
+      "confidence_score": 1.0,
       "source": "src_sandbox_canarytrap_setup",
-      "target": "src_sandbox_sandboxenvvarguard_drop",
-      "confidence_score": 1.0
+      "target": "src_sandbox_sandboxenvvarguard_drop"
     },
     {
       "relation": "references",
@@ -53073,5 +53124,5 @@
       "source_file": "docs/DEV_GUIDE.md"
     }
   ],
-  "built_at_commit": "443a679b96cbe071a0c3168623464011736cef92"
+  "built_at_commit": "5238b5285612106dc436a9746cc8919b81c024cf"
 }
