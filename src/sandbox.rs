@@ -366,39 +366,46 @@ impl SandboxRunner for MicroVmRunner {
 
 pub(crate) struct NonoRunner;
 
-pub(crate) fn resolve_nono_bin() -> std::path::PathBuf {
-    if let Ok(path) = std::env::var("GYRSEEK_NONO_PATH")
-        && !path.trim().is_empty()
-    {
-        return std::path::PathBuf::from(path);
+pub(crate) fn resolve_nono_bin() -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("GYRSEEK_NONO_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            let p = std::path::PathBuf::from(trimmed);
+            if p.is_absolute() && p.is_file() {
+                return Some(p);
+            }
+            return None;
+        }
     }
     if let Some(sibling) = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|p| p.join("nono")))
-        .filter(|sibling| sibling.is_file())
+        .filter(|sibling| sibling.is_absolute() && sibling.is_file())
     {
-        return sibling;
+        return Some(sibling);
     }
     if let Ok(cargo_home) = std::env::var("CARGO_HOME") {
         let cargo_bin = std::path::PathBuf::from(cargo_home).join("bin/nono");
-        if cargo_bin.is_file() {
-            return cargo_bin;
+        if cargo_bin.is_absolute() && cargo_bin.is_file() {
+            return Some(cargo_bin);
         }
     }
     if let Ok(home) = std::env::var("HOME") {
         let cargo_bin = std::path::PathBuf::from(home).join(".cargo/bin/nono");
-        if cargo_bin.is_file() {
-            return cargo_bin;
+        if cargo_bin.is_absolute() && cargo_bin.is_file() {
+            return Some(cargo_bin);
         }
     }
     if let Some(p) = find_in_path("nono") {
-        return p;
+        return Some(p);
     }
-    std::path::PathBuf::from("nono")
+    None
 }
 
 pub(crate) fn nono_available() -> bool {
-    let nono_bin = resolve_nono_bin();
+    let Some(nono_bin) = resolve_nono_bin() else {
+        return false;
+    };
     Command::new(&nono_bin)
         .arg("--version")
         .stdout(Stdio::null())
@@ -411,15 +418,17 @@ pub(crate) fn nono_available() -> bool {
 fn find_in_path(cmd: &str) -> Option<std::path::PathBuf> {
     if cmd.contains(std::path::MAIN_SEPARATOR) {
         let p = std::path::PathBuf::from(cmd);
-        if p.exists() {
+        if p.is_absolute() && p.is_file() {
             return Some(p);
         }
     }
     if let Ok(paths) = std::env::var("PATH") {
         for dir in std::env::split_paths(&paths) {
-            let p = dir.join(cmd);
-            if p.is_file() {
-                return Some(p);
+            if dir.is_absolute() {
+                let p = dir.join(cmd);
+                if p.is_file() {
+                    return Some(p);
+                }
             }
         }
     }
@@ -1301,7 +1310,8 @@ impl NonoRunner {
             format!("{}:{}", path_shims.shims_dir().display(), host_path)
         };
 
-        let nono_bin = resolve_nono_bin();
+        let nono_bin =
+            resolve_nono_bin().ok_or_else(|| "nono binary could not be resolved".to_string())?;
         let mut nono_cmd = Command::new(&nono_bin);
         nono_cmd.current_dir(&work_dir);
         nono_cmd.args([
@@ -3171,11 +3181,24 @@ Stderr: {}",
 
     #[test]
     fn resolve_nono_bin_prefers_explicit_env_path() {
-        let _env = SandboxEnvVarGuard::set("GYRSEEK_NONO_PATH", "/custom/path/to/nono");
-        assert_eq!(
-            resolve_nono_bin(),
-            std::path::PathBuf::from("/custom/path/to/nono")
-        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fake_nono = dir.path().join("nono");
+        std::fs::write(&fake_nono, b"#!/bin/sh\nexit 0\n").expect("write fake nono");
+
+        let _env = SandboxEnvVarGuard::set("GYRSEEK_NONO_PATH", &fake_nono.to_string_lossy());
+        assert_eq!(resolve_nono_bin(), Some(fake_nono));
+    }
+
+    #[test]
+    fn resolve_nono_bin_rejects_relative_env_path() {
+        let _env = SandboxEnvVarGuard::set("GYRSEEK_NONO_PATH", "relative/path/to/nono");
+        assert_eq!(resolve_nono_bin(), None);
+    }
+
+    #[test]
+    fn resolve_nono_bin_rejects_nonexistent_env_path() {
+        let _env = SandboxEnvVarGuard::set("GYRSEEK_NONO_PATH", "/nonexistent/abs/path/nono");
+        assert_eq!(resolve_nono_bin(), None);
     }
 
     #[test]
@@ -3190,7 +3213,7 @@ Stderr: {}",
             ("GYRSEEK_NONO_PATH", ""),
             ("CARGO_HOME", &dir.path().to_string_lossy()),
         ]);
-        assert_eq!(resolve_nono_bin(), fake_nono);
+        assert_eq!(resolve_nono_bin(), Some(fake_nono));
     }
 
     #[test]
