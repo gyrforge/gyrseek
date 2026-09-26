@@ -89,12 +89,12 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just test-poetry` | End-to-end test (Docker): scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
 | `just test-uv` | End-to-end test (Docker): scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
 | `just test-docker` | Runs all Docker end-to-end tests (`test-npm`, `test-pnpm`, `test-pip`, `test-poetry`, `test-uv`). |
-| `just test-nono-npm` | End-to-end test (nono): runs npm install/update/i in `tests/npm/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono-pnpm` | End-to-end test (nono): runs pnpm add/update/i in `tests/pnpm/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono-pip` | End-to-end test (nono): runs pip3 install/update in `tests/pip/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono-poetry` | End-to-end test (nono): runs poetry add/install/update/lock in `tests/poetry/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono-uv` | End-to-end test (nono): runs uv add/pip install/sync/lock in `tests/uv/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono` | Runs all nono end-to-end tests (`test-nono-npm`, `test-nono-pnpm`, `test-nono-pip`, `test-nono-poetry`, `test-nono-uv`). |
+| `just test-nono-npm` | End-to-end test (experimental nono): runs npm install/update/i in `tests/npm/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono-pnpm` | End-to-end test (experimental nono): runs pnpm add/update/i in `tests/pnpm/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono-pip` | End-to-end test (experimental nono): runs pip3 install/update in `tests/pip/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono-poetry` | End-to-end test (experimental nono): runs poetry add/install/update/lock in `tests/poetry/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono-uv` | End-to-end test (experimental nono): runs uv add/pip install/sync/lock in `tests/uv/` using `GYRSEEK_SANDBOX=nono`. |
+| `just test-nono` | Runs all nono end-to-end tests (`test-nono-npm`, `test-nono-pnpm`, `test-nono-pip`, `test-nono-poetry`, `test-nono-uv`) using the experimental `nono` backend. |
 | `just docker-build-python` | Builds the Python scanner image from `docker/Dockerfile.python` as `gyrseek-python-scanner:latest`. |
 | `just docker-build-npm` | Builds the npm/pnpm scanner image from `docker/Dockerfile.npm` as `gyrseek-npm-scanner:latest`. |
 
@@ -519,7 +519,7 @@ sensitive_file_access_allowlist:
 | -------------------- | ----------------- | -------------------------------------------------------------------- |
 | **Docker** (default) | `docker`          | Safer default. Requires Docker CLI.                                  |
 | **MicroVM**          | `microvm`         | Strongest isolation; needs a MicroVM-capable Docker runtime (Linux). |
-| **nono**             | `nono`            | Kernel-enforced sandbox using Landlock (Linux) or Seatbelt (macOS).  |
+| **nono**             | `nono`            | Kernel-enforced sandbox using Landlock (Linux) or Seatbelt (macOS). **(Experimental — use at your own risk)** |
 | **Host**             | `host`            | Fastest, **reduced safety** — see warning below.                     |
 
 ```bash
@@ -533,11 +533,23 @@ GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 
 ### nono configuration
 
-- `GYRSEEK_SANDBOX=nono` runs probes under [`nono`](https://github.com/nolabs-ai/nono), providing kernel-enforced capability sandboxing via Linux Landlock (kernel 5.13+) and macOS Seatbelt without requiring Docker or root privileges.
-- Each probe runs in a dedicated directory with `--allow <probe_dir>` and network access (`--allow-net`), capturing execution events in an audit log without `strace` or `ptrace` context-switch overhead.
-- Post-install artifact analysis (detecting binaries, unexpected runtimes like Bun/Deno, suspicious `.pth` files, and large files) runs directly against the isolated probe tree.
+> [!WARNING]
+> **The `nono` backend is currently in an experimental phase and should be used at your own risk.**
+> While hardened with Landlock/Seatbelt kernel capabilities, scoped domain egress, canary traps, and execution shims, native kernel sandboxing runs directly on the host rather than inside isolated container or microVM namespaces. For untrusted packages in production or mission-critical environments, the default `docker` runner remains the recommended choice.
+
+- `GYRSEEK_SANDBOX=nono` runs probes under [`nono`](https://github.com/nolabs-ai/nono), providing kernel-enforced capability sandboxing via Linux Landlock (kernel 5.13+ for filesystem, 6.7+ for network egress) and macOS Seatbelt without requiring Docker or root privileges.
+- **Two-Phase Scoped Network Egress:** In `trace_install_matrix`, vetted baseline probes (older historical versions meeting the age gate) run first with unrestricted network egress to discover legitimate registry, CDN, and dependency endpoints. Candidate probes (and standalone `trace_install` calls) are then strictly confined via `--allow-domain` to official registries (plus environment registries) and the harvested baseline domains. Outbound attempts to undeclared domains (e.g. Bun downloads from GitHub Releases, C2 beacons, cloud metadata endpoints) are blocked at the network level and recorded in audit logs. Note that baseline-harvested domains are trusted for the candidate; if an older baseline version was itself compromised, its contacted domain would be inherited into the candidate's allowlist. On Linux, scoped network egress enforcement requires Linux kernel 6.7+ (Landlock ABI v4+); on older kernels, filesystem isolation is active but network egress filtering is unavailable. Domain filtering is disabled by default on WSL2.
+- **OS-Level Filesystem & Resource Confinement:**
+  - **macOS:** An ephemeral Seatbelt profile blocks access to `/tmp`, `/private/tmp`, and user cache directories (`/var/folders/.../C/`), preventing install scripts from accessing browser, IDE, Slack, or credential caches.
+  - **Linux:** Landlock drops the `system_write_linux` group (denying write access to host `/tmp`) while preserving required pseudo-devices (`/dev/null`, `/dev/zero`, etc.). Linux probes also enforce cgroups v2 resource limits (`--memory 2g --max-processes 256`).
+- **Telemetry & Detection Parity:**
+  - **Canary Traps:** Decoy FIFO pipes placed at `.env`, `~/.aws/credentials`, `~/.ssh/id_rsa`, and `~/.npmrc` intercept unauthorized file reads, serve benign decoy tokens, and inject synthetic `openat` events into the trace, triggering gyrseek's sensitive file access detection.
+  - **PATH Shims:** Prepended executable shims for droppers (`bun`, `deno`, `git`, `curl`, `wget`) capture full argument lists without truncation and synthesize `execve` events into the trace for version-to-version signature diffing.
+  - **Supervisor Diagnostics Parsing:** Intercepts Landlock/Seatbelt access denials from `nono` stderr and translates them into synthetic trace events.
+  - **Host-Side Post-Install Artifact Scan:** Recursively walks the target installation directory, identifies magic bytes (`\x7fELF`, Mach-O, PE, `.pth` executable script patterns), and emits structured inventory events into the trace for `classify_inventory_lines`.
 - `GYRSEEK_NONO_PATH` specifies a custom binary path (defaults to searching `PATH`).
 - If `nono` is not found when `GYRSEEK_SANDBOX=nono` is configured, `gyrseek` fails closed with an explicit error.
+- For an in-depth technical comparison of boundaries, telemetry, and isolation nuances between Docker and Nono, see [`docs/SANDBOX_COMPARISON.md`](docs/SANDBOX_COMPARISON.md).
 
 ### MicroVM configuration
 
@@ -551,7 +563,7 @@ GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 | Mode      | macOS (Docker Desktop)                                   | Linux host/VM                                                |
 | --------- | -------------------------------------------------------- | ------------------------------------------------------------ |
 | `docker`  | Supported                                                | Supported                                                    |
-| `nono`    | Supported (uses macOS Seatbelt)                          | Supported (uses Linux Landlock)                              |
+| `nono` (experimental) | Supported (uses macOS Seatbelt)                  | Supported (uses Linux Landlock)                              |
 | `host`    | Supported (requires local `strace`)                      | Supported (requires local `strace`)                          |
 | `microvm` | Usually unavailable (Kata/runtime typically not exposed) | Supported when a MicroVM-capable Docker runtime is installed |
 

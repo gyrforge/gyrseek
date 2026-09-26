@@ -113,7 +113,7 @@ install: install-nono
 install-nono:
     @if ! command -v nono >/dev/null 2>&1 && [ ! -f "${CARGO_HOME:-$HOME/.cargo}/bin/nono" ]; then \
         echo "📦 nono not found; installing nono-cli..."; \
-        cargo install nono-cli --locked || echo "⚠️ Warning: Failed to install nono-cli. Docker sandbox remains available."; \
+        cargo install nono-cli --version 0.78.0 --locked || echo "⚠️ Warning: Failed to install nono-cli. Docker sandbox remains available."; \
     fi
 
 # Uninstall from local machine
