@@ -94,7 +94,7 @@ Both backends detect unauthorized process execution (e.g. Shai-Hulud waves downl
 
 * Because `nono` avoids `ptrace` context-switching, process execution is captured via two complementary mechanisms:
   1. **PATH Shims (`PathShims`):** A dedicated shims directory is prepended to `$PATH` containing wrappers for common attack tools and droppers: `bun`, `deno`, `git`, `curl`, and `wget`. When an install script executes any of these commands, the shim records the full, null-delimited argv to `gyrseek_exec.log` and forwards to the real executable.
-  2. **Supervisor Audit Logging:** `nono` logs `exec`, `process`, and `command_policy` events in its audit log.
+  2. **Supervisor Audit Logging:** `parse_nono_audit_log` accepts `exec`, `process`, and `command_policy` events, but **nono 0.81.0 (macOS) does not emit them for child processes**. Its audit log holds only `session_started` (top-level command), `network`, and `session_ended`; an `npm install esbuild` (which runs a `postinstall`) produced no exec events, and `/usr/bin/curl` invoked by absolute path bypassed the shim. Treat nono exec coverage as partial. The `install_script` artifact signal (a newly declared npm `preinstall`/`install`/`postinstall`) partly compensates for npm/pnpm.
 * [`parse_nono_audit_log`](../src/sandbox.rs) and `trace_install_with_domains` synthesize these into standard `execve(...)` trace lines, which feed directly into gyrseek's [`extract_process_exec_signatures`](../src/scanning.rs).
 * **Nuance:** If malware executes a binary not covered by `$PATH` shims or supervisor process logs, Docker's comprehensive `ptrace` tracing provides a broader safety net.
 
@@ -122,6 +122,7 @@ Attackers frequently inspect local configuration files (`.env`, `~/.aws/credenti
   1. The trap unblocks and writes canary bait tokens (`KEY=gyrseek-canary-trap`).
   2. The trap records the access event and continuously services repeated opens so subsequent reads cannot block.
   3. `trace_install_with_domains` synthesizes `openat(AT_FDCWD, "<path>", O_RDONLY) = 3` into the trace.
+* **Limitation (verified on nono 0.81.0 / macOS):** reads of the real `~/.ssh`, `~/.aws`, `~/Documents`, and `/Users` are blocked by the sandbox, but nono's diagnostics report `denials: []` and `violations: []`, so they leave no trace. Only `$HOME`-relative lookups reach the canaries (HOME is redirected into the work dir). The kernel does log these denials (`Sandbox: <proc>(<pid>) deny(1) file-read-data <path>` in the unified log, readable via `/usr/bin/log show`), but they carry no probe attribution, so gyrseek does not consume them yet.
 * In addition, any attempts to access denied host directories are caught by [`parse_nono_diagnostics_denials`](../src/sandbox.rs) from `nono`'s stderr diagnostics and synthesized into failed `openat` lines (`-1 EACCES`).
 
 ---

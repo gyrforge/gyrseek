@@ -1138,6 +1138,50 @@ if next.starts_with('-') {
 
 ---
 
+### Finding 399 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Under nono on macOS, accesses blocked by the Seatbelt sandbox are not reported. In a test, reads of the real `~/.ssh` and `~/.aws` and listing `/Users` and `~/Documents` were blocked (`Operation not permitted`) while the session diagnostics showed `"denials": []` and `"violations": []`. `parse_nono_diagnostics_denials` therefore has nothing to synthesize.
+
+**Correction after the Docker comparison:** the same probe under Docker recorded `openat("/root/.ssh/id_rsa") = -1 EACCES`, but gyrseek ignores failed reads by design (FIXED #60) and the Docker matrix script provisions no credential decoys, so a credential probe of a non-existent path is equally undetected there. Severity lowered from High: nono's `$HOME`-relative canaries detect this better than Docker does. The nono-only gaps are (a) successful reads of allowed sensitive paths such as `/etc/passwd`, which Docker's `openat` trace records and nono does not, and (b) hardcoded absolute credential paths.
+
+**Root cause:** gyrseek's file-access detection under nono depends on (a) canary FIFOs at four bait paths inside the redirected `HOME`/work dir, and (b) nono diagnostics/audit events. Real host credential paths are blocked by nono's policy but emit no event on this platform/version.
+
+**Failure scenario:** A compromised package version reads `/Users/<user>/.ssh/id_rsa` by absolute path during `postinstall`. In the probe the read is denied and unlogged, so the version diffs as clean. gyrseek then forwards the real install, where the same script runs without the sandbox and reads the key.
+
+**Fix direction:** Do not treat sandbox prevention as evidence of benign behavior. Add detection for blocked access (canaries or bait files at real credential locations are unsafe; prefer nono audit events or a platform tracing facility if available), and document the limitation in the README coverage section until fixed. Verified on nono 0.81.0 / macOS only; Linux Landlock behavior was not tested.
+
+**Mitigation applied:** five more home-relative canaries (`CANARY_EXTRA_RELATIVE_PATHS`) so `$HOME`/`os.homedir()`/`Path.home()` probing of common credential stores is detected (`.netrc` deliberately excluded: pip/uv read it). **Experiment (macOS):** the kernel does log denials to the unified log, e.g. `Sandbox: ls(29375) deny(1) file-read-data /Users/<user>/.ssh`, but only with process name and PID (no link to the probe), via `/usr/bin/log show` (adds seconds of latency, other apps' denials share the stream). A possible follow-up is to read it for a probe's time window and filter to `is_sensitive_file_read` paths; attribution and flake risk need a design decision. Hardcoded absolute credential paths remain undetected. Test: `test_canary_trap_covers_extra_credential_stores`.
+
+---
+
+### Finding 398 — High | `src/sandbox.rs`, `README.md` | ⚠️ Open
+
+**Summary:** nono's audit log (`audit-events.ndjson`) contains only `session_started` (with the top-level command), `network`, and `session_ended` events. It has no events for child processes. Under nono, process-execution detection depends entirely on the PATH shims for `git`, `bun`, `deno`, `curl`, and `wget`.
+
+**Root cause:** `parse_nono_audit_log` accepts several guessed event shapes (`command_policy`, `exec`, `process`, `argv`, `command`), but the nono version tested never emits child-exec events. The shims cover five names and are bypassed by absolute-path invocation.
+
+**Evidence (nono 0.81.0, macOS):** `npm install lodash@4.17.23` produced 4 audit lines (2 network). `npm install esbuild`, which runs a `postinstall`, produced 1 `session_started`, 7 `network`, 1 `session_ended` and no exec events. `sh -c "/usr/bin/curl --version"` produced no exec events and bypassed the shim. **Docker comparison:** the same `esbuild` install under `strace -f -e execve,openat,connect` in the pinned node image (run as the unprivileged `gyrseek` user, as the Docker backend does) recorded 16 execve lines, including `sh -c "node install.js"` (the postinstall) and its `node` child; a separate `sh -c` probe recorded `execve("/usr/bin/id")` by absolute path and `openat("/etc/passwd") = 3`. Gap confirmed.
+
+**Failure scenario:** An install script runs `node setup.js`, `python3 -c ...`, or `/usr/bin/curl ...` without a new network endpoint (offline loader, or an endpoint already in the baseline). No new execve signature is recorded, so the process-exec diff passes. The README's ✅ verdicts for Axios, CanisterWorm, Mastra and Namastex-style attacks rely on `process exec` signals that exist under Docker but not under nono.
+
+**Fix direction:** Compare against Docker on the same package; document the reduced exec coverage for nono in the README coverage table; explore an exec-tracing mechanism for nono (or restrict exec-dependent guarantees to Docker).
+
+**Mitigation applied:** the nono host-side artifact scan now emits an extra inventory line for every `node_modules/**/package.json` declaring `preinstall`/`install`/`postinstall`, which `classify_inventory_lines` turns into `install_script|path|hooks` and the existing baseline diff / `artifact_allowlist` handle. This catches the common npm entry point (a newly added hook) without exec visibility. **Still open:** Docker deliberately does not emit it (its strace trace already records the install-script exec); PyPI `setup.py`/build-backend hooks and execs spawned by an already-present hook are not covered; the README ✅ verdicts for exec-only attacks remain Docker-specific. Tests: `classify_inventory_install_script`, `classify_inventory_plain_manifest_is_not_install_script`, `scan_target_artifacts_emits_npm_install_hooks`.
+
+---
+
+### Finding 397 — Medium | `src/sandbox.rs`, `src/lib.rs` | ⚠️ Open
+
+**Summary:** The sandbox probe and the forwarded host install run under different environments. The `nono` backend calls `env_clear()` and sets only `PATH`, `HOME`, and `XDG_STATE_HOME` on the nono process (the inner package manager then gets `HOME`, `TMPDIR`, `XDG_*`, and cache dirs redirected into the temp work dir). The Docker backend forwards no host environment (`build_docker_run_args` has no `-e`/`--env-file`). The forwarded install (`forward_args`) uses a bare `Command::new(manager)` and inherits the user's full environment. Only the host runner inherits the user's environment during the scan.
+
+**Root cause:** Probe isolation intentionally keeps host secrets out of the sandbox, but no mechanism carries package-manager configuration (as opposed to secrets) across. `discover_registry_domains_from_env` reads `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, `UV_INDEX_URL`, `POETRY_REPOSITORIES_DEFAULT_URL`, and `GYRSEEK_ALLOWED_DOMAINS` solely to build the nono domain allowlist; the values and any credentials never reach the probe.
+
+**Failure scenario:** A user sets `NPM_CONFIG_REGISTRY=https://nexus.example/repository/npm/` and `NPM_TOKEN` in their shell. gyrseek's probe resolves the package against the public registry (or fails to authenticate to the private one), while the forwarded install resolves from the private registry. The scanned artifact is then not necessarily the artifact installed (dependency confusion between registries, differing resolved versions, or a spurious scan failure). Other env-driven settings (`UV_*`, `POETRY_*`, `PIP_*`, build flags) can likewise change install-time behavior between scan and install.
+
+**Fix direction:** Document the divergence in the README. Optionally forward an explicit allowlist of non-secret package-manager variables into the probe (never the full environment), and/or emit a startup warning when env-based registry/index variables are set and the probe will not honor their credentials. Separately consider `internal_package_exemptions` as the supported path for private-index packages.
+
+---
+
 ### Finding 394 — Low | `README.md` | ⚠️ Open
 
 **Summary:** The README `domain_allowlist` config table row does not document the bare-TLD rejection gate added by FIXED #367. An operator who has a bare label like `"com"` in their config will see a startup warning after upgrading but find no explanation in the README.

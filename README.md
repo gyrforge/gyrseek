@@ -309,12 +309,13 @@ If `gyrseek` blocked sensitive file reads unconditionally, almost every `npm ins
 
 `gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, file type, first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
 
-The classifier emits four signal categories:
+The classifier emits five signal categories:
 
 1. **`binary`** — ELF, Mach-O, or PE executables deposited in the install tree. Catches cryptominers, compiled malware, and arbitrary native binaries.
 2. **`suspicious_pth`** — Python `.pth` files containing executable code (`import`, `exec`, `eval`, `urllib`, `subprocess`, `ctypes`, `socket` patterns). These are essentially never used by legitimate namespace-path `.pth` files and are the Hades/Miasma delivery mechanism.
 3. **`unexpected_runtime`** — bun/deno runtime binaries (identified by filename and binary type). A subset of `binary` with higher severity. Catches download-and-execute attacks that leave a runtime behind.
 4. **`large_file`** — any file >10 MB in the install tree. Catches data exfiltration staging and large payload drops.
+5. **`install_script`** — an installed npm dependency (`node_modules/**/package.json`) that declares a `preinstall`, `install`, or `postinstall` hook, with the hook command as the detail. A version that newly adds a hook fails closed even if the hook's execution is not observable. **Currently emitted by the `nono` backend only** (by design: the Docker strace trace already records the actual install-script exec); npm/pnpm only.
 
 **How it works** — after each per-probe install step in the Docker matrix script, a single `find /work -type f` pipeline inventories every installed file, capturing size via `stat`, type via `file -b`, and a 300-byte content prefix via `head -c`. The raw inventory is written to `/out/gyrseek_artifacts_N.log`, embedded in the probe trace, and classified by `classify_inventory_lines` in scanning.rs before entering the diff pipeline.
 
@@ -542,12 +543,15 @@ GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 - **OS-Level Filesystem & Resource Confinement:**
   - **macOS:** An ephemeral Seatbelt profile blocks access to `/tmp`, `/private/tmp`, and user cache directories (`/var/folders/.../C/`), preventing install scripts from accessing browser, IDE, Slack, or credential caches.
   - **Linux:** Landlock drops the `system_write_linux` group (denying write access to host `/tmp`) while preserving required pseudo-devices (`/dev/null`, `/dev/zero`, etc.). Linux probes also enforce cgroups v2 resource limits (`--memory 2g --max-processes 256`).
-- **Telemetry & Detection Parity:**
-  - **Canary Traps:** Decoy FIFO pipes placed at `.env`, `~/.aws/credentials`, `~/.ssh/id_rsa`, and `~/.npmrc` intercept unauthorized file reads, serve benign decoy tokens, and inject synthetic `openat` events into the trace, triggering gyrseek's sensitive file access detection.
+- **Telemetry & Detection (not full parity with Docker):** verified against nono 0.81.0 on macOS, nono's audit log records only the top-level command, network connections, and session start/end — **no child-process exec events and no file-denial events**. Consequences:
+  - Exec detection depends on the PATH shims below plus the `install_script` artifact signal; an install script that runs `node`, `python3`, `sh`, or an absolute-path binary (e.g. `/usr/bin/curl`) with no new network endpoint is **not** seen as a process execution. Use Docker when exec-based detection matters.
+  - Access the sandbox blocks (e.g. the real `~/.ssh`, `~/.aws`) is prevented but not reported by nono, so it leaves no trace in the diff. Home-relative lookups (`$HOME`, `os.homedir()`, `Path.home()`) land on the canaries below; hardcoded absolute paths do not. The macOS kernel does log these denials to the unified log, but gyrseek does not consume it yet (see `docs/OPEN_FINDINGS.md` #399).
+  - **Canary Traps:** Decoy FIFO pipes placed at `.env`, `~/.aws/credentials`, `~/.ssh/id_rsa`, `~/.npmrc` (skipped for npm/pnpm), `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `~/.pypirc`, and `~/.git-credentials` intercept unauthorized file reads, serve benign decoy tokens, and inject synthetic `openat` events into the trace, triggering gyrseek's sensitive file access detection.
   - **PATH Shims:** Prepended executable shims for droppers (`bun`, `deno`, `git`, `curl`, `wget`) capture full argument lists without truncation and synthesize `execve` events into the trace for version-to-version signature diffing.
   - **Supervisor Diagnostics Parsing:** Intercepts Landlock/Seatbelt access denials from `nono` stderr and translates them into synthetic trace events.
   - **Host-Side Post-Install Artifact Scan:** Recursively walks the target installation directory, identifies magic bytes (`\x7fELF`, Mach-O, PE, `.pth` executable script patterns), and emits structured inventory events into the trace for `classify_inventory_lines`.
 - `GYRSEEK_NONO_PATH` specifies a custom binary path (defaults to searching `PATH`).
+- nono keeps its audit state under `$XDG_STATE_HOME` (default `~/.local/state`, then `gyrseek_nono`); it must be writable. On macOS it must also not be under `/private` (includes `/tmp`, `/var/folders`), which nono's base policy already grants — nono's own error is shown if it is.
 - If `nono` is not found when `GYRSEEK_SANDBOX=nono` is configured, `gyrseek` fails closed with an explicit error.
 - For an in-depth technical comparison of boundaries, telemetry, and isolation nuances between Docker and Nono, see [`docs/SANDBOX_COMPARISON.md`](docs/SANDBOX_COMPARISON.md).
 
