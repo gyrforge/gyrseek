@@ -1021,6 +1021,14 @@ PyPI is case-insensitive but does NOT normalize package names before they reach 
 
 ---
 
+### Finding 401 — `false-positive` | `src/sandbox.rs`, `README.md` | 🚫 Won't Fix
+
+**Claim:** On macOS, an `XDG_STATE_HOME` under `/tmp` or `/private/tmp` fails with an opaque `empty audit log` error.
+
+**Rationale:** nono does refuse a state root that overlaps `/private` (granted by its `system_read_macos` group), but gyrseek's error already includes nono's stderr verbatim: `empty audit log for '<pkg>@<ver>': nono produced no audit output. Exit code: Some(1), Stderr: nono: Sandbox initialization failed: Refusing to grant '/private' ... overlaps protected nono state root '<path>'`. The cause is therefore visible. A preflight path check would duplicate that message and encode nono's policy in gyrseek. Resolved by documenting the constraint in the README nono section.
+
+---
+
 ### Finding 395 — `false-positive` | `docs/FIXED_FINDINGS.md` | 🚫 Won't Fix
 
 **Summary:** Claim that existing FIXED entries (#292–#376) violate the convention added by FIXED #375 by including line numbers (e.g. `src/lib.rs:65-70`, `src/scanning.rs:295-304`).
