@@ -1,6 +1,7 @@
 root := justfile_directory()
 bin := root / "target/release/gyrseek"
 pip_venv_bin := root / "tests/pip/.venv/bin"
+nono_version := "0.81.0"
 
 default:
     @just --list
@@ -111,9 +112,13 @@ install: install-nono
 
 # Install or update nono-cli sandbox backend
 install-nono:
-    @if ! command -v nono >/dev/null 2>&1 && [ ! -f "${CARGO_HOME:-$HOME/.cargo}/bin/nono" ]; then \
-        echo "📦 nono not found; installing nono-cli..."; \
-        cargo install nono-cli --version 0.78.0 --locked || echo "⚠️ Warning: Failed to install nono-cli. Docker sandbox remains available."; \
+    @if [ -n "${GYRSEEK_NONO_PATH:-}" ]; then exit 0; fi; \
+    nono_bin="${CARGO_HOME:-$HOME/.cargo}/bin/nono"; \
+    [ -x "$nono_bin" ] || nono_bin="$(command -v nono || true)"; \
+    have="$("${nono_bin:-nono}" --version 2>/dev/null | awk '{print $NF}')"; \
+    if [ "$have" != "{{nono_version}}" ]; then \
+        echo "📦 nono ${have:-not found}; installing nono-cli {{nono_version}}..."; \
+        cargo install nono-cli --version {{nono_version}} --locked --force || echo "⚠️ Warning: Failed to install nono-cli. Docker sandbox remains available."; \
     fi
 
 # Uninstall from local machine
