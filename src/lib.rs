@@ -93,8 +93,6 @@ struct GyrseekConfig {
     artifact_allowlist: HashMap<String, Vec<String>>,
     #[serde(default)]
     sensitive_file_access_allowlist: HashMap<String, Vec<String>>,
-    #[serde(default)]
-    nono_canary_secrets_paths: Vec<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -481,21 +479,6 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         }
     });
     let git_clone_allowlist = parse_list_map(cfg.git_clone_allowlist, true, "git_clone_allowlist");
-    let nono_canary_secrets_paths: Vec<String> = cfg
-        .nono_canary_secrets_paths
-        .into_iter()
-        .map(|p| p.trim().to_string())
-        .filter(|p| {
-            let ok = sandbox::is_safe_canary_rel_path(p);
-            if !ok {
-                eprintln!(
-                    "⚠️ [gyrseek] Ignoring nono_canary_secrets_paths entry '{}': must be a relative path under $HOME with no '..' or leading '/'",
-                    p
-                );
-            }
-            ok
-        })
-        .collect();
 
     Ok(PolicyConfig {
         ip_allowlist,
@@ -512,7 +495,6 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         process_exec_allowlist,
         artifact_allowlist,
         sensitive_file_access_allowlist,
-        nono_canary_secrets_paths,
     })
 }
 
@@ -901,26 +883,6 @@ mod config_tests {
         assert!(
             pkg.contains("files.pythonhosted.org"),
             "valid per-package entry must be kept"
-        );
-    }
-
-    #[test]
-    fn nono_canary_secrets_paths_keeps_relative_and_drops_unsafe_entries() {
-        let yaml = concat!(
-            "nono_canary_secrets_paths:\n",
-            "  - .config/internal-cli/token\n",
-            "  - \"  .vault-token  \"\n",
-            "  - /etc/shadow\n",
-            "  - ../escape\n",
-            "  - \"\"\n",
-        );
-        let mut file = NamedTempFile::new().expect("temp file");
-        writeln!(file, "{}", yaml).expect("write");
-        let cfg = load(&file);
-
-        assert_eq!(
-            cfg.nono_canary_secrets_paths,
-            vec![".config/internal-cli/token", ".vault-token"]
         );
     }
 
@@ -1521,23 +1483,19 @@ pub struct GyrSeek {
 /// Builds the sandbox runner on first use, so commands that are forwarded without a scan
 /// (for example `uv venv`) never pay for, or fail on, sandbox initialization. A scan that
 /// needs the sandbox still fails closed: if initialization fails, gyrseek exits 1.
-struct LazyRunner<'a> {
+struct LazyRunner {
     runner: std::cell::OnceCell<Box<dyn SandboxRunner>>,
     danger_disable_seccomp: bool,
-    nono_canary_secrets_paths: &'a [String],
 }
 
-impl LazyRunner<'_> {
+impl LazyRunner {
     fn get(&self) -> &dyn SandboxRunner {
         self.runner
             .get_or_init(|| {
                 if env::var("GYRSEEK_TEST_BYPASS_RUNNER_INIT").ok().as_deref() == Some("1") {
                     return Box::new(NoopRunner) as Box<dyn SandboxRunner>;
                 }
-                match build_runner_from_env(
-                    self.danger_disable_seccomp,
-                    self.nono_canary_secrets_paths,
-                ) {
+                match build_runner_from_env(self.danger_disable_seccomp) {
                     Ok(runner) => runner,
                     Err(e) => {
                         println!("❌ [gyrseek] Sandbox initialization failed: {}", e);
@@ -1921,7 +1879,6 @@ pub async fn run(args: Vec<String>) {
     let runner = LazyRunner {
         runner: std::cell::OnceCell::new(),
         danger_disable_seccomp,
-        nono_canary_secrets_paths: &policy.nono_canary_secrets_paths,
     };
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("lock") {

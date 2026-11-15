@@ -4,9 +4,9 @@ This document is the canonical reference for Docker sandbox security in gyrseek.
 
 ## Overview
 
-gyrseek runs install probes inside Docker containers using `strace` to capture behavioral signals (network endpoints, process execution, git clones, installed artifacts). The Docker sandbox is tuned for practical compatibility with package managers and throughput, not maximum isolation — though seccomp and AppArmor profiles add defense-in-depth.
+gyrseek runs install probes inside Docker containers using `strace` to capture behavioral signals (network endpoints, process execution, git clones, installed artifacts). The Docker sandbox is tuned for practical compatibility with package managers and throughput, not maximum isolation — though an embedded seccomp profile (active on every platform) and an optional AppArmor profile (native Linux hosts only) add defense-in-depth. The two are not interchangeable: see [Is seccomp enough, or is AppArmor required?](#is-seccomp-enough-or-is-apparmor-required) for which layer actually carries weight.
 
-Sandbox mode is selected via `GYRSEEK_SANDBOX` (`docker` default, `nono` experimental kernel-capability sandbox, or `host`, which has no isolation and only detects).
+Sandbox mode is selected via `GYRSEEK_SANDBOX` (`docker` default, or `host`, which has no isolation and only detects).
 
 ## Sandbox Infrastructure
 
@@ -20,6 +20,8 @@ Sandbox mode is selected via `GYRSEEK_SANDBOX` (`docker` default, `nono` experim
 ### Unprivileged payload integrity
 
 The traced install payload runs as an unprivileged in-container user (`strace -u gyrseek`). The trace log files in `/out` are root-owned (written by `strace` running as root), so a malicious install or postinstall script cannot overwrite or delete its own trace before gyrseek reads it.
+
+**Platform caveat (OPEN_FINDINGS #411):** this relies on the bind mount enforcing in-container file ownership. Native Linux does. On Docker Desktop for macOS it does not: measured with the exact `docker run` flags gyrseek builds, a payload (uid 1000, no capabilities) appended to and then deleted the root-owned trace, and the file was gone on the host. Deleting the file fails closed through the empty-trace check, but truncating or rewriting earlier events does not. Until the trace is kept on container-local root-only storage and copied to `/out` after the payload exits, do not rely on trace integrity on macOS Docker Desktop.
 
 ### Probe batching
 
@@ -58,7 +60,7 @@ An early version of the profile denied core networking syscalls (`socket`, `conn
 
 ### Platform note
 
-Seccomp policy applies in the Linux container runtime (including Docker Desktop's Linux VM). It does not depend on host-side kernel modules beyond what Docker already requires.
+Seccomp policy applies in the Linux container runtime (including Docker Desktop's Linux VM and the WSL2 kernel). It does not depend on host-side kernel modules beyond what Docker already requires, because it is enforced by the kernel the container runs on rather than by the host OS. Seccomp is also all-or-nothing — it is compiled into that kernel or absent, with no enable step — so if a container starts under the profile at all, the profile is being enforced.
 
 ## AppArmor
 
@@ -130,15 +132,97 @@ Custom AppArmor profiles require native Linux host control over AppArmor profile
 
 Enable AppArmor for stronger path-based protection on Linux hosts. It adds defense-in-depth beyond seccomp's syscall-level filtering, restricting file access patterns (e.g. `/etc/shadow` writes) that seccomp alone cannot express. Use the prebuilt scanner image workflow for best compatibility.
 
+## Is seccomp enough, or is AppArmor required?
+
+For gyrseek's threat model, **seccomp is the load-bearing layer and AppArmor is marginal
+defense-in-depth.** The two are not interchangeable, and the distinction decides whether a macOS or
+WSL2 host without AppArmor should be considered deficient.
+
+### Trace integrity — seccomp only
+
+gyrseek's entire detection rests on `strace` observing the install's syscalls. A package that performs
+file or network I/O through a channel `strace` cannot see produces a clean trace and is then forwarded
+to the host. This is why the seccomp profile blocks the `io_uring` syscalls: work submitted through an
+`io_uring` ring is not visible as ordinary syscalls, so it would bypass the observation the behavioral
+diff depends on.
+
+**AppArmor cannot express this.** It is path-based mandatory access control, not a syscall filter;
+nothing in an AppArmor profile substitutes for that block. Seccomp is therefore not merely a
+containment measure — `--danger-disable-seccomp` degrades *detection integrity*, which is why it is
+named the way it is.
+
+### Containment — mostly neither profile
+
+The isolation that limits blast radius during a probe comes from the container boundary, not from
+either profile: an ephemeral root filesystem, a tmpfs `/work`, no host mounts except the root-owned
+`/out`, an unprivileged payload via `strace -u gyrseek`, `no-new-privileges`, and — on macOS and
+WSL2 — an additional VM boundary. AppArmor adds path-based `deny` rules *inside* that already
+ephemeral container, where there is little of value to protect: the one host-visible path is `/out`,
+and that is guarded by root ownership rather than by MAC.
+
+### What this means for supply-chain malware
+
+The dominant risks in the attack classes gyrseek is built to catch are not container escapes, and
+neither profile addresses them:
+
+- **Execution outside the install window** — a PyPI `*-setup.pth` or import-time hook that fires on
+  the next interpreter start rather than during the probe (Open Finding 25; waves T26 and T32). The
+  package simply never misbehaves while it is being watched.
+- **Open egress during the probe** — in Docker mode the container reaches the network so package
+  managers can resolve dependencies, so a probe-time exfiltration packet does reach the internet even
+  though gyrseek then blocks the host install.
+
+Hardening the container does nothing for either. The marginal security for this threat model comes from
+egress control and from covering the execution window — what the post-install artifact scan
+partly addresses and a future egress proxy would (OPEN_FINDINGS #412) — not from adding AppArmor.
+
+### Practical guidance
+
+- **Never disable seccomp.** It is the only layer protecting the observation that every gyrseek verdict
+  rests on.
+- **Enable AppArmor on native Linux hosts** with prebuilt scanner images. It is real defense-in-depth
+  and costs nothing once `apparmor-utils` is installed.
+- **Do not treat its absence on macOS as a gap in supply-chain coverage.** A macOS Docker Desktop host
+  keeps seccomp, namespace isolation and a VM boundary; what it loses is a path-confinement layer over
+  an ephemeral filesystem. Detection coverage is identical.
+
 ## Platform support matrix
 
-| Mode | macOS (Docker Desktop) | Linux host/VM |
-|---|---|---|
-| `docker` | Supported | Supported |
-| `host` | Supported (requires local `strace`) | Supported (requires local `strace`) |
+| Mode | Linux host/VM | macOS (Docker Desktop) | Windows (WSL2) | Windows (native) |
+|---|---|---|---|---|
+| `docker` | Supported | Supported | Supported — run gyrseek inside a WSL2 distro | Not supported |
+| `host` | Supported (requires `strace`) | **Not supported** (`strace` is Linux-only) | Supported (requires `strace`) | Not supported |
 
-- Seccomp works in all Docker environments (including Docker Desktop's Linux VM).
-- AppArmor requires a native Linux host with `apparmor_parser` available. Not available on macOS Docker Desktop.
+`host` mode on macOS cannot work: `HostRunner` invokes `strace`, which has no macOS build. The nearest
+equivalent, `dtruss`, is a different tool and SIP blocks it against system binaries.
+
+### Hardening availability per platform
+
+| Layer | Linux host | macOS (Docker Desktop) | Windows (WSL2) |
+|---|---|---|---|
+| Seccomp | Enabled by default | Enabled by default | Enabled by default |
+| AppArmor | Opt-in (`GYRSEEK_DOCKER_APPARMOR_PROFILE=true`) | **Unavailable** (permanent) | **Unreliable** — verify before relying on it |
+
+- **Seccomp works wherever a Linux container kernel does.** On macOS that kernel is Docker Desktop's
+  LinuxKit VM; under WSL2 it is Microsoft's WSL kernel. Both are built with `CONFIG_SECCOMP_FILTER`.
+- **AppArmor needs a native Linux host.** Loading the profile requires `apparmor_parser` to install it
+  into the kernel that runs the container. On macOS that binary does not exist on the host, and Docker
+  Desktop's LinuxKit kernel does not carry the AppArmor LSM — so this is a permanent platform
+  limitation, not a setup problem. gyrseek warns once and falls back to Docker's default profile.
+- **WSL2 is a Linux target, not a Windows one.** gyrseek built and run inside a WSL2 distro reports
+  `linux` for `std::env::consts::OS`, so the AppArmor path is attempted rather than skipped. The WSL
+  kernel does ship AppArmor support, but it must be an active LSM (kernel cmdline `lsm=`/`security=`,
+  set via `.wslconfig`) with securityfs mounted, which has not historically been the default. Treat it
+  as unverified until checked on the specific kernel in use:
+
+```bash
+docker info --format '{{json .SecurityOptions}}'   # is "apparmor" listed?
+cat /sys/module/apparmor/parameters/enabled        # Y means the LSM is active
+ls /sys/kernel/security/apparmor/.load             # must exist to load profiles
+```
+
+- **Native Windows is not supported** in any mode: Docker mode needs WSL2, and `host` mode has no
+  `strace`.
 
 ## Prebuilt scanner images
 
@@ -168,7 +252,9 @@ Digest pinning is recommended for reproducibility and supply-chain integrity.
 - Container setup and `strace` run as root (though the traced payload runs unprivileged via `strace -u`).
 - Full `--read-only` rootfs is not enabled.
 - Capabilities are not fully dropped, and `SYS_PTRACE` is explicitly added.
-- Outbound network is enabled so package managers can reach registries during probes. A malicious package running during the probe could theoretically exfiltrate data.
+- Outbound network is enabled so package managers can reach registries during probes. A malicious package running during the probe can download and run a 2nd stage, or send data to any host, from inside the container; only decoy secrets are present, but the container acts from the host's IP. Whether the container can reach private addresses (LAN, `host.docker.internal`) is unmeasured (OPEN_FINDINGS #412).
+- Probes have no wall-clock timeout, so a hanging install stalls the scan and anything it started keeps running until the container exits (OPEN_FINDINGS #413). The container is `--rm`, so nothing survives the probe.
+- Trace integrity is not guaranteed on macOS Docker Desktop (OPEN_FINDINGS #411, see "Unprivileged payload integrity").
 - Behavioral detection observes what runs during the sandbox install. Payloads designed to fire outside the install window (e.g. import-time Python hooks) may not detonate during the scan.
 
 **Why:** earlier stricter configs (read-only rootfs + full capability drop + non-root setup + network isolation) caused apt/setup failures and prevented package downloads during probes, rendering scans unable to run. Prebuilt scanner images are the path to restoring stricter defaults.
@@ -280,7 +366,7 @@ If scans regress:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `GYRSEEK_SANDBOX` | `docker` | Sandbox mode: `docker`, `host`, or `nono`. |
+| `GYRSEEK_SANDBOX` | `docker` | Sandbox mode: `docker` or `host`. |
 
 | `GYRSEEK_DOCKER_APPARMOR_PROFILE` | `false` | Boolean toggle for embedded AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on Linux. Defaults to `false` because prerequisites are not always met. |
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES` | `false` | Enable prebuilt fast path for all managers. |

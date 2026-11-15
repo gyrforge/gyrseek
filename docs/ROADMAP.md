@@ -15,7 +15,7 @@
 - FCrDNS-backed `domain_allowlist`, balanced-bracket exec parsing, and correct PEP 508 extras normalization for registry lookup plus forwarded pinning.
 - Mixed global/per-package allowlist syntax across all six allowlist types (`ip_allowlist`, `domain_allowlist`, `git_clone_allowlist`, `artifact_allowlist`, `sensitive_file_access_allowlist`, `process_exec_allowlist`); effective set is global ∪ per-package for ip/domain; per-package only for the other four. Config-load-time key and value validation with actionable warnings.
 - `internal_package_exemptions` support for first-party/private-index packages that should bypass registry lookup and sandbox scanning entirely.
-- Docker, host, and nono sandbox modes.
+- Docker and host sandbox modes.
 - Prebuilt scanner image support and documented digest-pinning workflow for faster, more reproducible scans.
 - In-run scan-result caching and Docker matrix batching for multiple package/version probes in one container session.
 - Integration coverage for CLI exit-code behavior, lockfile routing, pnpm routing, version flags, artifact allowlisting, and fail-closed forwarding; inline tests cover parsing, scanning, and sandbox internals.
@@ -26,7 +26,6 @@
 - Default baseline age gate set to 72 hours (`DEFAULT_MIN_BASELINE_AGE_HOURS`) with a hard floor of 24 (`HARD_MINIMUM_AGE_HOURS`); per-package values below the floor are silently clamped and a warning is emitted. Override versions younger than the hard floor are rejected in `check_override_ages`.
 - `new_package_exemptions` redesigned from a flat list (`Vec<String>`) to a version-pinned map (`HashMap<String, String>`) with a custom serde deserializer that accepts both formats for backward compatibility. Empty version values produce a warning and are dropped. The `tgt_version` branch in the exemption match was removed to prevent `"latest"` string bypass.
 - The "safe to remove" exemption message is now gated on `new_package_exempt` so it only fires when the exemption version actually matched the current install, not just because baselines happen to suffice.
-- Hardened kernel capability sandbox (`GYRSEEK_SANDBOX=nono`) via Landlock (Linux) and Seatbelt (macOS): scoped registry/baseline domain network isolation, FIFO canary traps for credential theft detection, PATH shims for dropper command tracking, nono supervisor diagnostics parsing, and host-side artifact scanning. *(Experimental)*.
 
 ## Near Term
 - Fetch and analyze registry metadata (npm and Python package indices) prior to executing the sandbox to fast-fail on obvious static anomalies (e.g. newly introduced suspicious dependencies or scripts).
@@ -50,7 +49,7 @@
 - [x] **External AI Code Review Migration** — Replaced in-repository AI review workflows and privileged `workflow_run` comment publishers with external CodeRabbit reviews (`.coderabbit.yaml`), isolating review feedback from runner execution contexts.
 - Prebuilt scanner images as the default path — unblocks read-only rootfs, tighter capability drops, and stronger seccomp/apparmor defaults (see [`DOCKER_SECURITY.md`](DOCKER_SECURITY.md)).
 - Improve resilience to strace output variations.
-- Optional egress mediation/proxy mode for runtime scans (after no-execution-first stable).
+- Optional egress mediation/proxy mode for runtime scans (after no-execution-first stable) — logs full URLs (path-level visibility across registries) with allow/block policy, and checks Docker bridge reach into private ranges (OPEN_FINDINGS #412).
 - Provenance and integrity gates — trusted registry policy, digest/signature verification where available.
 
 ### Reliability & UX

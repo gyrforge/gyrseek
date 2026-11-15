@@ -8,7 +8,7 @@ use dns_lookup::{lookup_addr, lookup_host};
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::sandbox::{NPM_INSTALL_SCRIPT_TYPE, SandboxRunner};
+use crate::sandbox::SandboxRunner;
 
 /// Policy knobs resolved from the YAML config (or defaults), passed by reference
 /// into the scanner so call sites don't have to thread a dozen positional args.
@@ -42,9 +42,6 @@ pub(crate) struct PolicyConfig {
     /// allows that binary regardless of the `file -b` output.
     pub artifact_allowlist: HashMap<String, HashSet<String>>,
     pub sensitive_file_access_allowlist: HashMap<String, HashSet<String>>,
-    /// Extra `$HOME`-relative credential paths to plant as nono canary decoys,
-    /// on top of the built-in set.
-    pub nono_canary_secrets_paths: Vec<String>,
 }
 
 impl Default for PolicyConfig {
@@ -64,7 +61,6 @@ impl Default for PolicyConfig {
             process_exec_allowlist: HashMap::new(),
             artifact_allowlist: HashMap::new(),
             sensitive_file_access_allowlist: HashMap::new(),
-            nono_canary_secrets_paths: Vec::new(),
         }
     }
 }
@@ -398,20 +394,42 @@ pub(crate) fn lookup_in_dns_map<'a>(
 /// ASCII/escape format produced without it.
 fn unescape_strace_string(s: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len() / 4);
-    let mut chars = s.chars();
+    let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('x') => {
-                    let hi = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
-                    let lo = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
-                    out.push((hi as u8) << 4 | lo as u8);
-                }
-                Some(c2) => out.push(c2 as u8),
-                None => break,
-            }
-        } else {
+        if c != '\\' {
             out.push(c as u8);
+            continue;
+        }
+        match chars.next() {
+            Some('x') => {
+                let hi = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+                let lo = chars.next().and_then(|c| c.to_digit(16)).unwrap_or(0);
+                out.push((hi as u8) << 4 | lo as u8);
+            }
+            // Without `-xx` strace prints symbolic and octal escapes (host mode); keeping
+            // them distinct stops `build\n.js` and `buildn.js` sharing a signature.
+            Some('n') => out.push(b'\n'),
+            Some('t') => out.push(b'\t'),
+            Some('r') => out.push(b'\r'),
+            Some('a') => out.push(7),
+            Some('b') => out.push(8),
+            Some('f') => out.push(12),
+            Some('v') => out.push(11),
+            Some(d @ '0'..='7') => {
+                let mut val = d.to_digit(8).unwrap_or(0);
+                for _ in 0..2 {
+                    match chars.peek().and_then(|c| c.to_digit(8)) {
+                        Some(o) => {
+                            val = val * 8 + o;
+                            chars.next();
+                        }
+                        None => break,
+                    }
+                }
+                out.push(val as u8);
+            }
+            Some(c2) => out.push(c2 as u8),
+            None => break,
         }
     }
     out
@@ -956,9 +974,6 @@ fn extract_artifact_findings(full: &str) -> HashSet<String> {
 ///   - `unexpected_runtime|path|type` — bun/deno binary (subset of binary)
 ///   - `suspicious_pth|path|content`  — .pth with executable import/call patterns
 ///   - `large_file|path|size`        — file >10 MB
-///   - `install_script|path|hooks`   — dependency declares npm `preinstall` /
-///     `install` / `postinstall` (emitted by backends that cannot trace child
-///     processes, so a newly added hook is still caught as a new finding)
 fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> {
     let mut findings = HashSet::new();
     for line in raw {
@@ -997,10 +1012,6 @@ fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> {
                 findings.insert(format!("unexpected_runtime|{}|{}", path, file_type));
             }
             findings.insert(format!("binary|{}|{}", path, file_type));
-        }
-
-        if file_type == NPM_INSTALL_SCRIPT_TYPE {
-            findings.insert(format!("install_script|{}|{}", path, content));
         }
 
         // Suspicious .pth detection.
@@ -1243,7 +1254,7 @@ fn is_harness_command(exe: &str, args: &[String]) -> bool {
 
 /// both "this version started executing bun" and "this version runs bun but with
 /// new/extra arguments not seen before".
-fn extract_process_exec_signatures(trace: &str) -> HashSet<String> {
+pub(crate) fn extract_process_exec_signatures(trace: &str) -> HashSet<String> {
     let mut signatures = HashSet::new();
 
     for args in parse_execve_argvs(trace) {
@@ -1322,10 +1333,7 @@ fn is_sensitive_file_read(path: &str) -> bool {
             return true;
         }
     }
-    if path.contains("/.gnupg/private-keys-v1.d/")
-        || path.contains("/.azure/")
-        || path.starts_with(&format!("{}/", crate::sandbox::CANARY_CUSTOM_PREFIX))
-    {
+    if path.contains("/.gnupg/private-keys-v1.d/") || path.contains("/.azure/") {
         return true;
     }
 
@@ -1382,7 +1390,7 @@ fn parse_syscall_return(s: &str) -> Option<i32> {
     ret_str[..end].parse::<i32>().ok()
 }
 
-fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
+pub(crate) fn extract_sensitive_file_reads(trace: &str) -> HashSet<String> {
     static LINE_RE: OnceLock<Regex> = OnceLock::new();
     static SYSCALL_RE: OnceLock<Regex> = OnceLock::new();
     static RESUMED_RE: OnceLock<Regex> = OnceLock::new();
@@ -2569,27 +2577,6 @@ mod tests {
         select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
         strip_artifact_section, unescape_strace_string,
     };
-
-    #[test]
-    fn every_nono_canary_label_is_classified_sensitive() {
-        // Canary hits are injected as synthetic `openat("<label>") = 3` events, so each
-        // label must be recognised or the decoy would never produce a finding.
-        for core in [
-            "/work/.env",
-            "/root/.aws/credentials",
-            "/root/.ssh/id_rsa",
-            "/root/.npmrc",
-        ] {
-            assert!(is_sensitive_file_read(core), "{core}");
-        }
-        for rel in crate::sandbox::CANARY_EXTRA_RELATIVE_PATHS {
-            let label = format!("/root/{rel}");
-            assert!(is_sensitive_file_read(&label), "{label}");
-        }
-        let custom = format!("{}/.vault-token", crate::sandbox::CANARY_CUSTOM_PREFIX);
-        assert!(is_sensitive_file_read(&custom));
-        assert!(!is_sensitive_file_read("/gyrseek-canaryx/.vault-token"));
-    }
 
     #[test]
     fn test_is_sensitive_file_read() {
@@ -4626,6 +4613,18 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
     }
 
     #[test]
+    fn unescape_symbolic_and_octal_escapes_stay_distinct() {
+        assert_eq!(unescape_strace_string("build\\n.js"), b"build\n.js");
+        assert_ne!(
+            unescape_strace_string("build\\n.js"),
+            unescape_strace_string("buildn.js")
+        );
+        assert_eq!(unescape_strace_string("a\\tb\\\\c"), b"a\tb\\c");
+        assert_eq!(unescape_strace_string("\\101\\0"), b"A\0");
+        assert_eq!(unescape_strace_string("\\12x"), b"\nx");
+    }
+
+    #[test]
     fn unescape_empty_string() {
         assert!(unescape_strace_string("").is_empty());
     }
@@ -4637,7 +4636,8 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
 
     #[test]
     fn unescape_backslash_escape_non_hex() {
-        assert_eq!(unescape_strace_string("a\\nb"), b"anb");
+        assert_eq!(unescape_strace_string("a\\qb"), b"aqb");
+        assert_eq!(unescape_strace_string("a\\nb"), b"a\nb");
     }
 
     #[test]
@@ -5873,30 +5873,6 @@ read(6, "\x00\x44\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x03\x66\x6f\x6
         assert!(
             out.contains("suspicious_pth|/work/site-packages/evil.pth|import socket subprocess")
         );
-    }
-
-    #[test]
-    fn classify_inventory_install_script() {
-        let raw: HashSet<String> = [format!(
-            "/work/node_modules/evil/package.json\x00300\x00{}\x00postinstall=node setup.js",
-            crate::sandbox::NPM_INSTALL_SCRIPT_TYPE
-        )]
-        .into_iter()
-        .collect();
-        let out = classify_inventory_lines(raw);
-        assert!(out.contains(
-            "install_script|/work/node_modules/evil/package.json|postinstall=node setup.js"
-        ));
-    }
-
-    #[test]
-    fn classify_inventory_plain_manifest_is_not_install_script() {
-        let raw: HashSet<String> =
-            ["/work/node_modules/ok/package.json\x00300\x00ASCII text\x00{\"name\":\"ok\"}"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-        assert!(classify_inventory_lines(raw).is_empty());
     }
 
     #[test]
@@ -7401,69 +7377,5 @@ recvmsg(6, {msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\x00\x44\x00\x00\x
         let ip_strs: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
         assert!(ip_strs.contains(&"140.248.144.223".to_string()));
         assert!(ip_strs.contains(&"2a04:4e42:94::223".to_string()));
-    }
-
-    #[test]
-    fn trace_sandbox_install_matrix_parses_nono_generated_trace() {
-        let jsonl = r#"
-{"sequence":0,"event":{"type":"network","event":{"target":"93.184.216.34","port":443,"decision":"allow"}}}
-{"sequence":1,"event":{"type":"command_policy","command":"git clone https://github.com/evil/repo","decision":"allow"}}
-{"sequence":2,"event":{"type":"command_policy","command":["bun", "run", "stealer.js"],"decision":"allow"}}
-{"sequence":3,"event":{"type":"capability_decision","path":"/home/user/.aws/credentials","decision":"allow"}}
-{"sequence":4,"event":{"type":"capability_decision","path":"/home/user/.ssh/id_rsa","decision":"deny"}}
-"#;
-        let mut trace = crate::sandbox::parse_nono_audit_log(jsonl);
-        trace.push_str("\n=== gyrseek_artifacts ===\n");
-        trace.push_str("/work/bin/payload\x00123\0ELF 64-bit LSB executable\0fakecontent\n");
-        trace.push_str("/work/test.pth\x0050\0Python script text\0import urllib\n");
-
-        let mut traces = HashMap::new();
-        traces.insert(("test-pkg".to_string(), "1.0.0".to_string()), trace);
-        let runner = MockRunner { traces };
-
-        let result = super::trace_sandbox_install_matrix(
-            &runner,
-            "npm",
-            &[("test-pkg".to_string(), "1.0.0".to_string())],
-        )
-        .expect("matrix tracing should succeed");
-
-        let signals = result
-            .get(&("test-pkg".to_string(), "1.0.0".to_string()))
-            .expect("should have signals for probe");
-
-        assert!(signals.ips.contains("93.184.216.34"));
-        assert!(
-            signals
-                .git_clone_signatures
-                .contains("https://github.com/evil/repo|non-recursive")
-        );
-        assert!(
-            signals
-                .process_exec_signatures
-                .contains("bun|run|stealer.js")
-        );
-        assert!(
-            signals
-                .sensitive_file_reads
-                .contains("/home/user/.aws/credentials")
-        );
-        assert!(
-            !signals
-                .sensitive_file_reads
-                .contains("/home/user/.ssh/id_rsa")
-        );
-        assert!(
-            signals
-                .artifact_findings
-                .iter()
-                .any(|f| f.starts_with("binary|/work/bin/payload"))
-        );
-        assert!(
-            signals
-                .artifact_findings
-                .iter()
-                .any(|f| f.starts_with("suspicious_pth|/work/test.pth"))
-        );
     }
 }

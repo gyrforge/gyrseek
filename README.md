@@ -92,12 +92,6 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just test-poetry` | End-to-end test (Docker): scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
 | `just test-uv` | End-to-end test (Docker): scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
 | `just test-docker` | Runs all Docker end-to-end tests (`test-npm`, `test-pnpm`, `test-pip`, `test-poetry`, `test-uv`). |
-| `just test-nono-npm` | End-to-end test (experimental nono): runs npm install/update/i in `tests/npm/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono-pnpm` | End-to-end test (experimental nono): runs pnpm add/update/i in `tests/pnpm/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono-pip` | End-to-end test (experimental nono): runs pip3 install/update in `tests/pip/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono-poetry` | End-to-end test (experimental nono): runs poetry add/install/update/lock in `tests/poetry/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono-uv` | End-to-end test (experimental nono): runs uv add/pip install/sync/lock in `tests/uv/` using `GYRSEEK_SANDBOX=nono`. |
-| `just test-nono` | Runs all nono end-to-end tests (`test-nono-npm`, `test-nono-pnpm`, `test-nono-pip`, `test-nono-poetry`, `test-nono-uv`) using the experimental `nono` backend. |
 | `just docker-build-python` | Builds the Python scanner image from `docker/Dockerfile.python` as `gyrseek-python-scanner:latest`. |
 | `just docker-build-npm` | Builds the npm/pnpm scanner image from `docker/Dockerfile.npm` as `gyrseek-npm-scanner:latest`. |
 
@@ -312,13 +306,12 @@ If `gyrseek` blocked sensitive file reads unconditionally, almost every `npm ins
 
 `gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, file type, first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
 
-The classifier emits five signal categories:
+The classifier emits four signal categories:
 
 1. **`binary`** — ELF, Mach-O, or PE executables deposited in the install tree. Catches cryptominers, compiled malware, and arbitrary native binaries.
 2. **`suspicious_pth`** — Python `.pth` files containing executable code (`import`, `exec`, `eval`, `urllib`, `subprocess`, `ctypes`, `socket` patterns). These are essentially never used by legitimate namespace-path `.pth` files and are the Hades/Miasma delivery mechanism.
 3. **`unexpected_runtime`** — bun/deno runtime binaries (identified by filename and binary type). A subset of `binary` with higher severity. Catches download-and-execute attacks that leave a runtime behind.
 4. **`large_file`** — any file >10 MB in the install tree. Catches data exfiltration staging and large payload drops.
-5. **`install_script`** — an installed npm dependency (`node_modules/**/package.json`) that declares a `preinstall`, `install`, or `postinstall` hook, with the hooks as JSON `[hook, command]` pairs as the detail. Only dependency-root manifests count (`node_modules/<pkg>/package.json`, including scoped packages), not nested example or fixture manifests. A version that newly adds a hook fails closed even if the hook's execution is not observable. **Currently emitted by the `nono` backend only** (by design: the Docker strace trace already records the actual install-script exec); npm/pnpm only. A manifest over 1 MiB is reported as `uninspected` rather than skipped, and the manifest is read after the install ran (a hook that rewrites its own `scripts` first evades the signal; see OPEN_FINDINGS #402).
 
 **How it works** — after each per-probe install step in the Docker matrix script, a single `find /work -type f` pipeline inventories every installed file, capturing size via `stat`, type via `file -b`, and a 300-byte content prefix via `head -c`. The raw inventory is written to `/out/gyrseek_artifacts_N.log`, embedded in the probe trace, and classified by `classify_inventory_lines` in scanning.rs before entering the diff pipeline.
 
@@ -440,7 +433,6 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 | `artifact_allowlist`          | empty         | Artifact findings to allow **per package** (map of package name to list of allowed artifacts; exact `type\|path\|details` or prefix `type\|path`). New artifacts not in baselines and not allowlisted fail closed. Example: `binary\|/work/bin/tool`.               |
 | `git_clone_allowlist`         | empty         | Git clone targets to allow **per package** when new install-time clone behavior appears (case-insensitive exact URL match).                                                                                                                                                    |
 | `sensitive_file_access_allowlist` | empty         | Sensitive file reads to ignore **per package** (map of package name to list of allowed paths). Supports suffix matching via `*` prefix. E.g. `*.env` matches `/work/.env`. |
-| `nono_canary_secrets_paths`                | empty         | Extra `$HOME`-relative credential paths to plant as **nono** canary decoys, added to the built-in set (e.g. `.vault-token`, `.config/internal-cli/token`). A read of one is flagged as a sensitive-file access. Nono-only (Docker has no decoys). Entries that are absolute or contain `..` are ignored with a warning. Avoid files your package manager reads itself (e.g. `.netrc`). |
 | `baseline_overrides`          | none          | Pin baseline versions **per package** via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines.                                                                                                                                       |
 | `baseline_count`              | `2`           | How many historical baselines to compare against.                                                                                                                                                                                                              |
 | `min_baseline_age_hours`      | `72`          | **Per-package** minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default. Values below 24h are clamped to the 24h security floor (with a warning).                                       |
@@ -509,9 +501,6 @@ sensitive_file_access_allowlist:
     - "*.env"
   my-aws-tool:
     - "*.aws/credentials"
-nono_canary_secrets_paths: # nono only: extra decoy credential files, relative to $HOME
-  - .vault-token
-  - .config/internal-cli/token
 ```
 
 ### Config loading behavior
@@ -526,52 +515,22 @@ nono_canary_secrets_paths: # nono only: extra decoy credential files, relative t
 | Mode                 | `GYRSEEK_SANDBOX` | Notes                                                                |
 | -------------------- | ----------------- | -------------------------------------------------------------------- |
 | **Docker** (default) | `docker`          | Safer default. Requires the Docker CLI and a running daemon; if either is missing, `gyrseek` stops at startup with exit code 1 and says which. |
-| **nono**             | `nono`            | Kernel-enforced sandbox using Landlock (Linux) or Seatbelt (macOS). **(Experimental — use at your own risk)** |
 | **Host**             | `host`            | Fastest, **no isolation and zero protection (detection only)**. This mode exists purely for running in isolated environments — see warning below. |
 
 ```bash
 GYRSEEK_SANDBOX=docker ./target/release/gyrseek npm install
-GYRSEEK_SANDBOX=nono   ./target/release/gyrseek uv pip install requests
 GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 ```
 
 - If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
 - ⚠️ **Host mode provides no protection, only detection.** There is no sandbox at all: the probe runs the package (the unvetted candidate included) directly on your machine as your user, with your filesystem, network and environment. If the package is malicious it has already executed by the time `gyrseek` reports it; the block only stops the follow-up install. The trace has no integrity protection either, since the payload runs as the same user that reads it. Run it only in a very isolated, disposable environment with no secrets, no credentials and no access to internal networks; the environment itself must be the sandbox. Never on a developer laptop or any machine holding real credentials.
 
-### nono configuration
-
-> [!WARNING]
-> **The `nono` backend is currently in an experimental phase and should be used at your own risk.**
-> While hardened with Landlock/Seatbelt kernel capabilities, scoped domain egress, canary traps, and execution shims, native kernel sandboxing runs directly on the host rather than inside an isolated container. For untrusted packages in production or mission-critical environments, the default `docker` runner remains the recommended choice.
-
-- `GYRSEEK_SANDBOX=nono` runs probes under [`nono`](https://github.com/nolabs-ai/nono), providing kernel-enforced capability sandboxing via Linux Landlock (kernel 5.13+ for filesystem, 6.7+ for network egress) and macOS Seatbelt without requiring Docker or root privileges.
-- **Two-Phase Scoped Network Egress:** In `trace_install_matrix`, vetted baseline probes (older historical versions meeting the age gate) run first with unrestricted network egress to discover legitimate registry, CDN, and dependency endpoints. Candidate probes (and standalone `trace_install` calls) are then strictly confined via `--allow-domain` to official registries (plus environment registries) and the harvested baseline domains. Outbound attempts to undeclared domains (e.g. Bun downloads from GitHub Releases, C2 beacons, cloud metadata endpoints) are blocked at the network level and recorded in audit logs. Note that baseline-harvested domains are trusted for the candidate; if an older baseline version was itself compromised, its contacted domain would be inherited into the candidate's allowlist. On Linux, scoped network egress enforcement requires Linux kernel 6.7+ (Landlock ABI v4+); on older kernels, filesystem isolation is active but network egress filtering is unavailable. Domain filtering is disabled by default on WSL2.
-- **OS-Level Filesystem & Resource Confinement:**
-  - **macOS:** An ephemeral Seatbelt profile blocks access to `/tmp`, `/private/tmp`, and user cache directories (`/var/folders/.../C/`), preventing install scripts from accessing browser, IDE, Slack, or credential caches.
-  - **Linux:** Landlock drops the `system_write_linux` group (denying write access to host `/tmp`) while preserving required pseudo-devices (`/dev/null`, `/dev/zero`, etc.). Linux probes also enforce cgroups v2 resource limits (`--memory 2g --max-processes 256`) when nono can apply them. They need a delegated systemd user session, which CI runners and minimal containers lack; `gyrseek` probes this once at startup and, if nono refuses, prints a warning and runs the probes without those limits.
-- **Telemetry & Detection (not full parity with Docker):** verified against nono 0.81.0 on macOS, nono's audit log records only the top-level command, network connections, and session start/end — **no child-process exec events and no file-denial events**. Consequences:
-  - Exec detection depends on the PATH shims below plus the `install_script` artifact signal; an install script that runs `node`, `python3`, `sh`, or an absolute-path binary (e.g. `/usr/bin/curl`) with no new network endpoint is **not** seen as a process execution. Use Docker when exec-based detection matters.
-  - Access the sandbox blocks (e.g. the real `~/.ssh`, `~/.aws`) is prevented but not reported by nono, so it leaves no trace in the diff. Home-relative lookups (`$HOME`, `os.homedir()`, `Path.home()`) land on the canaries below; hardcoded absolute paths do not. The macOS kernel does log these denials to the unified log, but gyrseek does not consume it yet (see `docs/OPEN_FINDINGS.md` #399).
-  - **Reduced-coverage notice:** selecting nono prints a one-line notice at startup listing what it does not detect (see above), so a clean result isn't mistaken for Docker-level coverage.
-  - **Toolchain downloads fail fast:** the probe sets `RUSTUP_TOOLCHAIN`, `UV_PYTHON_DOWNLOADS=never` and `GOTOOLCHAIN=local` so host rustup/uv/Go cannot download a toolchain into the sandbox home (which would show up as new binary artifacts). A build that genuinely needs one fails with a clear tool error instead.
-  - **Canary Traps:** Decoy FIFO pipes placed at `.env`, `~/.aws/credentials`, `~/.ssh/id_rsa`, `~/.npmrc` (skipped for npm/pnpm), `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `~/.pypirc`, `~/.git-credentials`, `~/.ssh/id_ed25519`, `~/.ssh/id_ecdsa`, `~/.aws/config`, gcloud `application_default_credentials.json`, and Azure `msal_token_cache.json`/`accessTokens.json` intercept unauthorized file reads, serve benign decoy tokens, and inject synthetic `openat` events into the trace, triggering gyrseek's sensitive file access detection.
-  - **PATH Shims:** Prepended executable shims for droppers (`bun`, `deno`, `git`, `curl`, `wget`) capture full argument lists without truncation and synthesize `execve` events into the trace for version-to-version signature diffing.
-  - **Supervisor Diagnostics Parsing:** Intercepts Landlock/Seatbelt access denials from `nono` stderr and translates them into synthetic trace events.
-  - **Host-Side Post-Install Artifact Scan:** Recursively walks the target installation directory, identifies magic bytes (`\x7fELF`, Mach-O, PE, `.pth` executable script patterns), and emits structured inventory events into the trace for `classify_inventory_lines`.
-- `GYRSEEK_NONO_PATH` specifies a custom binary path (defaults to searching `PATH`).
-- nono keeps its audit state under `$XDG_STATE_HOME` (default `~/.local/state`, then `gyrseek_nono`); it must be writable. On macOS it must also not be under `/private` (includes `/tmp`, `/var/folders`), which nono's base policy already grants — nono's own error is shown if it is.
-- `nono` **0.81.0 or newer** is required. At startup `gyrseek` checks `nono --version` and exits with code 1 and an explicit error if nono is missing, `GYRSEEK_NONO_PATH` is not an existing absolute path, the binary is not a working nono, its version cannot be read, or it is older than 0.81.0. Upgrade with `just install-nono` or `cargo install nono-cli --version 0.81.0 --locked --force`. A nono newer than the 0.81.x series is accepted with a warning, because its audit-log format or flags may differ.
-- Startup also runs `nono setup --check-only` (the host must support the sandbox) and a short **self-test** through the real nono pipeline. The self-test confirms the sandbox still blocks a read outside its directories, a canary decoy fires, a PATH shim records a command, and the audit log parses. If any check fails, `gyrseek` exits 1 and refuses to use nono.
-- Every nono probe's audit log is verified with `nono audit verify` before it is trusted; a log that does not verify fails the scan closed. `gyrseek` sets `NONO_NO_UPDATE_CHECK=1` on its nono calls so nono makes no update-check network request during a scan.
-- For an in-depth technical comparison of boundaries, telemetry, and isolation nuances between Docker and Nono, see [`docs/SANDBOX_COMPARISON.md`](docs/SANDBOX_COMPARISON.md).
-
 ### Platform support matrix
 
 | Mode      | macOS (Docker Desktop)                                   | Linux host/VM                                                |
 | --------- | -------------------------------------------------------- | ------------------------------------------------------------ |
 | `docker`  | Supported                                                | Supported                                                    |
-| `nono` (experimental) | Supported (uses macOS Seatbelt)                  | Supported (uses Linux Landlock)                              |
-| `host`    | Supported (requires local `strace`)                      | Supported (requires local `strace`)                          |
+| `host`    | **Not supported** (`strace` has no macOS build)          | Supported (requires local `strace`)                          |
 
 ### Scanner image configuration
 
@@ -690,10 +649,10 @@ Details worth knowing once you're past the basics.
 
 See [`docs/DOCKER_SECURITY.md`](docs/DOCKER_SECURITY.md) for the canonical reference on Docker sandbox hardening, including:
 
-- **Seccomp profile** — embedded in `src/sandbox.rs`, enabled by default, materialized to a temp file at runtime. Denies high-risk syscalls while preserving network access for package managers.
-- **AppArmor profile** — embedded in `src/sandbox.rs`, disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`); enable explicitly with `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`. Loaded via `apparmor_parser` at runtime. Requires `apparmor-utils` + prebuilt scanner image on Linux. Falls back with a warning on macOS. Recommended for stronger path-based protection.
+- **Seccomp profile** — embedded in `src/sandbox.rs`, enabled by default, materialized to a temp file at runtime. Denies high-risk syscalls — notably `io_uring`, which would otherwise let a package perform file I/O invisible to `strace` — while preserving network access for package managers. Active on every platform, including macOS Docker Desktop and WSL2, because it is enforced by the container's Linux kernel rather than the host OS. **This is the layer detection integrity depends on; do not disable it.**
+- **AppArmor profile** — embedded in `src/sandbox.rs`, disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`); enable explicitly with `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`. Loaded via `apparmor_parser` at runtime. **Native Linux hosts only** (requires `apparmor-utils` + a prebuilt scanner image): permanently unavailable on macOS, where no `apparmor_parser` exists and Docker Desktop's LinuxKit kernel lacks the AppArmor LSM — gyrseek warns once and falls back to Docker's default profile. Recommended on Linux for stronger path-based protection, but marginal for supply-chain detection; see [Is seccomp enough, or is AppArmor required?](docs/DOCKER_SECURITY.md#is-seccomp-enough-or-is-apparmor-required).
 - **Capabilities** — `SYS_PTRACE` added for cross-UID strace; `no-new-privileges` enabled.
-- **Unprivileged payload** — traced install runs as unprivileged user; trace logs are root-owned.
+- **Unprivileged payload** — traced install runs as unprivileged user; trace logs are root-owned. On native Linux the bind mount enforces that; on macOS Docker Desktop it does not, so the payload could alter its own trace (see `docs/OPEN_FINDINGS.md` #411).
 - **Validation checklist**, troubleshooting, backout plan, and current hardening limitations.
 
 ## Testing
