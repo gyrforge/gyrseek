@@ -22,7 +22,7 @@ New skills added under `.agents/skills/` are automatically picked up by all tool
 ## Sandbox Mode
 - Default: `GYRSEEK_SANDBOX=docker`
 - Kernel Capability: `GYRSEEK_SANDBOX=nono` (Landlock LSM on Linux 5.13+, Seatbelt on macOS; experimental backend — use at your own risk. Features scoped registry/baseline domain egress, FIFO canary traps, PATH shims for dropper command tracking, and host-side artifact scanning with zero Docker dependency)
-- Fallback: `GYRSEEK_SANDBOX=host` (reduced safety)
+- Fallback: `GYRSEEK_SANDBOX=host` (no isolation, detection only; run only in very isolated, disposable, secret-free environments)
 - Initialization failure is fail-closed (process exits non-zero).
 
 ## Sandbox Security & Hardening

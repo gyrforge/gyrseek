@@ -40,7 +40,7 @@ This tool was created by [Brandon Chuah](https://www.linkedin.com/in/brandonccl/
 
 Our goal is not to compete with existing vendors. Instead, we want to give open source maintainers and small businesses, especially those that might not be able to afford expensive commercial software supply chain tooling, a practical way to address the kinds of supply chain issues highlighted by incidents such as Shai-Hulud.
 
-The tool works out of the box and requires no proxy configuration, as long as Docker is installed. It can be run in host mode, but please note that host mode is only intended for isolated sandbox environments where secrets and environment variables are not present, making it better suited for testing and validation.
+The tool works out of the box and requires no proxy configuration, as long as Docker is installed. A `host` mode exists, but it provides **no protection, only detection**: every probe, including the candidate version being vetted, runs the package's install scripts directly on your machine with your user's files, credentials and environment variables, before `gyrseek` can say anything. A block only stops the follow-up real install; it cannot undo what the probe already ran. Run it only in a **very isolated** situation: a disposable environment (throwaway VM or ephemeral CI runner) that holds no secrets or credentials and has no route to internal networks, where that environment itself is the sandbox. Never on a developer laptop or any machine with real credentials.
 
 We welcome feedback and suggestions to this repository.
 
@@ -52,7 +52,7 @@ We welcome feedback and suggestions to this repository.
 - Network access to package registries (PyPI, npm)
 - The package managers you want to wrap (`uv`, `pip`, `poetry`, `npm`, `pnpm`)
 - **Docker CLI** on your `PATH` (the default, safer sandbox mode)
-- `strace` on your `PATH` only if you use the reduced-safety `host` mode
+- `strace` on your `PATH` only if you use the detection-only `host` mode (no isolation)
 
 ### 2. Build
 
@@ -524,7 +524,7 @@ nono_canary_secrets_paths: # nono only: extra decoy credential files, relative t
 | -------------------- | ----------------- | -------------------------------------------------------------------- |
 | **Docker** (default) | `docker`          | Safer default. Requires Docker CLI.                                  |
 | **nono**             | `nono`            | Kernel-enforced sandbox using Landlock (Linux) or Seatbelt (macOS). **(Experimental — use at your own risk)** |
-| **Host**             | `host`            | Fastest, **reduced safety** — see warning below.                     |
+| **Host**             | `host`            | Fastest, **no isolation and zero protection (detection only)**. This mode exists purely for running in isolated environments — see warning below. |
 
 ```bash
 GYRSEEK_SANDBOX=docker ./target/release/gyrseek npm install
@@ -533,7 +533,7 @@ GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 ```
 
 - If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
-- ⚠️ **Host mode does not provide meaningful isolation.** If the package is malicious, you are effectively running it directly on your machine and only getting a warning from `gyrseek`. Use it only for local development or environments without Docker.
+- ⚠️ **Host mode provides no protection, only detection.** There is no sandbox at all: the probe runs the package (the unvetted candidate included) directly on your machine as your user, with your filesystem, network and environment. If the package is malicious it has already executed by the time `gyrseek` reports it; the block only stops the follow-up install. The trace has no integrity protection either, since the payload runs as the same user that reads it. Run it only in a very isolated, disposable environment with no secrets, no credentials and no access to internal networks; the environment itself must be the sandbox. Never on a developer laptop or any machine holding real credentials.
 
 ### nono configuration
 
