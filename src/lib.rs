@@ -1518,6 +1518,37 @@ pub struct GyrSeek {
     manager: String,
 }
 
+/// Builds the sandbox runner on first use, so commands that are forwarded without a scan
+/// (for example `uv venv`) never pay for, or fail on, sandbox initialization. A scan that
+/// needs the sandbox still fails closed: if initialization fails, gyrseek exits 1.
+struct LazyRunner<'a> {
+    runner: std::cell::OnceCell<Box<dyn SandboxRunner>>,
+    danger_disable_seccomp: bool,
+    nono_canary_secrets_paths: &'a [String],
+}
+
+impl LazyRunner<'_> {
+    fn get(&self) -> &dyn SandboxRunner {
+        self.runner
+            .get_or_init(|| {
+                if env::var("GYRSEEK_TEST_BYPASS_RUNNER_INIT").ok().as_deref() == Some("1") {
+                    return Box::new(NoopRunner) as Box<dyn SandboxRunner>;
+                }
+                match build_runner_from_env(
+                    self.danger_disable_seccomp,
+                    self.nono_canary_secrets_paths,
+                ) {
+                    Ok(runner) => runner,
+                    Err(e) => {
+                        println!("❌ [gyrseek] Sandbox initialization failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            })
+            .as_ref()
+    }
+}
+
 struct NoopRunner;
 impl SandboxRunner for NoopRunner {
     fn trace_install(&self, _: &str, _: &str, _: &str) -> Result<String, String> {
@@ -1887,16 +1918,10 @@ pub async fn run(args: Vec<String>) {
     }
 
     let mut scan_cache: HashMap<String, ScanReport> = HashMap::new();
-    let runner = if env::var("GYRSEEK_TEST_BYPASS_RUNNER_INIT").ok().as_deref() == Some("1") {
-        Box::new(NoopRunner) as Box<dyn SandboxRunner>
-    } else {
-        match build_runner_from_env(danger_disable_seccomp, &policy.nono_canary_secrets_paths) {
-            Ok(r) => r,
-            Err(e) => {
-                println!("❌ [gyrseek] Sandbox initialization failed: {}", e);
-                std::process::exit(1);
-            }
-        }
+    let runner = LazyRunner {
+        runner: std::cell::OnceCell::new(),
+        danger_disable_seccomp,
+        nono_canary_secrets_paths: &policy.nono_canary_secrets_paths,
     };
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("lock") {
@@ -1917,7 +1942,7 @@ pub async fn run(args: Vec<String>) {
             );
             if scan_targets(
                 &mut scan_cache,
-                runner.as_ref(),
+                runner.get(),
                 &eye.manager,
                 targets,
                 &policy,
@@ -1952,7 +1977,7 @@ pub async fn run(args: Vec<String>) {
 
         if scan_targets(
             &mut scan_cache,
-            runner.as_ref(),
+            runner.get(),
             &eye.manager,
             lock_packages,
             &policy,
@@ -1995,7 +2020,7 @@ pub async fn run(args: Vec<String>) {
 
         if scan_targets(
             &mut scan_cache,
-            runner.as_ref(),
+            runner.get(),
             &eye.manager,
             lock_packages,
             &policy,
@@ -2035,7 +2060,7 @@ pub async fn run(args: Vec<String>) {
                 .collect();
             let pins = match scan_targets(
                 &mut scan_cache,
-                runner.as_ref(),
+                runner.get(),
                 &eye.manager,
                 targets,
                 &policy,
@@ -2084,7 +2109,7 @@ pub async fn run(args: Vec<String>) {
         );
         if scan_targets(
             &mut scan_cache,
-            runner.as_ref(),
+            runner.get(),
             &eye.manager,
             lock_packages,
             &policy,
@@ -2171,7 +2196,7 @@ pub async fn run(args: Vec<String>) {
 
     let report = scan_with_cache(
         &mut scan_cache,
-        runner.as_ref(),
+        runner.get(),
         &eye.manager,
         &pkg_name,
         &tgt_version,
