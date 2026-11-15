@@ -209,7 +209,7 @@ pub(crate) fn build_runner_from_env(
         }
         "host" => {
             eprintln!(
-                "⚠️ [gyrseek] CRITICAL WARNING: Running in HOST mode (GYRSEEK_SANDBOX=host). Container isolation is completely INACTIVE. Packages will execute directly on your machine!"
+                "⚠️ [gyrseek] CRITICAL WARNING: Running in HOST mode (GYRSEEK_SANDBOX=host). Container isolation is completely INACTIVE: packages (including the version being vetted) execute directly on your machine with your credentials and environment, and gyrseek can only detect, not prevent!"
             );
             if danger_disable_seccomp {
                 eprintln!(
