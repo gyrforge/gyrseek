@@ -163,7 +163,7 @@ Both backends inspect installed filesystem artifacts to detect files written to 
 | **Process Tracking** | Global `ptrace` intercepting all `execve`/`execveat` | `$PATH` shims for droppers + audit log command events | Docker has broader catch-all for unknown binaries |
 | **Credential Probing** | Passive syscall trace (`openat` with `ret >= 0`) | Active FIFO `CanaryTrap` decoys + supervisor denial logs | **Parity** (both trip `sensitive_file_read` anomaly check) |
 | **Artifact Scanning** | In-container shell pipeline using `file -b` | Host-side Rust walker reading binary magic bytes | **Parity** (identical classifier output) |
-| **Resource Limits** | Container memory limit via `GYRSEEK_MEM_LIMIT` (default 2GB) | Linux cgroups v2 (`--memory 2g --max-processes 256`) on Linux; OS defaults on macOS | Both prevent fork-bombs and native build OOMs on Linux |
+| **Resource Limits** | Container memory limit via `GYRSEEK_MEM_LIMIT` (default 2GB) | Linux cgroups v2 (`--memory 2g --max-processes 256`) on Linux when a delegated user session exists (otherwise skipped with a warning); OS defaults on macOS | Both prevent fork-bombs and native build OOMs on Linux |
 | **Host Exposure** | Zero host exposure (isolated container namespaces) | Host-level execution gated by kernel capabilities | **Docker provides stronger containment** if sandbox fails |
 
 ---

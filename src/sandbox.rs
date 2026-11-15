@@ -200,9 +200,7 @@ pub(crate) fn build_runner_from_env(
 
     let runner: Result<Box<dyn SandboxRunner>, String> = match mode.as_str() {
         "docker" => {
-            if !docker_available() {
-                return Err("docker is not available but GYRSEEK_SANDBOX=docker".to_string());
-            }
+            docker_preflight("docker", std::env::consts::OS)?;
             Ok(Box::new(DockerRunner {
                 danger_disable_seccomp,
             }))
@@ -219,11 +217,19 @@ pub(crate) fn build_runner_from_env(
             Ok(Box::new(HostRunner))
         }
         "nono" => {
-            if !nono_available() {
-                return Err(
-                    "nono is not available on PATH or ~/.cargo/bin (install with 'cargo install nono-cli' or 'just install') but GYRSEEK_SANDBOX=nono".to_string(),
+            let nono_bin = nono_preflight()?;
+            let limit_args = nono_resource_limit_args();
+            let resource_limits = nono_resource_limits_supported(&nono_bin, &limit_args);
+            if !limit_args.is_empty() && !resource_limits {
+                eprintln!(
+                    "⚠️ [gyrseek] Warning: nono cannot apply cgroup resource limits here (they need a delegated systemd user session); probes run without --memory/--max-processes."
                 );
             }
+            let runner = NonoRunner {
+                resource_limits,
+                nono_canary_secrets_paths: nono_canary_secrets_paths.to_vec(),
+            };
+            runner.self_test()?;
             if danger_disable_seccomp {
                 eprintln!(
                     "⚠️ [gyrseek] Warning: --danger-disable-seccomp has no effect in nono mode (nono enforces kernel sandboxing via Landlock/Seatbelt)."
@@ -232,9 +238,7 @@ pub(crate) fn build_runner_from_env(
             eprintln!(
                 "ℹ️ [gyrseek] nono sandbox (experimental): reduced detection coverage vs Docker. Exec detection covers only the git/bun/deno/curl/wget shims and npm install hooks; blocked file reads are not recorded; credential probes are caught by canary decoys only. Use Docker for full exec and file-read tracing."
             );
-            Ok(Box::new(NonoRunner {
-                nono_canary_secrets_paths: nono_canary_secrets_paths.to_vec(),
-            }))
+            Ok(Box::new(runner))
         }
         _ => Err(format!(
             "Unsupported GYRSEEK_SANDBOX mode '{}'. Supported values: docker, host, nono",
@@ -326,6 +330,9 @@ impl SandboxRunner for DockerRunner {
 
 #[derive(Default)]
 pub(crate) struct NonoRunner {
+    /// Whether nono accepts the cgroup limits (`--memory`/`--max-processes`) on this host; see
+    /// [`nono_resource_limits_supported`].
+    resource_limits: bool,
     /// Extra `$HOME`-relative canary paths from the `nono_canary_secrets_paths` config key.
     nono_canary_secrets_paths: Vec<String>,
 }
@@ -375,17 +382,208 @@ pub(crate) fn resolve_nono_bin() -> Option<std::path::PathBuf> {
     None
 }
 
-pub(crate) fn nono_available() -> bool {
+/// Oldest nono gyrseek accepts. Keep in sync with `nono_version` in the justfile (a unit test
+/// enforces this).
+const MIN_NONO_VERSION: &str = "0.81.0";
+
+/// Stops nono from running its update check, which makes a network request and costs about
+/// 0.7s per call (gyrseek uses a fresh state directory per probe, so nothing is ever cached).
+const NONO_NO_UPDATE_CHECK: &str = "NONO_NO_UPDATE_CHECK";
+
+/// The `(major, minor)` series gyrseek is tested against. A newer nono is accepted, with a warning.
+const TESTED_NONO_SERIES: (u64, u64) = (0, 81);
+
+/// Reads the version from the first line of `nono --version` (`nono 0.81.0`). Later lines,
+/// such as an "update available" banner, are ignored so they cannot masquerade as the version.
+fn parse_nono_version(output: &str) -> Result<semver::Version, String> {
+    let first_line = output.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let mut tokens = first_line.split_whitespace();
+    match (tokens.next(), tokens.next()) {
+        (Some("nono"), Some(version)) => semver::Version::parse(version.trim_start_matches('v'))
+            .map_err(|e| {
+                format!("could not parse nono version '{version}' from `nono --version`: {e}")
+            }),
+        _ => Err(format!(
+            "unexpected `nono --version` output: {:?}",
+            first_line.trim()
+        )),
+    }
+}
+
+fn check_nono_version(output: &str) -> Result<semver::Version, String> {
+    let found = parse_nono_version(output)?;
+    let required = semver::Version::parse(MIN_NONO_VERSION).expect("valid constant");
+    if found < required {
+        return Err(format!(
+            "nono {found} is too old: gyrseek requires nono >= {MIN_NONO_VERSION}. Upgrade with `cargo install nono-cli --version {MIN_NONO_VERSION} --locked --force` (or `just install-nono`)"
+        ));
+    }
+    Ok(found)
+}
+
+fn nono_newer_than_tested_warning(found: &semver::Version) -> Option<String> {
+    ((found.major, found.minor) > TESTED_NONO_SERIES).then(|| {
+        format!(
+            "nono {found} is newer than the {}.{}.x series gyrseek is tested with; audit-log format or flags may differ. Detection results may be incomplete.",
+            TESTED_NONO_SERIES.0, TESTED_NONO_SERIES.1
+        )
+    })
+}
+
+/// Fails fast, with a message naming the actual problem, unless a working nono of at least
+/// `MIN_NONO_VERSION` that reports sandbox support (`nono setup --check-only`) is found.
+pub(crate) fn nono_preflight() -> Result<std::path::PathBuf, String> {
     let Some(nono_bin) = resolve_nono_bin() else {
+        return Err(match std::env::var("GYRSEEK_NONO_PATH") {
+            Ok(p) if !p.trim().is_empty() => format!(
+                "GYRSEEK_NONO_PATH='{}' is not an absolute path to an existing file",
+                p.trim()
+            ),
+            _ => "nono is not installed: not found on PATH or ~/.cargo/bin (install with `cargo install nono-cli --locked` or `just install-nono`)".to_string(),
+        });
+    };
+    let output = Command::new(&nono_bin)
+        .arg("--version")
+        .env(NONO_NO_UPDATE_CHECK, "1")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to run `{} --version`: {e}", nono_bin.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`{} --version` failed ({}); this does not look like a working nono",
+            nono_bin.display(),
+            output.status
+        ));
+    }
+    let found = check_nono_version(&String::from_utf8_lossy(&output.stdout))?;
+    if let Some(warning) = nono_newer_than_tested_warning(&found) {
+        eprintln!("⚠️ [gyrseek] Warning: {warning}");
+    }
+
+    let setup = Command::new(&nono_bin)
+        .args(["setup", "--check-only"])
+        .env(NONO_NO_UPDATE_CHECK, "1")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to run `nono setup --check-only`: {e}"))?;
+    if !setup.status.success() {
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&setup.stdout),
+            String::from_utf8_lossy(&setup.stderr)
+        );
+        let detail: Vec<&str> = combined
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        let tail = detail[detail.len().saturating_sub(4)..].join(" | ");
+        return Err(format!(
+            "`nono setup --check-only` reports that nono cannot sandbox on this system: {tail}"
+        ));
+    }
+    Ok(nono_bin)
+}
+
+/// Runs `nono audit verify <session>` against `state_path`, with a minimal environment.
+/// Returns nono's complaint (or the reason it could not run) when the log does not verify.
+fn verify_nono_audit(nono_bin: &Path, session: &str, state_path: &Path) -> Result<(), String> {
+    let output = Command::new(nono_bin)
+        .args(["audit", "verify", session])
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        // `nono audit verify` exits non-zero without a message when HOME is unset.
+        .env("HOME", std::env::var("HOME").unwrap_or_default())
+        .env(NONO_NO_UPDATE_CHECK, "1")
+        .env("XDG_STATE_HOME", state_path)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to run `nono audit verify`: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let detail = stderr.trim();
+    Err(if detail.is_empty() {
+        format!("no error output ({})", output.status)
+    } else {
+        detail.to_string()
+    })
+}
+
+/// nono's own error when it could not set up the sandbox (for example the cgroup limits need a
+/// delegated systemd user session that a CI runner does not have). In that case nono exits
+/// before running the install but has already written `session_started` to its audit log, so
+/// without this check the probe would look like a valid, uneventful install.
+fn nono_start_failure(stderr: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("Sandbox initialization failed"))
+        .map(str::to_string)
+}
+
+/// True when nono accepts `limit_args` (`--memory`/`--max-processes`) on this host. They need a
+/// delegated cgroup v2 user session, which CI runners and minimal containers lack; nono then
+/// refuses to start. Probed once at startup with a no-op command so the limits are applied
+/// where they work and skipped, with a warning, where they do not.
+fn nono_resource_limits_supported(nono_bin: &Path, limit_args: &[String]) -> bool {
+    if limit_args.is_empty() {
+        return false;
+    }
+    let Ok(dir) = tempfile::tempdir() else {
         return false;
     };
-    Command::new(&nono_bin)
-        .arg("--version")
+    let state = dir.path().join("state");
+    if std::fs::create_dir_all(&state).is_err() {
+        return false;
+    }
+    Command::new(nono_bin)
+        .current_dir(dir.path())
+        .env_clear()
+        .env(NONO_NO_UPDATE_CHECK, "1")
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("HOME", std::env::var("HOME").unwrap_or_default())
+        .env("XDG_STATE_HOME", &state)
+        .args(["run", "--no-rollback-prompt", "--silent", "--allow"])
+        .arg(dir.path())
+        .args(limit_args)
+        .args(["--", "true"])
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|status| status.success())
+}
+
+/// Internal pseudo-manager that makes the nono probe run `package` as a `sh -c` script, used
+/// only by the startup self-test.
+const NONO_SELFTEST_MANAGER: &str = "gyrseek-selftest";
+
+/// Judges the trace of the self-test probe (see [`NonoRunner::self_test`]).
+fn evaluate_nono_self_test(trace: &str) -> Result<(), String> {
+    let artifacts = trace
+        .split("=== gyrseek_artifacts ===")
+        .nth(1)
+        .unwrap_or("");
+    let mut problems = Vec::new();
+    if artifacts.contains("/work/leak.marker\0") {
+        problems.push("the sandbox did not block a read of a file outside its allowed directories");
+    }
+    if !trace.contains("openat(AT_FDCWD, \"/work/.env\"") {
+        problems.push("a read of a canary decoy was not recorded");
+    }
+    if !trace.contains("execve(\"/usr/bin/git\"") {
+        problems.push("a command run through a PATH shim was not recorded");
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "nono self-test failed, refusing to use nono: {}",
+            problems.join("; ")
+        ))
+    }
 }
 
 fn find_in_path(cmd: &str) -> Option<std::path::PathBuf> {
@@ -1213,6 +1411,31 @@ pub(crate) fn parse_nono_diagnostics_denials(stderr: &[u8]) -> Vec<String> {
 }
 
 impl NonoRunner {
+    /// Runs a harmless probe through the real nono pipeline and checks that the sandbox still
+    /// blocks reads outside its directories, a canary decoy fires, a PATH shim records a
+    /// command, and the audit log parses and verifies. Catches a nono upgrade or host change
+    /// that silently weakens the sandbox before any package is scanned.
+    pub(crate) fn self_test(&self) -> Result<(), String> {
+        let home =
+            std::env::var("HOME").map_err(|_| "nono self-test needs HOME to be set".to_string())?;
+        let mut sentinel = tempfile::Builder::new()
+            .prefix(".gyrseek-selftest-")
+            .tempfile_in(&home)
+            .map_err(|e| {
+                format!("nono self-test could not create a sentinel file in {home}: {e}")
+            })?;
+        std::io::Write::write_all(&mut sentinel, b"gyrseek-selftest")
+            .map_err(|e| format!("nono self-test could not write its sentinel file: {e}"))?;
+        let script = format!(
+            "cat {} >/dev/null 2>&1 && echo leaked > \"$HOME/leak.marker\"; cat \"$HOME/.env\" >/dev/null 2>&1; git --version >/dev/null 2>&1; true",
+            shell_single_quoted(&sentinel.path().to_string_lossy())
+        );
+        let (trace, _) = self
+            .trace_install_with_domains(NONO_SELFTEST_MANAGER, &script, "selftest", Some(&[]))
+            .map_err(|e| format!("nono self-test could not run its probe: {e}"))?;
+        evaluate_nono_self_test(&trace)
+    }
+
     pub(crate) fn trace_install_with_domains(
         &self,
         manager: &str,
@@ -1253,7 +1476,18 @@ impl NonoRunner {
             .map_err(|e| format!("failed to create temp nono state dir: {e}"))?;
         let state_path = state_temp_dir.path();
 
-        let (cmd_bin, cmd_args) = if is_npm_family_manager(manager) {
+        // The self-test passes its whole script as `package`; keep it out of error messages.
+        let probe_label = if manager == NONO_SELFTEST_MANAGER {
+            "nono self-test".to_string()
+        } else {
+            format!("{package}@{version}")
+        };
+        let (cmd_bin, cmd_args) = if manager == NONO_SELFTEST_MANAGER {
+            (
+                "sh".to_string(),
+                vec!["-c".to_string(), package.to_string()],
+            )
+        } else if is_npm_family_manager(manager) {
             let mut args = vec![
                 npm_family_install_subcommand(manager).to_string(),
                 format!("{}@{}", package, version),
@@ -1378,8 +1612,9 @@ impl NonoRunner {
             nono_cmd.args(["-p", &profile_path.to_string_lossy()]);
         }
 
-        let resource_args = nono_resource_limit_args();
-        nono_cmd.args(&resource_args);
+        if self.resource_limits {
+            nono_cmd.args(nono_resource_limit_args());
+        }
 
         if let Some(extra_domains) = domain_constraint {
             let mut allowed_domains = default_allowed_domains_for_manager(manager);
@@ -1458,6 +1693,7 @@ impl NonoRunner {
         nono_cmd.args(&cmd_args);
 
         nono_cmd.env_clear();
+        nono_cmd.env(NONO_NO_UPDATE_CHECK, "1");
         nono_cmd.env("PATH", &shimmed_path);
         if let Ok(home) = std::env::var("HOME") {
             nono_cmd.env("HOME", home);
@@ -1470,12 +1706,19 @@ impl NonoRunner {
             .output()
             .map_err(|e| format!("failed to execute nono: {e}"))?;
 
+        if let Some(reason) = nono_start_failure(&output.stderr) {
+            return Err(format!(
+                "nono failed to start the sandbox for '{probe_label}', so the install never ran: {reason}"
+            ));
+        }
+
         let canary_reads = canary_trap.teardown();
         let exec_events = path_shims.read_exec_events();
         let diagnostic_denials = parse_nono_diagnostics_denials(&output.stderr);
 
         let audit_dir = state_path.join("nono").join("audit");
         let mut audit_content = String::new();
+        let mut audit_session = String::new();
         if let Ok(entries) = std::fs::read_dir(&audit_dir) {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
@@ -1484,6 +1727,7 @@ impl NonoRunner {
                         && let Ok(content) = std::fs::read_to_string(&candidate)
                     {
                         audit_content = content;
+                        audit_session = entry.file_name().to_string_lossy().to_string();
                         break;
                     }
                 }
@@ -1492,22 +1736,27 @@ impl NonoRunner {
 
         if audit_content.trim().is_empty() {
             return Err(format!(
-                "empty audit log for '{}@{}': nono produced no audit output. Exit code: {:?}, Stderr: {}",
-                package,
-                version,
+                "empty audit log for '{}': nono produced no audit output. Exit code: {:?}, Stderr: {}",
+                probe_label,
                 output.status.code(),
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
+
+        // Fail closed if the recorded log does not verify against nono's hash chain.
+        verify_nono_audit(&nono_bin, &audit_session, state_path).map_err(|detail| {
+            format!(
+                "nono audit log for '{probe_label}' failed integrity verification (session {audit_session}): {detail}"
+            )
+        })?;
 
         let observed_domains = extract_domains_from_nono_audit_log(&audit_content);
 
         let mut trace = parse_nono_audit_log(&audit_content).replace(&target_path, "/work");
         if trace.trim().is_empty() {
             return Err(format!(
-                "empty trace for '{}@{}': parsed trace contained no events. Stderr: {}",
-                package,
-                version,
+                "empty trace for '{}': parsed trace contained no events. Stderr: {}",
+                probe_label,
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
@@ -2540,14 +2789,59 @@ fn announce_apparmor_status() {
     }
 }
 
-fn docker_available() -> bool {
-    Command::new("docker")
+/// Fails fast, before any registry lookup, with a message that says which Docker problem
+/// the user has: CLI missing, daemon not running, or no permission on the daemon socket.
+fn docker_preflight(program: &str, os: &str) -> Result<(), String> {
+    match Command::new(program)
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            return Err(format!(
+                "`{program} --version` failed ({status}); the Docker CLI looks broken"
+            ));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "Docker is not installed: `{program}` was not found on PATH. Install Docker (https://docs.docker.com/get-docker/) or pick another sandbox with GYRSEEK_SANDBOX"
+            ));
+        }
+        Err(e) => return Err(format!("failed to run `{program}`: {e}")),
+    }
+
+    let output = Command::new(program)
+        .args(["info", "--format", "{{.ServerVersion}}"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("failed to run `{program} info`: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(docker_daemon_error_message(
+            &String::from_utf8_lossy(&output.stderr),
+            os,
+        ))
+    }
+}
+
+/// Turns the stderr of a failed `docker info` into an actionable message for `os`.
+fn docker_daemon_error_message(stderr: &str, os: &str) -> String {
+    let detail = stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("no error output");
+    let hint = if stderr.to_ascii_lowercase().contains("permission denied") {
+        "Docker is installed but this user cannot access the Docker daemon socket. On Linux, add your user to the `docker` group and log in again"
+    } else if os == "linux" {
+        "Docker is installed but its daemon is not running or not reachable. Start it, for example `sudo systemctl start docker`"
+    } else {
+        "Docker is installed but its daemon is not running or not reachable. Start Docker Desktop (or your Docker-compatible runtime) and retry"
+    };
+    format!("{hint}. Docker said: {detail}")
 }
 
 fn scanner_image_config(manager: &str) -> ScannerImageConfig {
@@ -3221,8 +3515,8 @@ Stderr: {}",
             .err()
             .expect("should fail");
         assert!(
-            err.contains("nono is not available"),
-            "Error message should indicate nono is not available: {err}"
+            err.contains("GYRSEEK_NONO_PATH") && err.contains("/nonexistent/gyrseek_nono"),
+            "Error message should name the bad GYRSEEK_NONO_PATH: {err}"
         );
     }
 
@@ -3576,6 +3870,281 @@ Stderr: {}",
         assert!(!home.join(".npmrc").exists());
         let accessed = trap.teardown();
         assert!(accessed.is_empty());
+    }
+
+    #[test]
+    fn nono_version_must_be_at_least_the_minimum() {
+        for ok in ["nono 0.81.0\n", "nono 0.82.3", "nono 1.0.0", "nono v0.81.1"] {
+            assert!(super::check_nono_version(ok).is_ok(), "{ok}");
+        }
+        for old in ["nono 0.80.9", "nono 0.78.0\n", "nono 0.81.0-rc.1"] {
+            let err = super::check_nono_version(old).expect_err(old);
+            assert!(err.contains("too old") && err.contains("0.81.0"), "{err}");
+        }
+        for garbage in ["", "garbage", "nono", "nono unknown", "other 0.99.0"] {
+            assert!(super::check_nono_version(garbage).is_err(), "{garbage:?}");
+        }
+    }
+
+    #[test]
+    fn nono_newer_than_tested_series_warns_only_when_newer() {
+        let v = |s: &str| semver::Version::parse(s).unwrap();
+        assert!(super::nono_newer_than_tested_warning(&v("0.81.0")).is_none());
+        assert!(super::nono_newer_than_tested_warning(&v("0.81.9")).is_none());
+        for newer in ["0.82.0", "0.90.1", "1.0.0"] {
+            let w = super::nono_newer_than_tested_warning(&v(newer)).expect(newer);
+            assert!(w.contains(newer) && w.contains("0.81.x"), "{w}");
+        }
+    }
+
+    #[test]
+    fn min_nono_version_matches_justfile_pin() {
+        let justfile = include_str!("../justfile");
+        let pinned = justfile
+            .lines()
+            .find(|l| l.trim_start().starts_with("nono_version"))
+            .and_then(|l| l.split('"').nth(1))
+            .expect("justfile defines nono_version := \"x.y.z\"");
+        assert_eq!(
+            pinned,
+            super::MIN_NONO_VERSION,
+            "update MIN_NONO_VERSION and the justfile nono_version together"
+        );
+    }
+
+    #[test]
+    fn nono_self_test_judges_each_check() {
+        let good = concat!(
+            "execve(\"sh\", [\"sh\", \"-c\", \"script\"], 0x0) = 0\n",
+            "openat(AT_FDCWD, \"/work/.env\", O_RDONLY) = 3\n",
+            "execve(\"/usr/bin/git\", [\"git\", \"--version\"], 0x7ffd00000000) = 0\n",
+            "\n=== gyrseek_artifacts ===\n/work/other\x000\x00data\x00x",
+        );
+        assert!(super::evaluate_nono_self_test(good).is_ok());
+
+        // The script text itself mentions the marker; only the artifact inventory counts.
+        let script_mentions_marker = good.replace("script", "echo > $HOME/leak.marker");
+        assert!(super::evaluate_nono_self_test(&script_mentions_marker).is_ok());
+
+        let leaked = format!("{good}\n/work/leak.marker\x005\x00data\x00leaked");
+        let err = super::evaluate_nono_self_test(&leaked).expect_err("leak");
+        assert!(err.contains("did not block"), "{err}");
+
+        let no_decoy = good.replace("/work/.env", "/work/other");
+        assert!(
+            super::evaluate_nono_self_test(&no_decoy)
+                .expect_err("decoy")
+                .contains("canary decoy")
+        );
+
+        let no_shim = good.replace("/usr/bin/git", "/usr/bin/other");
+        assert!(
+            super::evaluate_nono_self_test(&no_shim)
+                .expect_err("shim")
+                .contains("PATH shim")
+        );
+
+        let err = super::evaluate_nono_self_test("").expect_err("empty");
+        assert!(err.contains("refusing to use nono"), "{err}");
+    }
+
+    /// Writes an executable `#!/bin/sh` script `name` with `body` into `dir`.
+    #[cfg(unix)]
+    fn write_fake_exe(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    const FAKE_NONO_OK: &str =
+        r#"case "$1" in --version) echo "nono 0.81.0";; setup) exit 0;; esac"#;
+
+    #[test]
+    #[cfg(unix)]
+    fn nono_preflight_accepts_a_working_supported_nono() {
+        let dir = tempfile::tempdir().unwrap();
+        let nono = write_fake_exe(dir.path(), "nono", FAKE_NONO_OK);
+        let _env = SandboxEnvVarGuard::set("GYRSEEK_NONO_PATH", &nono.to_string_lossy());
+        assert_eq!(super::nono_preflight(), Ok(nono));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn nono_preflight_rejects_old_broken_and_unsandboxable_nono() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases = [
+            ("old", r#"echo "nono 0.80.0""#, "too old"),
+            ("not_nono", "exit 1", "does not look like a working nono"),
+            (
+                "garbage",
+                r#"echo "hello""#,
+                "unexpected `nono --version` output",
+            ),
+            (
+                "no_sandbox",
+                r#"case "$1" in --version) echo "nono 0.81.0";; setup) echo "Seatbelt NOT available"; exit 1;; esac"#,
+                "cannot sandbox on this system: Seatbelt NOT available",
+            ),
+        ];
+        for (name, body, expected) in cases {
+            let nono = write_fake_exe(dir.path(), name, body);
+            let _env = SandboxEnvVarGuard::set("GYRSEEK_NONO_PATH", &nono.to_string_lossy());
+            let err = super::nono_preflight().expect_err(name);
+            assert!(err.contains(expected), "{name}: {err}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn verify_nono_audit_passes_its_arguments_and_a_usable_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("seen.txt");
+        let body = format!(
+            r#"echo "$@" > '{0}'; echo "HOME=$HOME UPDATE=$NONO_NO_UPDATE_CHECK STATE=$XDG_STATE_HOME" >> '{0}'"#,
+            out.display()
+        );
+        let nono = write_fake_exe(dir.path(), "nono", &body);
+        // Hold the env lock so no other test changes HOME while this one reads it.
+        let _env = SandboxEnvVarGuard::set("GYRSEEK_TEST_NOOP", "1");
+
+        super::verify_nono_audit(&nono, "abc123", dir.path()).expect("verify should pass");
+
+        let seen = std::fs::read_to_string(&out).unwrap();
+        assert!(seen.starts_with("audit verify abc123"), "{seen}");
+        assert!(seen.contains("UPDATE=1"), "{seen}");
+        assert!(
+            seen.contains(&format!("STATE={}", dir.path().display())),
+            "{seen}"
+        );
+        if let Ok(home) = std::env::var("HOME") {
+            // nono exits non-zero without a message when HOME is unset.
+            assert!(seen.contains(&format!("HOME={home}")), "{seen}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn verify_nono_audit_fails_closed_with_the_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let tampered = write_fake_exe(
+            dir.path(),
+            "tampered",
+            r#"echo "nono: Snapshot error: Audit event leaf hash mismatch at line 1" >&2; exit 1"#,
+        );
+        let err = super::verify_nono_audit(&tampered, "s", dir.path()).expect_err("tampered");
+        assert!(err.contains("leaf hash mismatch"), "{err}");
+
+        let silent = write_fake_exe(dir.path(), "silent", "exit 1");
+        let err = super::verify_nono_audit(&silent, "s", dir.path()).expect_err("silent");
+        assert!(err.contains("no error output"), "{err}");
+
+        let missing = dir.path().join("does-not-exist");
+        assert!(super::verify_nono_audit(&missing, "s", dir.path()).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn docker_preflight_distinguishes_daemon_down_permission_and_broken_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        let ok = write_fake_exe(dir.path(), "ok", "exit 0");
+        assert!(super::docker_preflight(&ok.to_string_lossy(), "linux").is_ok());
+
+        let down = write_fake_exe(
+            dir.path(),
+            "down",
+            r#"case "$1" in --version) exit 0;; info) echo "Cannot connect to the Docker daemon. Is the docker daemon running?" >&2; exit 1;; esac"#,
+        );
+        let err = super::docker_preflight(&down.to_string_lossy(), "macos").expect_err("down");
+        assert!(
+            err.contains("Start Docker Desktop") && err.contains("Cannot connect"),
+            "{err}"
+        );
+
+        let denied = write_fake_exe(
+            dir.path(),
+            "denied",
+            r#"case "$1" in --version) exit 0;; info) echo "permission denied while trying to connect to the Docker daemon socket" >&2; exit 1;; esac"#,
+        );
+        let err = super::docker_preflight(&denied.to_string_lossy(), "linux").expect_err("denied");
+        assert!(err.contains("`docker` group"), "{err}");
+
+        let broken = write_fake_exe(dir.path(), "broken", "exit 3");
+        let err = super::docker_preflight(&broken.to_string_lossy(), "linux").expect_err("broken");
+        assert!(err.contains("looks broken"), "{err}");
+    }
+
+    #[test]
+    fn nono_start_failure_reports_the_sandbox_init_error() {
+        let ci_stderr = b"nono: Sandbox initialization failed: resource: no delegated cgroup v2 subtree for this session (expected a 'user@1000.service' ancestor in '/')\n";
+        let reason = super::nono_start_failure(ci_stderr).expect("init failure");
+        assert!(
+            reason.contains("no delegated cgroup v2 subtree"),
+            "{reason}"
+        );
+
+        // A package's own failure output, or nono's diagnostics, is not a start failure.
+        assert!(super::nono_start_failure(b"npm ERR! code E404\n").is_none());
+        assert!(super::nono_start_failure(br#"{"denials":[],"violations":[]}"#).is_none());
+        assert!(super::nono_start_failure(b"").is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn nono_resource_limits_supported_follows_whether_nono_accepts_the_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let limits = ["--memory".to_string(), "2g".to_string()];
+
+        // Like nono on a host without a delegated cgroup session: refuses to start.
+        let refuses = write_fake_exe(
+            dir.path(),
+            "refuses",
+            r#"case "$*" in *--memory*) echo "nono: Sandbox initialization failed: resource" >&2; exit 1;; esac"#,
+        );
+        assert!(!super::nono_resource_limits_supported(&refuses, &limits));
+
+        let accepts = write_fake_exe(dir.path(), "accepts", "exit 0");
+        assert!(super::nono_resource_limits_supported(&accepts, &limits));
+
+        // Nothing to apply (or nono missing) means no limits.
+        assert!(!super::nono_resource_limits_supported(&accepts, &[]));
+        assert!(!super::nono_resource_limits_supported(
+            &dir.path().join("missing"),
+            &limits
+        ));
+    }
+
+    #[test]
+    fn nono_update_banner_cannot_mask_an_old_version() {
+        // Only the first line is the version; "0.82.0" in the banner must not be read.
+        let out = "nono 0.78.0\nupdate 0.82.0 available (current: 0.78.0)\n";
+        assert!(super::check_nono_version(out).is_err());
+    }
+
+    #[test]
+    fn docker_preflight_reports_missing_cli() {
+        let err =
+            super::docker_preflight("gyrseek-no-such-docker-binary", "macos").expect_err("missing");
+        assert!(err.contains("not installed"), "{err}");
+        assert!(err.contains("GYRSEEK_SANDBOX"), "{err}");
+    }
+
+    #[test]
+    fn docker_daemon_error_message_is_actionable_per_cause() {
+        let down = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?";
+        let mac = super::docker_daemon_error_message(down, "macos");
+        assert!(
+            mac.contains("Docker Desktop") && mac.contains("Cannot connect"),
+            "{mac}"
+        );
+        let linux = super::docker_daemon_error_message(down, "linux");
+        assert!(linux.contains("systemctl start docker"), "{linux}");
+
+        let denied = "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock";
+        assert!(super::docker_daemon_error_message(denied, "linux").contains("`docker` group"));
+
+        assert!(super::docker_daemon_error_message("", "linux").contains("no error output"));
     }
 
     #[test]
