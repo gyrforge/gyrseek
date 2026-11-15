@@ -187,7 +187,7 @@ The codebase has evolved significantly since the initial domain-aware IP diff te
 
 ### `src/sandbox.rs` (27 tests)
 - **Container Constraints**: `docker_enforces_sandbox_constraints` integration test validating seccomp blocking of `process_vm_writev`.
-- **Sandbox Orchestration**: Arguments compilation (`build_docker_run_args`), `--danger-disable-seccomp` boolean toggle, `microvm` runtime injection, Docker CLI availability, strace stderr capture, and inline seccomp/AppArmor profile validity.
+- **Sandbox Orchestration**: Arguments compilation (`build_docker_run_args`), `--danger-disable-seccomp` boolean toggle, Docker CLI availability, strace stderr capture, and inline seccomp/AppArmor profile validity.
 
 ### `src/parsing.rs` (47 tests)
 - **Lockfile & Requirements Parsing**: Exhaustive parser tests for `uv.lock`, `poetry.lock`, `requirements.txt`, `package.json` fallbacks.

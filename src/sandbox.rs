@@ -207,23 +207,6 @@ pub(crate) fn build_runner_from_env(
                 danger_disable_seccomp,
             }))
         }
-        "microvm" => {
-            if !docker_available() {
-                return Err("docker is not available but GYRSEEK_SANDBOX=microvm".to_string());
-            }
-            let runtime = std::env::var("GYRSEEK_MICROVM_RUNTIME")
-                .unwrap_or_else(|_| "kata-runtime".to_string());
-            if !docker_runtime_available(&runtime) {
-                return Err(format!(
-                    "MicroVM runtime '{}' is not available in Docker. Configure GYRSEEK_MICROVM_RUNTIME to an installed runtime (for example kata-runtime).",
-                    runtime
-                ));
-            }
-            Ok(Box::new(MicroVmRunner {
-                runtime,
-                danger_disable_seccomp,
-            }))
-        }
         "host" => {
             eprintln!(
                 "⚠️ [gyrseek] CRITICAL WARNING: Running in HOST mode (GYRSEEK_SANDBOX=host). Container isolation is completely INACTIVE. Packages will execute directly on your machine!"
@@ -254,7 +237,7 @@ pub(crate) fn build_runner_from_env(
             }))
         }
         _ => Err(format!(
-            "Unsupported GYRSEEK_SANDBOX mode '{}'. Supported values: docker, microvm, host, nono",
+            "Unsupported GYRSEEK_SANDBOX mode '{}'. Supported values: docker, host, nono",
             mode
         )),
     };
@@ -322,11 +305,6 @@ struct DockerRunner {
     danger_disable_seccomp: bool,
 }
 
-struct MicroVmRunner {
-    runtime: String,
-    danger_disable_seccomp: bool,
-}
-
 impl SandboxRunner for DockerRunner {
     fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String> {
         let probes = vec![(package.to_string(), version.to_string())];
@@ -342,31 +320,7 @@ impl SandboxRunner for DockerRunner {
         manager: &str,
         probes: &[(String, String)],
     ) -> Result<Vec<ProbeTrace>, String> {
-        trace_install_docker_matrix_with_runtime(manager, probes, None, self.danger_disable_seccomp)
-    }
-}
-
-impl SandboxRunner for MicroVmRunner {
-    fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String> {
-        let probes = vec![(package.to_string(), version.to_string())];
-        let mut results = self.trace_install_matrix(manager, &probes)?;
-        if results.is_empty() {
-            return Err("microvm matrix tracing returned no results".to_string());
-        }
-        Ok(results.remove(0).1)
-    }
-
-    fn trace_install_matrix(
-        &self,
-        manager: &str,
-        probes: &[(String, String)],
-    ) -> Result<Vec<ProbeTrace>, String> {
-        trace_install_docker_matrix_with_runtime(
-            manager,
-            probes,
-            Some(&self.runtime),
-            self.danger_disable_seccomp,
-        )
+        trace_install_docker_matrix(manager, probes, self.danger_disable_seccomp)
     }
 }
 
@@ -2082,10 +2036,9 @@ pub(crate) fn parse_nono_audit_log(audit_jsonl: &str) -> String {
     output
 }
 
-fn trace_install_docker_matrix_with_runtime(
+fn trace_install_docker_matrix(
     manager: &str,
     probes: &[(String, String)],
-    runtime: Option<&str>,
     danger_disable_seccomp: bool,
 ) -> Result<Vec<ProbeTrace>, String> {
     if probes.is_empty() {
@@ -2101,7 +2054,6 @@ fn trace_install_docker_matrix_with_runtime(
     let args = build_docker_run_args(
         &image_config.image,
         &out_dir_path,
-        runtime,
         &script,
         danger_disable_seccomp,
     )?;
@@ -2135,13 +2087,7 @@ fn trace_install_docker_matrix_with_runtime(
         // MUST NOT be treated as a clean zero-connection scan — fail closed.
         let mut trace = match std::fs::read_to_string(&trace_path) {
             Ok(contents) if !contents.trim().is_empty() => contents,
-            _ => trace_install_docker_single_with_runtime(
-                manager,
-                package,
-                version,
-                runtime,
-                danger_disable_seccomp,
-            )?,
+            _ => trace_install_docker_single(manager, package, version, danger_disable_seccomp)?,
         };
         if trace.trim().is_empty() {
             let err_path = out_dir.path().join(format!("gyrseek_err_{}.log", idx));
@@ -2171,24 +2117,17 @@ fn trace_install_docker_matrix_with_runtime(
     Ok(results)
 }
 
-fn trace_install_docker_single_with_runtime(
+fn trace_install_docker_single(
     manager: &str,
     package: &str,
     version: &str,
-    runtime: Option<&str>,
     danger_disable_seccomp: bool,
 ) -> Result<String, String> {
     let image_config = scanner_image_config(manager);
     let script = build_single_script(manager, package, version, image_config.prebuilt);
     // No /out bind mount here: the single-probe fallback captures strace output
     // from stderr rather than a log file.
-    let args = build_docker_run_args(
-        &image_config.image,
-        "",
-        runtime,
-        &script,
-        danger_disable_seccomp,
-    )?;
+    let args = build_docker_run_args(&image_config.image, "", &script, danger_disable_seccomp)?;
 
     let output = Command::new("docker")
         .args(&args)
@@ -2390,7 +2329,6 @@ fn build_single_script(manager: &str, package: &str, version: &str, prebuilt: bo
 fn build_docker_run_args(
     image: &str,
     out_dir_path: &str,
-    runtime: Option<&str>,
     script: &str,
     danger_disable_seccomp: bool,
 ) -> Result<Vec<String>, String> {
@@ -2439,10 +2377,6 @@ fn build_docker_run_args(
     }
     args.push("--workdir".to_string());
     args.push("/work".to_string());
-    if let Some(runtime_name) = runtime {
-        args.push("--runtime".to_string());
-        args.push(runtime_name.to_string());
-    }
     args.push(image.to_string());
     args.push("sh".to_string());
     args.push("-lc".to_string());
@@ -2616,12 +2550,6 @@ fn docker_available() -> bool {
         .unwrap_or(false)
 }
 
-fn docker_runtime_available(runtime: &str) -> bool {
-    list_docker_runtimes()
-        .map(|runtimes| runtimes.iter().any(|r| r == runtime))
-        .unwrap_or(false)
-}
-
 fn scanner_image_config(manager: &str) -> ScannerImageConfig {
     let (image_var, prebuilt_var, default_image) = if is_npm_family_manager(manager) {
         (
@@ -2664,34 +2592,6 @@ fn parse_bool_env(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
-}
-
-pub(crate) fn list_docker_runtimes() -> Result<Vec<String>, String> {
-    let output = Command::new("docker")
-        .args(["info", "--format", "{{json .Runtimes}}"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|e| format!("failed to query docker runtimes: {e}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "docker info failed while querying runtimes: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| format!("failed to parse docker runtimes JSON: {e}"))?;
-
-    let mut runtimes = Vec::new();
-    if let Some(obj) = parsed.as_object() {
-        runtimes.extend(obj.keys().cloned());
-    }
-
-    runtimes.sort();
-    Ok(runtimes)
 }
 
 fn shell_single_quoted(value: &str) -> String {
@@ -2877,38 +2777,21 @@ mod tests {
 
     #[test]
     fn docker_args_keep_out_mount_when_provided_and_omit_when_empty() {
-        let with_out = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
+        let with_out = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
             .expect("docker args should build");
         assert!(with_out.iter().any(|a| a == "/tmp/out:/out"));
         assert!(with_out.iter().any(|a| a == "no-new-privileges"));
 
-        let without_out = build_docker_run_args("img:latest", "", None, "echo hi", false)
+        let without_out = build_docker_run_args("img:latest", "", "echo hi", false)
             .expect("docker args should build");
         assert!(!without_out.iter().any(|a| a.ends_with(":/out")));
-    }
-
-    #[test]
-    fn docker_args_pass_runtime_when_set() {
-        let args = build_docker_run_args(
-            "img:latest",
-            "/tmp/out",
-            Some("kata-runtime"),
-            "echo hi",
-            false,
-        )
-        .expect("docker args should build");
-        let pos = args
-            .iter()
-            .position(|a| a == "--runtime")
-            .expect("runtime flag present");
-        assert_eq!(args.get(pos + 1).map(String::as_str), Some("kata-runtime"));
     }
 
     #[test]
     fn docker_args_memory_limit_defaults_to_2g_and_is_configurable() {
         {
             let _env = SandboxEnvVarGuard::remove("GYRSEEK_MEM_LIMIT");
-            let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
+            let args = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
                 .expect("docker args should build");
             let mem_pos = args
                 .iter()
@@ -2920,9 +2803,8 @@ mod tests {
 
         {
             let _guard = SandboxEnvVarGuard::set("GYRSEEK_MEM_LIMIT", "4g");
-            let args_custom =
-                build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
-                    .expect("docker args should build");
+            let args_custom = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
+                .expect("docker args should build");
             let mem_pos_custom = args_custom
                 .iter()
                 .position(|a| a == "--memory")
@@ -2945,7 +2827,7 @@ mod tests {
         // UIDs needs CAP_SYS_PTRACE, which Docker does not grant by default.
         // Without this the sandbox can never produce a trace.
 
-        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
+        let args = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
             .expect("docker args should build");
         let pos = args
             .iter()
@@ -2956,7 +2838,7 @@ mod tests {
 
     #[test]
     fn docker_args_adds_seccomp_profile_by_default() {
-        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", false)
+        let args = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
             .expect("docker args should build");
 
         let mut found = false;
@@ -2974,7 +2856,7 @@ mod tests {
 
     #[test]
     fn docker_args_disables_seccomp_when_danger_flag_true() {
-        let args = build_docker_run_args("img:latest", "/tmp/out", None, "echo hi", true)
+        let args = build_docker_run_args("img:latest", "/tmp/out", "echo hi", true)
             .expect("docker args should build");
         assert!(
             !args.iter().any(|a| a.starts_with("seccomp=")),
@@ -3311,7 +3193,7 @@ sys.exit(0 if success else 1)"#;
             } // python:3.13-slim-bookworm (arm64/v8)
             _ => unreachable!(),
         };
-        let protected_args = build_docker_run_args(image, "", None, &command_str, false).unwrap();
+        let protected_args = build_docker_run_args(image, "", &command_str, false).unwrap();
 
         let protected_run = Command::new("docker")
             .args(&protected_args)
@@ -3389,7 +3271,7 @@ Stderr: {}",
             .err()
             .expect("should fail");
         assert!(
-            err.contains("Supported values: docker, microvm, host, nono"),
+            err.contains("Supported values: docker, host, nono"),
             "Error message should mention nono: {err}"
         );
     }

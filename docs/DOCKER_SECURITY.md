@@ -6,7 +6,7 @@ This document is the canonical reference for Docker sandbox security in gyrseek.
 
 gyrseek runs install probes inside Docker containers using `strace` to capture behavioral signals (network endpoints, process execution, git clones, installed artifacts). The Docker sandbox is tuned for practical compatibility with package managers and throughput, not maximum isolation — though seccomp and AppArmor profiles add defense-in-depth.
 
-Sandbox mode is selected via `GYRSEEK_SANDBOX` (`docker` default, `microvm` via Docker runtime selection, `nono` experimental kernel-capability sandbox, or `host` fallback).
+Sandbox mode is selected via `GYRSEEK_SANDBOX` (`docker` default, `nono` experimental kernel-capability sandbox, or `host` fallback).
 
 ## Sandbox Infrastructure
 
@@ -136,7 +136,6 @@ Enable AppArmor for stronger path-based protection on Linux hosts. It adds defen
 |---|---|---|
 | `docker` | Supported | Supported |
 | `host` | Supported (requires local `strace`) | Supported (requires local `strace`) |
-| `microvm` | Usually unavailable (Kata runtime typically not exposed) | Supported when a MicroVM-capable Docker runtime is installed |
 
 - Seccomp works in all Docker environments (including Docker Desktop's Linux VM).
 - AppArmor requires a native Linux host with `apparmor_parser` available. Not available on macOS Docker Desktop.
@@ -281,8 +280,7 @@ If scans regress:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `GYRSEEK_SANDBOX` | `docker` | Sandbox mode: `docker`, `host`, or `microvm`. |
-| `GYRSEEK_MICROVM_RUNTIME` | `kata-runtime` | Docker runtime for microvm mode. |
+| `GYRSEEK_SANDBOX` | `docker` | Sandbox mode: `docker`, `host`, or `nono`. |
 
 | `GYRSEEK_DOCKER_APPARMOR_PROFILE` | `false` | Boolean toggle for embedded AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on Linux. Defaults to `false` because prerequisites are not always met. |
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES` | `false` | Enable prebuilt fast path for all managers. |
@@ -295,5 +293,5 @@ If scans regress:
 
 - **Seccomp profile**: `src/sandbox.rs` (`EMBEDDED_SECCOMP_PROFILE_JSON`)
 - **AppArmor profile**: `src/sandbox.rs` (`EMBEDDED_APPARMOR_PROFILE_TEXT`)
-- **Docker runner**: `src/sandbox.rs` (`build_docker_command`, `trace_install_docker_matrix_with_runtime`)
+- **Docker runner**: `src/sandbox.rs` (`build_docker_command`, `trace_install_docker_matrix`)
 - **seccomp toggle tests**: `src/sandbox.rs` (`docker_seccomp_profile_content`, `docker_apparmor_profile_content`, etc.)

@@ -23,14 +23,13 @@ New skills added under `.agents/skills/` are automatically picked up by all tool
 - Default: `GYRSEEK_SANDBOX=docker`
 - Kernel Capability: `GYRSEEK_SANDBOX=nono` (Landlock LSM on Linux 5.13+, Seatbelt on macOS; experimental backend — use at your own risk. Features scoped registry/baseline domain egress, FIFO canary traps, PATH shims for dropper command tracking, and host-side artifact scanning with zero Docker dependency)
 - Fallback: `GYRSEEK_SANDBOX=host` (reduced safety)
-- Isolated: `GYRSEEK_SANDBOX=microvm` (requires MicroVM-capable Docker runtime on Linux)
 - Initialization failure is fail-closed (process exits non-zero).
 
 ## Sandbox Security & Hardening
 
 See [`docs/DOCKER_SECURITY.md`](DOCKER_SECURITY.md) and [`docs/SANDBOX_COMPARISON.md`](SANDBOX_COMPARISON.md) for full references. Key points:
 
-- Docker/microvm sandbox runs use `--cap-add SYS_PTRACE`, `--security-opt no-new-privileges`, and embedded seccomp + AppArmor profiles from `src/sandbox.rs`.
+- Docker sandbox runs use `--cap-add SYS_PTRACE`, `--security-opt no-new-privileges`, and embedded seccomp + AppArmor profiles from `src/sandbox.rs`.
 - Seccomp: enabled by default by default. Disable: `--danger-disable-seccomp`.
 - AppArmor: disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`), requires `apparmor-utils` + prebuilt scanner image on Linux. Enable: `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`.
 - Startup logs announce seccomp/AppArmor status to stderr.
