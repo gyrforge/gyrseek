@@ -8,14 +8,14 @@
 - Exact-version pinning for forwarded explicit unpinned install targets, closing the scan-vs-install version gap.
 - Expanded lockfile routing and fail-closed coverage for `uv sync`, bare `uv lock`, `uv lock --upgrade`, `uv lock -P/--upgrade-package`, `poetry install`, `poetry update`, and bare `poetry lock`.
 - Top-level `--version`/`-V` support that works before config load or sandbox initialization and does not intercept a forwarded command's own trailing flag.
-- Fail-closed manager handling: unsupported managers are rejected instead of being silently forwarded unscanned; the built-in exception is `sandbox runtimes`.
+- Fail-closed manager handling: unsupported managers are rejected instead of being silently forwarded unscanned.
 - Embedded seccomp and AppArmor profiles in `src/sandbox.rs`, enabled by default with runtime status announcements and per-platform fallback.
 - Empty/whitespace traces now fail closed; strace stderr is captured; Docker tracing is hardened with `-s 4096 -v`, unprivileged payload execution, and `--cap-add SYS_PTRACE`.
 - IPv6 capture and canonicalization, IPv4-mapped IPv6 collapse, sandbox-local IP filtering, and cloud-metadata IP preservation.
 - FCrDNS-backed `domain_allowlist`, balanced-bracket exec parsing, and correct PEP 508 extras normalization for registry lookup plus forwarded pinning.
 - Mixed global/per-package allowlist syntax across all six allowlist types (`ip_allowlist`, `domain_allowlist`, `git_clone_allowlist`, `artifact_allowlist`, `sensitive_file_access_allowlist`, `process_exec_allowlist`); effective set is global ∪ per-package for ip/domain; per-package only for the other four. Config-load-time key and value validation with actionable warnings.
 - `internal_package_exemptions` support for first-party/private-index packages that should bypass registry lookup and sandbox scanning entirely.
-- Docker, host, and MicroVM sandbox modes, including runtime selection via `GYRSEEK_MICROVM_RUNTIME` and the `sandbox runtimes` diagnostic command.
+- Docker, host, and nono sandbox modes.
 - Prebuilt scanner image support and documented digest-pinning workflow for faster, more reproducible scans.
 - In-run scan-result caching and Docker matrix batching for multiple package/version probes in one container session.
 - Integration coverage for CLI exit-code behavior, lockfile routing, pnpm routing, version flags, artifact allowlisting, and fail-closed forwarding; inline tests cover parsing, scanning, and sandbox internals.

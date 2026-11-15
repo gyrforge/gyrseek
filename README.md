@@ -523,7 +523,6 @@ nono_canary_secrets_paths: # nono only: extra decoy credential files, relative t
 | Mode                 | `GYRSEEK_SANDBOX` | Notes                                                                |
 | -------------------- | ----------------- | -------------------------------------------------------------------- |
 | **Docker** (default) | `docker`          | Safer default. Requires Docker CLI.                                  |
-| **MicroVM**          | `microvm`         | Strongest isolation; needs a MicroVM-capable Docker runtime (Linux). |
 | **nono**             | `nono`            | Kernel-enforced sandbox using Landlock (Linux) or Seatbelt (macOS). **(Experimental — use at your own risk)** |
 | **Host**             | `host`            | Fastest, **reduced safety** — see warning below.                     |
 
@@ -540,7 +539,7 @@ GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 
 > [!WARNING]
 > **The `nono` backend is currently in an experimental phase and should be used at your own risk.**
-> While hardened with Landlock/Seatbelt kernel capabilities, scoped domain egress, canary traps, and execution shims, native kernel sandboxing runs directly on the host rather than inside isolated container or microVM namespaces. For untrusted packages in production or mission-critical environments, the default `docker` runner remains the recommended choice.
+> While hardened with Landlock/Seatbelt kernel capabilities, scoped domain egress, canary traps, and execution shims, native kernel sandboxing runs directly on the host rather than inside an isolated container. For untrusted packages in production or mission-critical environments, the default `docker` runner remains the recommended choice.
 
 - `GYRSEEK_SANDBOX=nono` runs probes under [`nono`](https://github.com/nolabs-ai/nono), providing kernel-enforced capability sandboxing via Linux Landlock (kernel 5.13+ for filesystem, 6.7+ for network egress) and macOS Seatbelt without requiring Docker or root privileges.
 - **Two-Phase Scoped Network Egress:** In `trace_install_matrix`, vetted baseline probes (older historical versions meeting the age gate) run first with unrestricted network egress to discover legitimate registry, CDN, and dependency endpoints. Candidate probes (and standalone `trace_install` calls) are then strictly confined via `--allow-domain` to official registries (plus environment registries) and the harvested baseline domains. Outbound attempts to undeclared domains (e.g. Bun downloads from GitHub Releases, C2 beacons, cloud metadata endpoints) are blocked at the network level and recorded in audit logs. Note that baseline-harvested domains are trusted for the candidate; if an older baseline version was itself compromised, its contacted domain would be inherited into the candidate's allowlist. On Linux, scoped network egress enforcement requires Linux kernel 6.7+ (Landlock ABI v4+); on older kernels, filesystem isolation is active but network egress filtering is unavailable. Domain filtering is disabled by default on WSL2.
@@ -561,13 +560,6 @@ GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 - If `nono` is not found when `GYRSEEK_SANDBOX=nono` is configured, `gyrseek` fails closed with an explicit error.
 - For an in-depth technical comparison of boundaries, telemetry, and isolation nuances between Docker and Nono, see [`docs/SANDBOX_COMPARISON.md`](docs/SANDBOX_COMPARISON.md).
 
-### MicroVM configuration
-
-- `GYRSEEK_MICROVM_RUNTIME` selects the Docker runtime (default: `kata-runtime`).
-- If the runtime isn't present in `docker info`, startup fails closed with an explicit message.
-- List available runtimes: `./target/release/gyrseek sandbox runtimes`
-- Requires a Linux environment with the runtime installed and exposed through Docker. On macOS Docker Desktop, Kata-style runtimes are typically unavailable — use a Linux VM or host.
-
 ### Platform support matrix
 
 | Mode      | macOS (Docker Desktop)                                   | Linux host/VM                                                |
@@ -575,7 +567,6 @@ GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 | `docker`  | Supported                                                | Supported                                                    |
 | `nono` (experimental) | Supported (uses macOS Seatbelt)                  | Supported (uses Linux Landlock)                              |
 | `host`    | Supported (requires local `strace`)                      | Supported (requires local `strace`)                          |
-| `microvm` | Usually unavailable (Kata/runtime typically not exposed) | Supported when a MicroVM-capable Docker runtime is installed |
 
 ### Scanner image configuration
 
@@ -586,7 +577,7 @@ GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES`                              | `false`                 | Enable prebuilt fast path for both managers. |
 | `GYRSEEK_NPM_SCANNER_PREBUILT` / `GYRSEEK_PY_SCANNER_PREBUILT` | `false`                 | Per-manager prebuilt override.               |
 
-| `GYRSEEK_DOCKER_APPARMOR_PROFILE`                               | `false`                 | Boolean toggle (`true`/`false`) for embedded AppArmor profile use in Docker/microvm sandbox runs. Loaded via `apparmor_parser` at runtime. On macOS (where `apparmor_parser` is unavailable), a warning is emitted and the sandbox falls back to Docker's default AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on native Linux hosts (runtime apt setup conflicts with profile). Defaults to `false` because the prerequisites are not always met. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection. |
+| `GYRSEEK_DOCKER_APPARMOR_PROFILE`                               | `false`                 | Boolean toggle (`true`/`false`) for embedded AppArmor profile use in Docker sandbox runs. Loaded via `apparmor_parser` at runtime. On macOS (where `apparmor_parser` is unavailable), a warning is emitted and the sandbox falls back to Docker's default AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on native Linux hosts (runtime apt setup conflicts with profile). Defaults to `false` because the prerequisites are not always met. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection. |
 
 In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency.
 
@@ -683,7 +674,7 @@ Details worth knowing once you're past the basics.
 
 **Fail-closed guarantees**
 
-- **Unrecognized manager:** any first argument other than `pip`, `pip3`, `uv`, `poetry`, `npm`, or `pnpm` is rejected with a non-zero exit and a clear error message listing the supported managers. The only exception is `sandbox runtimes` (a built-in diagnostic). Previously, unrecognized managers were silently forwarded unscanned.
+- **Unrecognized manager:** any first argument other than `pip`, `pip3`, `uv`, `poetry`, `npm`, or `pnpm` is rejected with a non-zero exit and a clear error message listing the supported managers. Previously, unrecognized managers were silently forwarded unscanned.
 - For supported install/sync paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
 - If the host command itself cannot be launched after a clean scan, `gyrseek` also fails closed.
 - A sandbox probe that produces an **empty/whitespace trace** (e.g. `strace` could not attach) is a hard error: every package in that batch is blocked. Blank traces are never interpreted as clean.

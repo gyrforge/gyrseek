@@ -19,7 +19,7 @@ use parsing::{
     rewrite_args_with_pinned_versions,
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
-use sandbox::{SandboxRunner, build_runner_from_env, list_docker_runtimes};
+use sandbox::{SandboxRunner, build_runner_from_env};
 use scanning::{
     HARD_MINIMUM_AGE_HOURS, PolicyConfig, ScanReport, scan_package_versions, scan_packages_versions,
 };
@@ -1876,37 +1876,14 @@ pub async fn run(args: Vec<String>) {
     // Fail closed for unrecognized managers. gyrseek's contract is "I scanned
     // this before forwarding it" — silently forwarding an unscanned command
     // violates that contract and provides false assurance in a security pipeline.
-    // The only built-in exception is the `sandbox runtimes` diagnostic subcommand.
     const SUPPORTED_MANAGERS: &[&str] = &["pip", "pip3", "uv", "poetry", "npm", "pnpm"];
-    let is_sandbox_runtimes = eye.manager == "sandbox"
-        && eye.passthrough_args.get(1).map(String::as_str) == Some("runtimes");
-    if !SUPPORTED_MANAGERS.contains(&eye.manager.as_str()) && !is_sandbox_runtimes {
+    if !SUPPORTED_MANAGERS.contains(&eye.manager.as_str()) {
         println!(
             "❌ [gyrseek] Unrecognized manager '{}'. Supported managers: {}. Failing closed.",
             eye.manager,
             SUPPORTED_MANAGERS.join(", ")
         );
         std::process::exit(1);
-    }
-
-    if is_sandbox_runtimes {
-        match list_docker_runtimes() {
-            Ok(runtimes) => {
-                if runtimes.is_empty() {
-                    println!("ℹ️ [gyrseek] Docker reports no configured runtimes.");
-                } else {
-                    println!(
-                        "ℹ️ [gyrseek] Detected Docker runtimes: {}",
-                        runtimes.join(", ")
-                    );
-                }
-            }
-            Err(e) => {
-                println!("❌ [gyrseek] Failed to list Docker runtimes: {}", e);
-                std::process::exit(1);
-            }
-        }
-        return;
     }
 
     let mut scan_cache: HashMap<String, ScanReport> = HashMap::new();
