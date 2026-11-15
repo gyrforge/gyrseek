@@ -194,6 +194,7 @@ pub(crate) trait SandboxRunner {
 
 pub(crate) fn build_runner_from_env(
     danger_disable_seccomp: bool,
+    nono_canary_secrets_paths: &[String],
 ) -> Result<Box<dyn SandboxRunner>, String> {
     let mode = std::env::var("GYRSEEK_SANDBOX").unwrap_or_else(|_| "docker".to_string());
 
@@ -245,7 +246,12 @@ pub(crate) fn build_runner_from_env(
                     "⚠️ [gyrseek] Warning: --danger-disable-seccomp has no effect in nono mode (nono enforces kernel sandboxing via Landlock/Seatbelt)."
                 );
             }
-            Ok(Box::new(NonoRunner))
+            eprintln!(
+                "ℹ️ [gyrseek] nono sandbox (experimental): reduced detection coverage vs Docker. Exec detection covers only the git/bun/deno/curl/wget shims and npm install hooks; blocked file reads are not recorded; credential probes are caught by canary decoys only. Use Docker for full exec and file-read tracing."
+            );
+            Ok(Box::new(NonoRunner {
+                nono_canary_secrets_paths: nono_canary_secrets_paths.to_vec(),
+            }))
         }
         _ => Err(format!(
             "Unsupported GYRSEEK_SANDBOX mode '{}'. Supported values: docker, microvm, host, nono",
@@ -364,7 +370,20 @@ impl SandboxRunner for MicroVmRunner {
     }
 }
 
-pub(crate) struct NonoRunner;
+#[derive(Default)]
+pub(crate) struct NonoRunner {
+    /// Extra `$HOME`-relative canary paths from the `nono_canary_secrets_paths` config key.
+    nono_canary_secrets_paths: Vec<String>,
+}
+
+/// A canary path must stay inside the probe's temp dirs: relative, no `..`, no root.
+pub(crate) fn is_safe_canary_rel_path(rel: &str) -> bool {
+    let path = Path::new(rel);
+    path.components().next().is_some()
+        && path
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
 
 pub(crate) fn resolve_nono_bin() -> Option<std::path::PathBuf> {
     if let Ok(path) = std::env::var("GYRSEEK_NONO_PATH") {
@@ -694,6 +713,34 @@ pub(crate) fn nono_profile_content_for_os(
     }
 }
 
+pub(crate) const CANARY_EXTRA_RELATIVE_PATHS: [&str; 11] = [
+    ".config/gh/hosts.yml",
+    ".docker/config.json",
+    ".kube/config",
+    ".pypirc",
+    ".git-credentials",
+    ".ssh/id_ed25519",
+    ".ssh/id_ecdsa",
+    ".aws/config",
+    ".config/gcloud/application_default_credentials.json",
+    ".azure/msal_token_cache.json",
+    ".azure/accessTokens.json",
+];
+
+/// Host tool managers that would otherwise download a toolchain or interpreter into the
+/// probe's fake `HOME` (flagged as new `binary`/`large_file` artifacts). Each entry turns
+/// the download into a fast failure; the nonexistent rustup toolchain name does the same
+/// for the host rustup shims (`~/.cargo/bin`).
+const NONO_TOOLCHAIN_DOWNLOAD_GUARDS: [(&str, &str); 3] = [
+    ("RUSTUP_TOOLCHAIN", "gyrseek-no-toolchain"),
+    ("UV_PYTHON_DOWNLOADS", "never"),
+    ("GOTOOLCHAIN", "local"),
+];
+
+/// Virtual path prefix labelling reads of user-configured canaries, so the sensitive-file
+/// classifier recognises them without knowing the configured names.
+pub(crate) const CANARY_CUSTOM_PREFIX: &str = "/gyrseek-canary";
+
 pub(crate) struct CanaryTrap {
     #[cfg(unix)]
     paths: Vec<(PathBuf, String)>,
@@ -707,7 +754,12 @@ pub(crate) struct CanaryTrap {
 
 impl CanaryTrap {
     #[cfg(unix)]
-    pub(crate) fn setup(work_dir: &Path, home_dir: &Path, manager: &str) -> Result<Self, String> {
+    pub(crate) fn setup(
+        work_dir: &Path,
+        home_dir: &Path,
+        manager: &str,
+        extra_rel_paths: &[String],
+    ) -> Result<Self, String> {
         let mut targets = vec![
             (work_dir.join(".env"), "/work/.env".to_string()),
             (
@@ -736,12 +788,38 @@ impl CanaryTrap {
             targets.push((home_dir.join(".npmrc"), "/root/.npmrc".to_string()));
         }
 
+        // Further credential stores stealers commonly probe. None is read by the
+        // supported package managers during install (unlike `.netrc`, which pip/uv
+        // read), so a read here is never harness noise.
+        let builtin = CANARY_EXTRA_RELATIVE_PATHS
+            .into_iter()
+            .map(|rel| (rel, format!("/root/{rel}")));
+        let custom = extra_rel_paths
+            .iter()
+            .map(String::as_str)
+            .filter(|rel| is_safe_canary_rel_path(rel))
+            .map(|rel| (rel, format!("{CANARY_CUSTOM_PREFIX}/{rel}")));
+        for (rel, label) in builtin.chain(custom) {
+            // The probe sets XDG_CONFIG_HOME=<work>/config, so tools that honor it
+            // (e.g. GitHub CLI) look in `config/...` rather than `.config/...`.
+            let xdg_twin = rel.strip_prefix('.').filter(|r| r.starts_with("config/"));
+            for rel in std::iter::once(rel).chain(xdg_twin) {
+                for dir in [work_dir, home_dir] {
+                    targets.push((dir.join(rel), label.clone()));
+                }
+            }
+        }
+
         let accessed = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let mut handles = Vec::new();
         let mut active_paths = Vec::new();
 
+        let mut seen = std::collections::HashSet::new();
         for (fifo_path, virtual_path) in targets {
+            if !seen.insert(fifo_path.clone()) {
+                continue;
+            }
             if let Some(parent) = fifo_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -813,6 +891,7 @@ impl CanaryTrap {
         _work_dir: &Path,
         _home_dir: &Path,
         _manager: &str,
+        _extra_rel_paths: &[String],
     ) -> Result<Self, String> {
         Ok(Self {})
     }
@@ -1208,7 +1287,12 @@ impl NonoRunner {
             }
         };
         let state_root = base_state.join("gyrseek_nono");
-        let _ = std::fs::create_dir_all(&state_root);
+        std::fs::create_dir_all(&state_root).map_err(|e| {
+            format!(
+                "failed to create nono state dir {}: {e} (set XDG_STATE_HOME to a writable directory)",
+                state_root.display()
+            )
+        })?;
         let state_temp_dir = tempfile::Builder::new()
             .prefix("run_")
             .tempdir_in(&state_root)
@@ -1300,8 +1384,13 @@ impl NonoRunner {
         let path_shims = PathShims::setup(temp_dir.path(), state_path)
             .map_err(|e| format!("failed to setup path shims: {e}"))?;
 
-        let canary_trap = CanaryTrap::setup(&work_dir, &home_dir, manager)
-            .map_err(|e| format!("failed to setup canary trap: {e}"))?;
+        let canary_trap = CanaryTrap::setup(
+            &work_dir,
+            &home_dir,
+            manager,
+            &self.nono_canary_secrets_paths,
+        )
+        .map_err(|e| format!("failed to setup canary trap: {e}"))?;
 
         let host_path = std::env::var("PATH").unwrap_or_default();
         let shimmed_path = if host_path.is_empty() {
@@ -1408,6 +1497,9 @@ impl NonoRunner {
         nono_cmd.arg(format!("NPM_CONFIG_CACHE={}/npm_cache", target_path));
         nono_cmd.arg(format!("UV_CACHE_DIR={}/uv_cache", target_path));
         nono_cmd.arg(format!("PNPM_HOME={}/pnpm_home", target_path));
+        for (key, value) in NONO_TOOLCHAIN_DOWNLOAD_GUARDS {
+            nono_cmd.arg(format!("{key}={value}"));
+        }
         nono_cmd.arg(&cmd_bin);
         nono_cmd.args(&cmd_args);
 
@@ -1492,7 +1584,7 @@ impl NonoRunner {
             ));
         }
 
-        let artifact_lines = scan_target_artifacts(&work_dir);
+        let artifact_lines = scan_target_artifacts(&work_dir, manager);
         if !artifact_lines.is_empty() {
             trace.push_str("\n=== gyrseek_artifacts ===\n");
             trace.push_str(&artifact_lines);
@@ -1574,7 +1666,72 @@ impl SandboxRunner for NonoRunner {
     }
 }
 
-pub(crate) fn scan_target_artifacts(target_dir: &Path) -> String {
+/// Pseudo file type tagging the extra inventory line that carries a dependency's
+/// npm install-time lifecycle hooks (see [`npm_install_hooks`]).
+pub(crate) const NPM_INSTALL_SCRIPT_TYPE: &str = "npm install script";
+
+/// True for `node_modules/<pkg>/package.json` and `node_modules/@scope/<pkg>/package.json`
+/// (at any nesting depth), i.e. the manifest npm actually runs lifecycle hooks for. A
+/// nested `node_modules/<pkg>/examples/package.json` is not an installed dependency.
+fn is_installed_dependency_manifest(path: &Path) -> bool {
+    let named = |dir: &Path, name: &str| dir.file_name().is_some_and(|n| n == name);
+    let is_scope = |dir: &Path| {
+        dir.file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('@'))
+    };
+    let Some(pkg_dir) = path.parent() else {
+        return false;
+    };
+    let Some(container) = pkg_dir.parent() else {
+        return false;
+    };
+    // `node_modules/@scope` is a scope directory, not a package.
+    !is_scope(pkg_dir)
+        && (named(container, "node_modules")
+            || (is_scope(container)
+                && container.parent().is_some_and(|d| named(d, "node_modules"))))
+}
+
+/// Returns the lifecycle hooks npm runs when it installs a registry dependency (the
+/// usual entry point for install-time payloads) as a JSON array of `[hook, command]`
+/// pairs, so hook boundaries cannot be forged by command text. The result is
+/// delimiter-safe. `None` when the file declares none or is not an installed
+/// dependency manifest.
+fn npm_install_hooks(path: &Path, size: u64) -> Option<String> {
+    const MAX_MANIFEST_BYTES: u64 = 1 << 20;
+    if path.file_name()? != "package.json" || !is_installed_dependency_manifest(path) {
+        return None;
+    }
+    // A padded manifest must not hide its hooks: report it instead of skipping it.
+    if size > MAX_MANIFEST_BYTES {
+        return Some("uninspected: manifest exceeds 1 MiB".to_string());
+    }
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let scripts = manifest.get("scripts")?.as_object()?;
+    let hooks: Vec<(&str, &str)> = ["preinstall", "install", "postinstall"]
+        .into_iter()
+        .filter_map(|hook| Some((hook, scripts.get(hook)?.as_str()?)))
+        .collect();
+    if hooks.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&hooks)
+        .ok()
+        .map(|json| escape_inventory_field(&json))
+}
+
+/// Percent-encodes the characters that would break the `\0`/`|`/newline-delimited
+/// inventory and finding formats, keeping distinct commands distinct.
+fn escape_inventory_field(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace('|', "%7C")
+        .replace('\0', "%00")
+        .replace('\n', "%0A")
+        .replace('\r', "%0D")
+}
+
+pub(crate) fn scan_target_artifacts(target_dir: &Path, manager: &str) -> String {
+    let scan_npm_hooks = is_npm_family_manager(manager);
     let mut lines = Vec::new();
     let mut dirs_to_visit = vec![target_dir.to_path_buf()];
 
@@ -1636,6 +1793,12 @@ pub(crate) fn scan_target_artifacts(target_dir: &Path) -> String {
                     "{}\0{}\0{}\0{}",
                     virt_path, size, file_type, content_str
                 ));
+                if scan_npm_hooks && let Some(hooks) = npm_install_hooks(&path, size) {
+                    lines.push(format!(
+                        "{}\0{}\0{}\0{}",
+                        virt_path, size, NPM_INSTALL_SCRIPT_TYPE, hooks
+                    ));
+                }
             }
         }
     }
@@ -3172,7 +3335,9 @@ Stderr: {}",
             ("GYRSEEK_NONO_PATH", "/nonexistent/gyrseek_nono"),
         ]);
 
-        let err = build_runner_from_env(false).err().expect("should fail");
+        let err = build_runner_from_env(false, &[])
+            .err()
+            .expect("should fail");
         assert!(
             err.contains("nono is not available"),
             "Error message should indicate nono is not available: {err}"
@@ -3220,7 +3385,9 @@ Stderr: {}",
     fn unsupported_sandbox_mode_lists_nono() {
         let _env_mode = SandboxEnvVarGuard::set("GYRSEEK_SANDBOX", "unsupported_mode");
 
-        let err = build_runner_from_env(false).err().expect("should fail");
+        let err = build_runner_from_env(false, &[])
+            .err()
+            .expect("should fail");
         assert!(
             err.contains("Supported values: docker, microvm, host, nono"),
             "Error message should mention nono: {err}"
@@ -3308,7 +3475,7 @@ Stderr: {}",
             let _ = std::os::unix::fs::symlink("/etc/passwd", &symlink_path);
         }
 
-        let artifacts = scan_target_artifacts(temp_dir.path());
+        let artifacts = scan_target_artifacts(temp_dir.path(), "pip");
         assert!(artifacts.contains("/work/bin/payload"));
         assert!(artifacts.contains("ELF 64-bit LSB executable"));
         assert!(artifacts.contains("/work/bin/macho_universal_64"));
@@ -3483,7 +3650,7 @@ Stderr: {}",
         std::fs::create_dir_all(&work).unwrap();
         std::fs::create_dir_all(&home).unwrap();
 
-        let trap = CanaryTrap::setup(&work, &home, "pip").expect("setup canary trap");
+        let trap = CanaryTrap::setup(&work, &home, "pip", &[]).expect("setup canary trap");
 
         let env_file = work.join(".env");
         if env_file.exists() {
@@ -3508,7 +3675,7 @@ Stderr: {}",
         std::fs::create_dir_all(&work).unwrap();
         std::fs::create_dir_all(&home).unwrap();
 
-        let trap = CanaryTrap::setup(&work, &home, "pip").expect("setup canary trap");
+        let trap = CanaryTrap::setup(&work, &home, "pip", &[]).expect("setup canary trap");
         let accessed = trap.teardown();
         assert!(accessed.is_empty());
     }
@@ -3522,11 +3689,195 @@ Stderr: {}",
         std::fs::create_dir_all(&work).unwrap();
         std::fs::create_dir_all(&home).unwrap();
 
-        let trap = CanaryTrap::setup(&work, &home, "npm").expect("setup canary trap");
+        let trap = CanaryTrap::setup(&work, &home, "npm", &[]).expect("setup canary trap");
         assert!(!work.join(".npmrc").exists());
         assert!(!home.join(".npmrc").exists());
         let accessed = trap.teardown();
         assert!(accessed.is_empty());
+    }
+
+    #[test]
+    fn canary_rel_path_rejects_escapes() {
+        for ok in [".vault-token", ".config/x/token"] {
+            assert!(super::is_safe_canary_rel_path(ok), "{ok}");
+        }
+        for bad in ["", "/etc/shadow", "../x", "a/../../x", "./x"] {
+            assert!(!super::is_safe_canary_rel_path(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_canary_trap_plants_configured_paths_and_skips_unsafe() {
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("work");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+
+        let extra = [
+            ".vault-token".to_string(),
+            ".kube/config".to_string(), // duplicate of a built-in
+            "../escape".to_string(),
+        ];
+        let trap = CanaryTrap::setup(&work, &home, "pip", &extra).expect("setup canary trap");
+        assert!(work.join(".vault-token").exists());
+        assert!(home.join(".vault-token").exists());
+        assert!(!temp.path().join("escape").exists());
+
+        let content = std::fs::read_to_string(work.join(".vault-token")).unwrap_or_default();
+        assert!(content.contains("KEY=gyrseek-canary-trap"));
+        assert_eq!(
+            trap.teardown(),
+            vec!["/gyrseek-canary/.vault-token".to_string()]
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_canary_trap_covers_extra_credential_stores() {
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("work");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+
+        // Extra canaries are present for every manager, including npm.
+        let trap = CanaryTrap::setup(&work, &home, "npm", &[]).expect("setup canary trap");
+        for rel in super::CANARY_EXTRA_RELATIVE_PATHS {
+            assert!(work.join(rel).exists(), "missing canary {rel} in work");
+            assert!(home.join(rel).exists(), "missing canary {rel} in home");
+        }
+
+        // GitHub CLI honors XDG_CONFIG_HOME (<work>/config), so it gets a twin decoy.
+        assert!(work.join("config/gh/hosts.yml").exists());
+
+        let docker_cfg = work.join(".docker/config.json");
+        let content = std::fs::read_to_string(&docker_cfg).unwrap_or_default();
+        assert!(content.contains("KEY=gyrseek-canary-trap"));
+
+        let accessed = trap.teardown();
+        assert_eq!(accessed, vec!["/root/.docker/config.json".to_string()]);
+    }
+
+    #[test]
+    fn scan_target_artifacts_emits_npm_install_hooks() {
+        let temp = tempfile::tempdir().unwrap();
+        let pkg = temp.path().join("node_modules/evil");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"evil","scripts":{"test":"jest","postinstall":"node setup.js | sh","preinstall":"echo hi"}}"#,
+        )
+        .unwrap();
+        let clean = temp.path().join("node_modules/clean");
+        std::fs::create_dir_all(&clean).unwrap();
+        std::fs::write(
+            clean.join("package.json"),
+            r#"{"name":"clean","scripts":{"test":"jest"}}"#,
+        )
+        .unwrap();
+        // A manifest outside node_modules is not an installed dependency.
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"scripts":{"postinstall":"node app.js"}}"#,
+        )
+        .unwrap();
+
+        let out = scan_target_artifacts(temp.path(), "npm");
+        let hook_lines: Vec<&str> = out
+            .lines()
+            .filter(|l| l.contains(super::NPM_INSTALL_SCRIPT_TYPE))
+            .collect();
+        assert_eq!(hook_lines.len(), 1, "only the evil manifest declares hooks");
+        assert!(hook_lines[0].starts_with("/work/node_modules/evil/package.json\0"));
+        // Hooks come out in npm lifecycle order as JSON pairs, and `|` is
+        // percent-encoded so the finding string cannot be split.
+        assert!(
+            hook_lines[0]
+                .ends_with(r#"[["preinstall","echo hi"],["postinstall","node setup.js %7C sh"]]"#)
+        );
+
+        // npm hooks are meaningless to a Python probe, so none are reported there.
+        assert!(
+            !scan_target_artifacts(temp.path(), "pip").contains(super::NPM_INSTALL_SCRIPT_TYPE)
+        );
+    }
+
+    #[test]
+    fn install_script_only_for_dependency_root_manifests() {
+        let temp = tempfile::tempdir().unwrap();
+        let hook = r#"{"scripts":{"postinstall":"node x.js"}}"#;
+        for (dir, expected) in [
+            ("node_modules/pkg", true),
+            ("node_modules/@scope/pkg", true),
+            ("node_modules/a/node_modules/b", true),
+            ("node_modules/pkg/examples", false),
+            ("node_modules/@scope", false),
+            ("node_modules/pkg/test/fixtures/node_modules_like", false),
+        ] {
+            let d = temp.path().join(dir);
+            std::fs::create_dir_all(&d).unwrap();
+            std::fs::write(d.join("package.json"), hook).unwrap();
+            let out = scan_target_artifacts(temp.path(), "npm");
+            let virt = format!("/work/{dir}/package.json\0");
+            let found = out
+                .lines()
+                .any(|l| l.starts_with(&virt) && l.contains(super::NPM_INSTALL_SCRIPT_TYPE));
+            assert_eq!(found, expected, "{dir}");
+        }
+    }
+
+    #[test]
+    fn install_script_hook_boundaries_cannot_be_forged() {
+        // A shell comment hides the fake `postinstall=` text in the first manifest,
+        // while the second really declares a separate postinstall hook.
+        let forged = r#"{"scripts":{"preinstall":"true #; postinstall=node evil.js"}}"#;
+        let real = r#"{"scripts":{"preinstall":"true #","postinstall":"node evil.js"}}"#;
+        let hooks_for = |manifest: &str| {
+            let temp = tempfile::tempdir().unwrap();
+            let pkg = temp.path().join("node_modules/p");
+            std::fs::create_dir_all(&pkg).unwrap();
+            std::fs::write(pkg.join("package.json"), manifest).unwrap();
+            super::npm_install_hooks(&pkg.join("package.json"), manifest.len() as u64)
+        };
+        assert_ne!(hooks_for(forged), hooks_for(real));
+    }
+
+    #[test]
+    fn scan_target_artifacts_reports_oversized_manifest_as_uninspected() {
+        let temp = tempfile::tempdir().unwrap();
+        let pkg = temp.path().join("node_modules/padded");
+        std::fs::create_dir_all(&pkg).unwrap();
+        let padding = "x".repeat((1 << 20) + 1);
+        std::fs::write(
+            pkg.join("package.json"),
+            format!(r#"{{"description":"{padding}","scripts":{{"postinstall":"node evil.js"}}}}"#),
+        )
+        .unwrap();
+
+        let out = scan_target_artifacts(temp.path(), "npm");
+        assert!(
+            out.lines()
+                .any(|l| l.contains(super::NPM_INSTALL_SCRIPT_TYPE)
+                    && l.ends_with("uninspected: manifest exceeds 1 MiB")),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn nono_state_dir_creation_failure_names_the_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let blocker = temp.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x").unwrap();
+        let _env = SandboxEnvVarGuard::set("XDG_STATE_HOME", blocker.to_str().unwrap());
+
+        let err = crate::sandbox::NonoRunner::default()
+            .trace_install_with_domains("npm", "left-pad", "1.3.0", None)
+            .unwrap_err();
+        assert!(err.contains("failed to create nono state dir"), "{err}");
+        assert!(err.contains("not-a-dir"), "{err}");
+        assert!(err.contains("XDG_STATE_HOME"), "{err}");
     }
 
     #[test]

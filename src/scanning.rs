@@ -8,7 +8,7 @@ use dns_lookup::{lookup_addr, lookup_host};
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::sandbox::SandboxRunner;
+use crate::sandbox::{NPM_INSTALL_SCRIPT_TYPE, SandboxRunner};
 
 /// Policy knobs resolved from the YAML config (or defaults), passed by reference
 /// into the scanner so call sites don't have to thread a dozen positional args.
@@ -42,6 +42,9 @@ pub(crate) struct PolicyConfig {
     /// allows that binary regardless of the `file -b` output.
     pub artifact_allowlist: HashMap<String, HashSet<String>>,
     pub sensitive_file_access_allowlist: HashMap<String, HashSet<String>>,
+    /// Extra `$HOME`-relative credential paths to plant as nono canary decoys,
+    /// on top of the built-in set.
+    pub nono_canary_secrets_paths: Vec<String>,
 }
 
 impl Default for PolicyConfig {
@@ -61,6 +64,7 @@ impl Default for PolicyConfig {
             process_exec_allowlist: HashMap::new(),
             artifact_allowlist: HashMap::new(),
             sensitive_file_access_allowlist: HashMap::new(),
+            nono_canary_secrets_paths: Vec::new(),
         }
     }
 }
@@ -952,6 +956,9 @@ fn extract_artifact_findings(full: &str) -> HashSet<String> {
 ///   - `unexpected_runtime|path|type` — bun/deno binary (subset of binary)
 ///   - `suspicious_pth|path|content`  — .pth with executable import/call patterns
 ///   - `large_file|path|size`        — file >10 MB
+///   - `install_script|path|hooks`   — dependency declares npm `preinstall` /
+///     `install` / `postinstall` (emitted by backends that cannot trace child
+///     processes, so a newly added hook is still caught as a new finding)
 fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> {
     let mut findings = HashSet::new();
     for line in raw {
@@ -990,6 +997,10 @@ fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> {
                 findings.insert(format!("unexpected_runtime|{}|{}", path, file_type));
             }
             findings.insert(format!("binary|{}|{}", path, file_type));
+        }
+
+        if file_type == NPM_INSTALL_SCRIPT_TYPE {
+            findings.insert(format!("install_script|{}|{}", path, content));
         }
 
         // Suspicious .pth detection.
@@ -1280,6 +1291,8 @@ fn is_sensitive_file_read(path: &str) -> bool {
         "/.config/openstack/clouds.yaml",
         "/.m2/settings.xml",
         "/.git-credentials",
+        "/.pypirc",
+        "/.config/gh/hosts.yml",
         "/.cargo/credentials",
         "/.gem/credentials",
     ];
@@ -1309,7 +1322,10 @@ fn is_sensitive_file_read(path: &str) -> bool {
             return true;
         }
     }
-    if path.contains("/.gnupg/private-keys-v1.d/") || path.contains("/.azure/") {
+    if path.contains("/.gnupg/private-keys-v1.d/")
+        || path.contains("/.azure/")
+        || path.starts_with(&format!("{}/", crate::sandbox::CANARY_CUSTOM_PREFIX))
+    {
         return true;
     }
 
@@ -2553,6 +2569,27 @@ mod tests {
         select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
         strip_artifact_section, unescape_strace_string,
     };
+
+    #[test]
+    fn every_nono_canary_label_is_classified_sensitive() {
+        // Canary hits are injected as synthetic `openat("<label>") = 3` events, so each
+        // label must be recognised or the decoy would never produce a finding.
+        for core in [
+            "/work/.env",
+            "/root/.aws/credentials",
+            "/root/.ssh/id_rsa",
+            "/root/.npmrc",
+        ] {
+            assert!(is_sensitive_file_read(core), "{core}");
+        }
+        for rel in crate::sandbox::CANARY_EXTRA_RELATIVE_PATHS {
+            let label = format!("/root/{rel}");
+            assert!(is_sensitive_file_read(&label), "{label}");
+        }
+        let custom = format!("{}/.vault-token", crate::sandbox::CANARY_CUSTOM_PREFIX);
+        assert!(is_sensitive_file_read(&custom));
+        assert!(!is_sensitive_file_read("/gyrseek-canaryx/.vault-token"));
+    }
 
     #[test]
     fn test_is_sensitive_file_read() {
@@ -5836,6 +5873,30 @@ read(6, "\x00\x44\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x03\x66\x6f\x6
         assert!(
             out.contains("suspicious_pth|/work/site-packages/evil.pth|import socket subprocess")
         );
+    }
+
+    #[test]
+    fn classify_inventory_install_script() {
+        let raw: HashSet<String> = [format!(
+            "/work/node_modules/evil/package.json\x00300\x00{}\x00postinstall=node setup.js",
+            crate::sandbox::NPM_INSTALL_SCRIPT_TYPE
+        )]
+        .into_iter()
+        .collect();
+        let out = classify_inventory_lines(raw);
+        assert!(out.contains(
+            "install_script|/work/node_modules/evil/package.json|postinstall=node setup.js"
+        ));
+    }
+
+    #[test]
+    fn classify_inventory_plain_manifest_is_not_install_script() {
+        let raw: HashSet<String> =
+            ["/work/node_modules/ok/package.json\x00300\x00ASCII text\x00{\"name\":\"ok\"}"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        assert!(classify_inventory_lines(raw).is_empty());
     }
 
     #[test]
