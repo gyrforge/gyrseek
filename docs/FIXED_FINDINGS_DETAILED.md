@@ -1631,7 +1631,7 @@ constraint that rules macOS out entirely.
 **Failure scenario:** A macOS operator who cannot run Docker (restricted laptop, licensing) reads the
 matrix, sets `GYRSEEK_SANDBOX=host`, and gets `failed to execute host strace: No such file or
 directory` on the first probe. With no working scan they may disable gyrseek altogether, when the
-correct guidance is that `host` mode is Linux-only.
+correct guidance is that `host` mode is Linux-only. (`GYRSEEK_SANDBOX` has since been removed; host mode is now selected with `--no-sandbox`.)
 
 **Fix:** The matrix now has explicit Linux / macOS / Windows (WSL2) / Windows (native) columns.
 `host` mode on macOS reads **Not supported (`strace` is Linux-only)**, with a note
@@ -1769,3 +1769,11 @@ only.
 ### Finding 60: Failed `open()` populates baselines without allowlist check (Baseline Poisoning)
 - **Root Cause**: `extract_sensitive_file_reads` extracted paths and inserted them into `reads` without verifying the syscall return code. Failed syscalls (`open(...) = -1 ENOENT` or `-1 EACCES`) populated baseline reads without triggering warnings, allowing an attacker to probe sensitive paths in baseline versions and then read them in current versions without detection.
 - **Fix**: Added `parse_syscall_return` to extract the integer return value from strace output. Restricted `reads.insert` and `fd_table.insert` to only execute when `ret_val >= 0`. Resumed syscalls unconditionally clear pending entries and only register reads upon successful completion. Added unit tests verifying that failed `openat`, `open`, and `symlink` syscalls are ignored.
+
+### Finding 23 follow-up: host mode now needs an explicit `--no-sandbox`
+- **Root Cause**: Host mode only needed `GYRSEEK_SANDBOX=host`, which can be left over in a shell profile or CI config. The earlier fix added a warning, but the mode was still reachable by an environment variable alone.
+- **Fix**: Host mode is selected only by the `--no-sandbox` flag, and the `GYRSEEK_SANDBOX` variable was removed entirely (Docker is the only other mode, so it had nothing left to choose). A leftover `GYRSEEK_SANDBOX=host` is ignored and Docker is used. The flag is consumed wherever it appears (`take_no_sandbox_flag`) and never forwarded to the package manager. Tests: `no_sandbox_builds_the_host_runner_without_docker`, `no_sandbox_flag_is_consumed_wherever_it_appears`, and `gyrseek_sandbox_env_var_is_ignored` in `tests/sandbox_startup_exit_tests.rs`.
+
+### Finding 291: AGENTS.md asked to sync summary tables in the detailed files
+- **Root Cause**: The post-change policy told agents to keep summary tables synced across the main and detailed findings files, but the `_DETAILED.md` files no longer have summary tables, so an agent could add a table row to a file with no table.
+- **Fix**: The policy now states that summary tables live only in the main files (`FIXED_FINDINGS.md`, `WONT_FIX_FINDINGS.md`, `OPEN_FINDINGS.md`) and that the `_DETAILED.md` files contain only prose entries.

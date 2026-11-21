@@ -1,6 +1,7 @@
 # Roadmap
 
 ## Completed
+- **External AI Code Review Migration** — Replaced in-repository AI review workflows and privileged `workflow_run` comment publishers with external CodeRabbit reviews (`.coderabbit.yaml`), isolating review feedback from runner execution contexts.
 - Install-time git clone behavior diffing across package versions, plus `git_clone_allowlist` support.
 - Process-execution diffing for all observed `execve` calls by default, with `process_exec_allowlist` as the only escape hatch.
 - Post-install artifact inventory and diffing (`binary`, `suspicious_pth`, `unexpected_runtime`, `large_file`) with `artifact_allowlist` support.
@@ -9,7 +10,7 @@
 - Expanded lockfile routing and fail-closed coverage for `uv sync`, bare `uv lock`, `uv lock --upgrade`, `uv lock -P/--upgrade-package`, `poetry install`, `poetry update`, and bare `poetry lock`.
 - Top-level `--version`/`-V` support that works before config load or sandbox initialization and does not intercept a forwarded command's own trailing flag.
 - Fail-closed manager handling: unsupported managers are rejected instead of being silently forwarded unscanned.
-- Embedded seccomp and AppArmor profiles in `src/sandbox.rs`, enabled by default with runtime status announcements and per-platform fallback.
+- Embedded seccomp (enabled by default) and AppArmor (opt-in via `GYRSEEK_DOCKER_APPARMOR_PROFILE`, Linux only) profiles in `src/sandbox.rs`, with runtime status announcements and per-platform fallback.
 - Empty/whitespace traces now fail closed; strace stderr is captured; Docker tracing is hardened with `-s 4096 -v`, unprivileged payload execution, and `--cap-add SYS_PTRACE`.
 - IPv6 capture and canonicalization, IPv4-mapped IPv6 collapse, sandbox-local IP filtering, and cloud-metadata IP preservation.
 - FCrDNS-backed `domain_allowlist`, balanced-bracket exec parsing, and correct PEP 508 extras normalization for registry lookup plus forwarded pinning.
@@ -23,7 +24,7 @@
 - Strace-based DNS interceptor fallback: `extract_dns_map` / `parse_dns_response` / `decode_dns_name` parse raw DNS wire-format from strace `recvfrom` output (requires strace `-xx` flag). When FCrDNS fails for a PTR-less IP (e.g. Fastly, Cloudflare), the container's own DNS responses are consulted; host-side `lookup_host` verifies the binding before trusting it. Circular pointer protection (5-hop limit) prevents crafted DNS packets from hanging the scanner.
 - `-xx` strace flag added for deterministic hex-escape output; `extract_process_exec_signatures` unescapes hex-escaped argv so `is_harness_command` filtering continues to work correctly.
 - Strict baseline comparison enforced: aggressively fail closed (`insufficient_baselines`) if the registry does not contain enough historical versions to satisfy `baseline_count` (unless the package is in `new_package_exemptions`).
-- Default baseline age gate set to 72 hours (`DEFAULT_MIN_BASELINE_AGE_HOURS`) with a hard floor of 24 (`HARD_MINIMUM_AGE_HOURS`); per-package values below the floor are silently clamped and a warning is emitted. Override versions younger than the hard floor are rejected in `check_override_ages`.
+- Default baseline age gate set to 72 hours (`DEFAULT_MIN_BASELINE_AGE_HOURS`) with a hard floor of 24 (`HARD_MINIMUM_AGE_HOURS`); per-package values below the floor are clamped with a warning. Override versions younger than the hard floor are rejected in `check_override_ages`.
 - `new_package_exemptions` redesigned from a flat list (`Vec<String>`) to a version-pinned map (`HashMap<String, String>`) with a custom serde deserializer that accepts both formats for backward compatibility. Empty version values produce a warning and are dropped. The `tgt_version` branch in the exemption match was removed to prevent `"latest"` string bypass.
 - The "safe to remove" exemption message is now gated on `new_package_exempt` so it only fires when the exemption version actually matched the current install, not just because baselines happen to suffice.
 
@@ -31,7 +32,7 @@
 - Fetch and analyze registry metadata (npm and Python package indices) prior to executing the sandbox to fast-fail on obvious static anomalies (e.g. newly introduced suspicious dependencies or scripts).
 - Add richer requirements and constraints parsing coverage, especially environment markers and line continuations.
 - Add end-to-end command-path tests for pinned forwarding and lockfile-flow verbatim forwarding with a stub manager.
-- Add focused tests for Docker matrix batching behavior so multi-package and multi-version paths are pinned by executable validation, not just inline helpers.
+- Add executable (not just script-text) validation of Docker matrix batching so multi-package and multi-version paths are pinned end to end; today the inline tests only check the generated script text.
 - Tighten user-facing error taxonomy and remediation guidance so fail-closed outcomes are easier to triage in CI and local workflows.
 
 ## Mid Term
@@ -46,7 +47,6 @@
 
 ### Hardening & Infrastructure
 
-- [x] **External AI Code Review Migration** — Replaced in-repository AI review workflows and privileged `workflow_run` comment publishers with external CodeRabbit reviews (`.coderabbit.yaml`), isolating review feedback from runner execution contexts.
 - Prebuilt scanner images as the default path — unblocks read-only rootfs, tighter capability drops, and stronger seccomp/apparmor defaults (see [`DOCKER_SECURITY.md`](DOCKER_SECURITY.md)).
 - Improve resilience to strace output variations.
 - Optional egress mediation/proxy mode for runtime scans (after no-execution-first stable) — logs full URLs (path-level visibility across registries) with allow/block policy, and checks Docker bridge reach into private ranges (OPEN_FINDINGS #412).

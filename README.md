@@ -51,11 +51,23 @@ We welcome feedback and suggestions to this repository.
 
 ### 1. Prerequisites
 
-- Rust toolchain (`cargo`, `rustc`)
-- Network access to package registries (PyPI, npm)
-- The package managers you want to wrap (`uv`, `pip`, `poetry`, `npm`, `pnpm`)
-- **Docker CLI** on your `PATH` (the default, safer sandbox mode)
-- `strace` on your `PATH` only if you use the detection-only `host` mode (no isolation)
+Check these before your first scan. If Docker is missing or not running, `gyrseek` stops at startup with exit code 1 and tells you which. (In host mode there is no startup check for `strace`; a missing `strace` fails at the first probe.)
+
+| Requirement | Needed for | Notes |
+|---|---|---|
+| **Docker, installed and running** | Every scan (the default and only sandbox) | The `docker` CLI must be on your `PATH` and the daemon must be running (Docker Desktop on macOS, the Docker service on Linux). Your user needs permission to talk to it (on Linux, usually the `docker` group). The first scan pulls the scanner image for the package manager you use, so it needs access to Docker Hub or your mirror. |
+| **Linux, macOS, or Windows via WSL2** | Running `gyrseek` | Native Windows is not supported: run `gyrseek` inside a WSL2 distro that has Docker. |
+| **The package manager you wrap** | The forwarded install | `uv`, `pip`/`pip3`, `poetry`, `npm`, or `pnpm`, installed on the machine where you run `gyrseek`. The scan itself runs inside the container, but a clear scan forwards your command to the real tool. |
+| **Network access to the package registries** | Registry lookups and the probes | PyPI and/or npm (or your configured registries). |
+| **Rust toolchain** (`cargo`, `rustc`) and [`just`](https://github.com/casey/just) | Building from source only | Not needed if you already have a built `gyrseek` binary. |
+| `strace` on your `PATH` | Host mode only | Only for `--no-sandbox` (no isolation, detection only), and only on Linux or WSL2. Not needed for the default Docker mode. |
+
+Quick check:
+
+```bash
+docker --version   # Docker CLI is installed
+docker info        # the daemon is running and you may use it
+```
 
 ### 2. Build
 
@@ -124,7 +136,7 @@ just test-uv
 just test-poetry
 ```
 
-> The end-to-end recipes use `GYRSEEK_SANDBOX=docker` by default (inherited from your environment). Make sure Docker is running before executing them.
+> The end-to-end recipes use the Docker sandbox. Make sure Docker is running before executing them.
 
 ## Supported Commands
 
@@ -136,7 +148,7 @@ just test-poetry
 | **npm**    | `npm install`, `npm i`, `npm update`                                                                                                  |
 | **pnpm**   | `pnpm add`, `pnpm install`, `pnpm i`, `pnpm update`                                                                                   |
 
-> Standalone `git clone` runtime interception is not enabled yet — only install-time clone behavior _inside_ package scans is enforced today (see [Git Clone Behavior](#git-clone-behavior)).
+> Standalone `git clone` runtime interception is not enabled yet — only install-time clone behavior _inside_ package scans is enforced today (see [Git Clone Behavior](#git-clone-behavior-detection)).
 
 > **`--version` / `-V`:** pass either flag as the first argument to print `gyrseek <version>` and exit 0. This works with no config file or Docker present. A forwarded command's own trailing `--version` (e.g. `gyrseek pip install foo --version`) is passed through unchanged.
 
@@ -205,9 +217,9 @@ cargo run npm install lodash
 4. **Compare behavior signals** between the target and its baselines:
    - **Network**: endpoints contacted during install (see [Network Behavior Detection](#network-behavior-detection)).
    - **Git clone**: install-time `git clone` command signatures (see [Git Clone Behavior Detection](#git-clone-behavior-detection)).
-   - **Process execution**: all programs executed during install — the payload's own commands plus the sandbox's internal setup (see [Process-Execution Detection](#process-execution-detection)).
+   - **Process execution**: all programs executed during install — the payload's own commands plus the sandbox's internal setup (see [Process-Execution Detection](#process-execution-behavior-detection)).
    - **Sensitive files**: attempts to read sensitive credentials or configuration files (see [Sensitive File Access Behavior Detection](#sensitive-file-access-behavior-detection)).
-   - **Artifacts**: post-install file inventory of every installed file — binary executables, suspicious `.pth` files, unexpected runtimes, and large files (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
+   - **Artifacts**: post-install file inventory of every installed file — binary executables, suspicious `.pth` files, unexpected runtimes, and large files (see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection)).
 5. **Decide**:
    - If one or more behavioral anomalies are found (e.g., new endpoint, clone behavior, process execution, sensitive file read, or artifact finding) → **all findings are aggregated, reported together, and the install is blocked (exits non-zero)**. It does not short-circuit on the first failure.
    - Nothing new → **forward your original command**.
@@ -230,8 +242,8 @@ This gives you a _behavioral_ signal, rather than relying only on package metada
 - It computes the difference between **current version** and **baseline versions** using domain-aware FCrDNS diffing.
 - Any endpoint whose domain (or IP, when unresolvable) has not been seen in baseline traffic is treated as a behavioral anomaly.
 - Install-time `git clone` command signatures (e.g. clone target and recursive-clone usage) are also diffed across versions.
-- Install-time execution of all programs is captured and diffed across versions to catch download-and-run payloads — see [Process-Execution Detection](#process-execution-detection).
-- Post-install file inventory (binary executables, suspicious `.pth` files, unexpected runtimes, files >10 MB) is recorded and diffed across versions — see [Post-Install Artifact Detection](#post-install-artifact-detection).
+- Install-time execution of all programs is captured and diffed across versions to catch download-and-run payloads — see [Process-Execution Detection](#process-execution-behavior-detection).
+- Post-install file inventory (binary executables, suspicious `.pth` files, unexpected runtimes, files >10 MB) is recorded and diffed across versions — see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection).
 - New IPs are **always** treated as anomalies (fail-closed), unless the IP's FCrDNS resolves to a domain already seen in baseline traffic — in which case it is silently discarded as a benign CDN edge rotation.
 - Domain-aware IP diff resolves each IP via FCrDNS and compares at the domain level, not the IP level. If a current IP resolves to a domain already seen in baseline traffic (e.g. a rotated Fastly edge IP for `files.pythonhosted.org`), it is silently discarded — no hardcoded domain list needed. This handles benign CDN edge rotations for any infrastructure automatically. Unresolvable IPs fall back to plain IP membership so the diff stays fail-closed for genuinely new or spoofed endpoints.
 - The `domain_allowlist` uses **forward-confirmed reverse DNS (FCrDNS)**: a PTR hostname is only trusted if it resolves _forward_ back to the original IP. An attacker who sets their C2 server's PTR record to an allowlisted domain cannot bypass the allowlist, because the allowlisted domain's real A/AAAA record does not point back at the C2 IP.
@@ -240,17 +252,15 @@ This gives you a _behavioral_ signal, rather than relying only on package metada
 Example — abnormal network behavior detected:
 
 ```text
-❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
+❌ [gyrseek] CRITICAL WARNING: network_anomaly flagged!
 Package 'left-pad', version '1.3.0' contacted new endpoints not seen in baseline versions (1.2.0, 1.1.3): ["203.0.113.42 -> suspicious-c2.example"]
-Aborting host operation securely.
 ```
 
 Example — a new hidden install-time `git clone` detected:
 
 ```text
-❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
+❌ [gyrseek] CRITICAL WARNING: git_clone_anomaly flagged!
 Package 'left-pad', version '1.3.0' introduced new git clone behavior not seen in baseline versions (1.2.0, 1.1.3): ["https://github.com/unknown/repo.git|non-recursive"]
-Aborting host operation securely.
 ```
 
 ### Git Clone Behavior Detection
@@ -258,14 +268,6 @@ Aborting host operation securely.
 - **Install-time clones** (e.g. hidden `git clone` calls inside package scripts) are compared across package versions during scanning, and new behavior is fail-closed unless allowlisted.
 - Clone-detection logic is exercised via inline unit tests in `src/scanning.rs` (moved from the old `tests/git_clone_behavior_tests.rs`).
 - **Runtime interception of direct `git clone ...` shell commands is not enabled yet** in the CLI parser.
-
-Example warning (simulation/test context):
-
-```text
-❌ [gyrseek] CRITICAL WARNING: Behavioral anomaly flagged!
-git clone simulation contacted new endpoints not seen in baseline clone behavior: ["185.199.108.133"]
-Aborting host operation securely.
-```
 
 ### Process-Execution Behavior Detection
 
@@ -282,7 +284,7 @@ It captures **every** `execve` system call inside the sandbox, extracts the exec
 - **Harness Exclusion:** The sandbox's own install commands (e.g., `uv pip install`, `npm install`) and interpreter-discovery subprocesses are automatically filtered out. Only the package's own behavior contributes to the diff.
 - **Allowlisting:** Expected new behavior can be explicitly permitted using the `process_exec_allowlist` config key (see [Configuration](#configuration)).
 
-> **Scope Limitation:** This observes processes executed _inside the sandbox during install_ (e.g., npm `preinstall`/`postinstall` hooks or Python `setup.py` execution). Attacks that defer execution to the _next interpreter startup_ (like the PyPI `*-setup.pth` variant) execute outside this window. However, Gyrseek's post-install artifact scan catches the `.pth` file itself before the install finishes (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
+> **Scope Limitation:** This observes processes executed _inside the sandbox during install_ (e.g., npm `preinstall`/`postinstall` hooks or Python `setup.py` execution). Attacks that defer execution to the _next interpreter startup_ (like the PyPI `*-setup.pth` variant) execute outside this window. However, Gyrseek's post-install artifact scan catches the `.pth` file itself before the install finishes (see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection)).
 
 ### Sensitive File Access Behavior Detection
 
@@ -310,7 +312,7 @@ The classifier emits four signal categories:
 
 1. **`binary`** — ELF, Mach-O, or PE executables deposited in the install tree. Catches cryptominers, compiled malware, and arbitrary native binaries.
 2. **`suspicious_pth`** — Python `.pth` files containing executable code (`import`, `exec`, `eval`, `urllib`, `subprocess`, `ctypes`, `socket` patterns). These are essentially never used by legitimate namespace-path `.pth` files and are the Hades/Miasma delivery mechanism.
-3. **`unexpected_runtime`** — bun/deno runtime binaries (identified by filename and binary type). A subset of `binary` with higher severity. Catches download-and-execute attacks that leave a runtime behind.
+3. **`unexpected_runtime`** — bun/deno runtime binaries (identified by filename and binary type). Emitted in addition to the `binary` finding for the same file. Catches download-and-execute attacks that leave a runtime behind.
 4. **`large_file`** — any file >10 MB in the install tree. Catches data exfiltration staging and large payload drops.
 
 **How it works** — after each per-probe install step in the Docker matrix script, a single `find /work -type f` pipeline inventories every installed file, capturing size via `stat`, type via `file -b`, and a 300-byte content prefix via `head -c`. The raw inventory is written to `/out/gyrseek_artifacts_N.log`, embedded in the probe trace, and classified by `classify_inventory_lines` in scanning.rs before entering the diff pipeline.
@@ -318,11 +320,10 @@ The classifier emits four signal categories:
 **Diff-based verdict** — like all of gyrseek's detection signals, artifact findings are compared across versions. A finding present in a baseline version is expected; a finding newly appearing in the current version (absent from all baselines) is **fail-closed**:
 
 ```text
-❌ [gyrseek] CRITICAL WARNING: Suspicious artifact(s) discovered after install!
+❌ [gyrseek] CRITICAL WARNING: Suspicious artifact(s) discovered after install flagged!
 Package 'evil-pkg', version '2.0.0' introduced new suspicious file artifact(s) not
 seen in baseline versions (1.9.0, 1.8.0): ["suspicious_pth|/work/site-packages/evil.pth|import socket"]
 This may indicate a .pth file with executable content or an unexpected runtime binary.
-Aborting host operation securely.
 ```
 
 This closes the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during `pip install` (as ordinary file I/O, invisible to strace's `network,execve` filter) but detected by the post-install artifact scan before the container session ends. The same pipeline catches ELF-based payloads, large data exfiltration, and any future file-level IOC — all without modifying the container script.
@@ -376,17 +377,17 @@ The table below maps known supply chain attack waves across different ecosystems
 
 **What gyrseek catches, stated plainly**
 
-gyrseek reliably catches supply chain attacks where the malicious behaviour fires *during* `npm install` or `pip install` — specifically the `preinstall`/`postinstall` hook variants and `.pth` file artifacts used in the Shai-Hulud, Axios, CanisterWorm, LiteLLM, Namastex/CanisterSprawl, SAP CAP, Bitwarden, TanStack/Mini-Shai-Hulud, and easy-day-js (Mastra) waves. The Telnyx and TanStack PyPI import-time waves are deferred (see gap below). The IoC classes that trigger detection are:
+gyrseek reliably catches supply chain attacks where the malicious behaviour fires *during* `npm install` or `pip install` — specifically the `preinstall`/`postinstall` hook variants and `.pth` file artifacts used in the Shai-Hulud, Axios, CanisterWorm, LiteLLM, Namastex/CanisterSprawl, SAP CAP, Bitwarden, TanStack/Mini-Shai-Hulud, and easy-day-js (Mastra) waves. The Telnyx and `mistralai` (Mini-Shai-Hulud T32) PyPI import-time waves are deferred (see gap below). The IoC classes that trigger detection are:
 
 - **New network connection** to GitHub Releases (`github.com/oven-sh/bun/releases/...`) — the Bun download
 - **Process execution** — *any* newly introduced program execution (not just bun/deno). Previously only a `bun`/`deno` allowlist was captured; now every `execve` is recorded and diffed, so a variant using `node`, `python`, `deno`, `curl`, `wget`, or any other runtime as the payload runner is equally caught.
-- **Post-install file artifact** — `.pth` files with executable content, unexpected runtime binaries, or large files not present in baselines (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
+- **Post-install file artifact** — `.pth` files with executable content, unexpected runtime binaries, or large files not present in baselines (see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection)).
 
 Either signal alone is sufficient to block the install before it completes.
 
 **The core gap — deferred Python execution**
 
-Several PyPI waves (including Shai-Hulud: Hades/Miasma, Shai-Hulud: Bioinformatics/MCP, TeamPCP LiteLLM, TeamPCP Telnyx, and TeamPCP TanStack/Mini-Shai-Hulud T32) use `.pth` files and import hooks specifically to survive install-time scanners. Telnyx (T26) avoided postinstall hooks entirely, placing `FetchAudio()` and `setup()` calls at module scope in `_client.py` — the payload only fires on `import telnyx`, not during `pip install`. TanStack/Mini-Shai-Hulud (T32) used the same pattern: a cleartext backdoor appended to `mistralai`'s `__init__.py` at module scope. The sequence:
+Several PyPI waves (including Shai-Hulud: Hades/Miasma, Shai-Hulud: Bioinformatics/MCP, TeamPCP LiteLLM, TeamPCP Telnyx, and TeamPCP `mistralai`/Mini-Shai-Hulud T32) use `.pth` files and import hooks specifically to survive install-time scanners. Telnyx (T26) avoided postinstall hooks entirely, placing `FetchAudio()` and `setup()` calls at module scope in `_client.py` — the payload only fires on `import telnyx`, not during `pip install`. `mistralai`/Mini-Shai-Hulud (T32) used the same pattern: a cleartext backdoor appended to `mistralai`'s `__init__.py` at module scope. The sequence:
 
 1. `pip install evil-pkg` runs inside gyrseek's sandbox — the `.pth` file is written to `site-packages`. The **post-install artifact scan** catches it (detects `.pth` files with executable imports) before the container exits, and blocks the host command. Install-time process execution and network may show nothing anomalous, but the artifact diff fails closed.
 2. The next time *any* Python interpreter starts on the host, `.pth` fires, downloads Bun from GitHub, and runs the stealer — but the package was already blocked at step 1.
@@ -395,7 +396,7 @@ gyrseek's sandbox window ends when `pip install` exits.
 
 **What closes this gap now**
 
-The **post-install file inventory** (implemented, see [dedicated section](#post-install-artifact-detection)) runs inside the Docker container after each install probe, recording every installed file via `find /work -type f` and classifying findings on the Rust side (`.pth` with executable content, binary executables, unexpected runtime binaries, files >10 MB) before the container exits. Findings are diffed across versions: a `.pth` file newly introduced in the current version (not seen in baselines) fails closed. This catches the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during install and detected inside the same container session.
+The **post-install file inventory** (implemented, see [dedicated section](#post-install-artifact-behavior-detection)) runs inside the Docker container after each install probe, recording every installed file via `find /work -type f` and classifying findings on the Rust side (`.pth` with executable content, binary executables, unexpected runtime binaries, files >10 MB) before the container exits. Findings are diffed across versions: a `.pth` file newly introduced in the current version (not seen in baselines) fails closed. This catches the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during install and detected inside the same container session.
 
 The remaining gap for `.pth`-based attacks is T1b (deferred bun download-and-execute on next interpreter startup). Even though the `.pth` file is now caught at T1, a container escape or interpreter-startup interception would be needed to catch the execution phase. A post-install interpreter trigger step (start Python with the installed packages on `sys.path` to force `.pth` execution) remains on the roadmap for future hardening.
 
@@ -407,12 +408,13 @@ A distinct gap is the Telnyx import-time pattern (T26): placing malicious code a
 
 ### CLI Arguments
 
-Gyrseek supports the following global CLI arguments. They must be provided *before* the package manager command (e.g., `gyrseek --config=./my.yaml npm install`).
+Gyrseek supports the following global CLI arguments. `--version` must be the first argument and `--config`/`-c` must come before the package manager command (e.g., `gyrseek --config=./my.yaml npm install`). `--no-sandbox` and `--danger-disable-seccomp` are accepted anywhere and are never forwarded to the package manager.
 
 | Argument | Description |
 |---|---|
 | `--version`, `-V` | Prints the current Gyrseek version and exits. |
 | `--config`, `-c` | Path to the YAML policy file. Overrides the default `gyrseek.yaml` and `GYRSEEK_CONFIG` environment variable. Example: `--config=./policy.yaml`. |
+| `--no-sandbox` | Runs probes directly on the host with **no isolation** (detection only; Linux/WSL2, needs `strace`, and no post-install artifact scan). See [Sandbox Modes](#sandbox-modes). |
 | `--danger-disable-seccomp` | Disables the embedded default-allow seccomp profile during the sandbox phase. This drastically reduces the sandbox's security guarantees and should only be used for debugging. |
 
 
@@ -432,7 +434,7 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 | `domain_allowlist`            | empty         | Domains to ignore. Same semantics and syntax: effective set = global ∪ per-package (see `ip_allowlist`). Lowercased, trailing `.` stripped. Subdomains match parents (`cdn.example.com` matches `example.com`). Only **forward-confirmed** PTR hostnames (FCrDNS) are matched, so a spoofed reverse-DNS record cannot bypass the allowlist. |
 | `artifact_allowlist`          | empty         | Artifact findings to allow **per package** (map of package name to list of allowed artifacts; exact `type\|path\|details` or prefix `type\|path`). New artifacts not in baselines and not allowlisted fail closed. Example: `binary\|/work/bin/tool`.               |
 | `git_clone_allowlist`         | empty         | Git clone targets to allow **per package** when new install-time clone behavior appears (case-insensitive exact URL match).                                                                                                                                                    |
-| `sensitive_file_access_allowlist` | empty         | Sensitive file reads to ignore **per package** (map of package name to list of allowed paths). Supports suffix matching via `*` prefix. E.g. `*.env` matches `/work/.env`. |
+| `sensitive_file_access_allowlist` | empty         | Sensitive file reads to ignore **per package** (map of package name to list of allowed paths). A leading `*` matches a read whose path equals, or ends in `/`, the text after the `*`. E.g. `*.env` matches a read of `.env` or `/work/.env`, not `foo.env`. |
 | `baseline_overrides`          | none          | Pin baseline versions **per package** via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines.                                                                                                                                       |
 | `baseline_count`              | `2`           | How many historical baselines to compare against.                                                                                                                                                                                                              |
 | `min_baseline_age_hours`      | `72`          | **Per-package** minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default. Values below 24h are clamped to the 24h security floor (with a warning).                                       |
@@ -492,15 +494,6 @@ internal_package_exemptions:
 minimum_release_age_package: 3
 release_burst_threshold: 3
 release_burst_window_hours: 24
-process_exec_allowlist:
-  - bun|run|testing.js
-  - bun|run|build
-  - deno
-sensitive_file_access_allowlist:
-  my-database-tool:
-    - "*.env"
-  my-aws-tool:
-    - "*.aws/credentials"
 ```
 
 ### Config loading behavior
@@ -510,27 +503,30 @@ sensitive_file_access_allowlist:
 
 ## Sandbox Modes
 
-`gyrseek` runs scan probes through a `SandboxRunner` backend selected by environment variable:
+`gyrseek` runs scan probes through a `SandboxRunner` backend. Docker is the default; host mode is selected only with the `--no-sandbox` flag:
 
-| Mode                 | `GYRSEEK_SANDBOX` | Notes                                                                |
+| Mode                 | Selected by       | Notes                                                                |
 | -------------------- | ----------------- | -------------------------------------------------------------------- |
-| **Docker** (default) | `docker`          | Safer default. Requires the Docker CLI and a running daemon; if either is missing, `gyrseek` stops at startup with exit code 1 and says which. |
-| **Host**             | `host`            | Fastest, **no isolation and zero protection (detection only)**. This mode exists purely for running in isolated environments — see warning below. |
+| **Docker** (default) | (default)         | Safer default. Requires the Docker CLI and a running daemon; if either is missing, `gyrseek` stops at startup with exit code 1 and says which. |
+| **Host**             | `--no-sandbox`    | Fastest, **no isolation and zero protection (detection only)**. This mode exists purely for running in isolated environments — see warning below. |
 
 ```bash
-GYRSEEK_SANDBOX=docker ./target/release/gyrseek npm install
-GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
+./target/release/gyrseek npm install
+./target/release/gyrseek --no-sandbox pip3 install -r requirements.txt
 ```
 
 - If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
+- Host mode runs no post-install artifact scan, so the `binary`, `suspicious_pth`, `unexpected_runtime` and `large_file` findings are only produced in Docker mode.
+- The retired `GYRSEEK_SANDBOX` environment variable is ignored.
+- ⚠️ **Host mode has to be requested explicitly with `--no-sandbox`.** There is no environment variable that selects it, so a stray or inherited setting cannot switch isolation off. Like `--danger-disable-seccomp`, the flag is consumed wherever it appears and is never forwarded to the package manager.
 - ⚠️ **Host mode provides no protection, only detection.** There is no sandbox at all: the probe runs the package (the unvetted candidate included) directly on your machine as your user, with your filesystem, network and environment. If the package is malicious it has already executed by the time `gyrseek` reports it; the block only stops the follow-up install. The trace has no integrity protection either, since the payload runs as the same user that reads it. Run it only in a very isolated, disposable environment with no secrets, no credentials and no access to internal networks; the environment itself must be the sandbox. Never on a developer laptop or any machine holding real credentials.
 
 ### Platform support matrix
 
-| Mode      | macOS (Docker Desktop)                                   | Linux host/VM                                                |
+| Mode               | macOS (Docker Desktop)                                   | Linux host/VM                                                |
 | --------- | -------------------------------------------------------- | ------------------------------------------------------------ |
-| `docker`  | Supported                                                | Supported                                                    |
-| `host`    | **Not supported** (`strace` has no macOS build)          | Supported (requires local `strace`)                          |
+| Docker (default)   | Supported                                                | Supported                                                    |
+| Host (`--no-sandbox`) | **Not supported** (`strace` has no macOS build; fails at the first probe) | Supported (requires local `strace`)               |
 
 ### Scanner image configuration
 
@@ -540,8 +536,9 @@ GYRSEEK_SANDBOX=host   ./target/release/gyrseek pip3 install -r requirements.txt
 | `GYRSEEK_PY_SCANNER_IMAGE`                                     | `python:3.13-slim-bookworm@sha256:05b9...` | Python scanner image (pip/uv/poetry).     |
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES`                              | `false`                 | Enable prebuilt fast path for both managers. |
 | `GYRSEEK_NPM_SCANNER_PREBUILT` / `GYRSEEK_PY_SCANNER_PREBUILT` | `false`                 | Per-manager prebuilt override.               |
-
-| `GYRSEEK_DOCKER_APPARMOR_PROFILE`                               | `false`                 | Boolean toggle (`true`/`false`) for embedded AppArmor profile use in Docker sandbox runs. Loaded via `apparmor_parser` at runtime. On macOS (where `apparmor_parser` is unavailable), a warning is emitted and the sandbox falls back to Docker's default AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on native Linux hosts (runtime apt setup conflicts with profile). Defaults to `false` because the prerequisites are not always met. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection. |
+| `GYRSEEK_DOCKER_APPARMOR_PROFILE`                               | `false`                 | Boolean toggle (`true`/`false`) for embedded AppArmor profile use in Docker sandbox runs. Loaded via `apparmor_parser` at runtime. On macOS (where `apparmor_parser` is unavailable) nothing is printed and no AppArmor profile applies. Requires `apparmor-utils` + prebuilt scanner image on native Linux hosts (runtime apt setup conflicts with profile). Defaults to `false` because the prerequisites are not always met. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection. |
+| `GYRSEEK_MEM_LIMIT`                                            | `2g`                    | Container memory limit and `/work` tmpfs size for probes. |
+| `GYRSEEK_MAX_PROCESSES`                                        | `256`                   | Container process limit for probes. `GYRSEEK_PIDS_LIMIT` is accepted as a fallback. |
 
 In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency.
 
@@ -642,7 +639,7 @@ Details worth knowing once you're past the basics.
 - For supported install/sync paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
 - If the host command itself cannot be launched after a clean scan, `gyrseek` also fails closed.
 - A sandbox probe that produces an **empty/whitespace trace** (e.g. `strace` could not attach) is a hard error: every package in that batch is blocked. Blank traces are never interpreted as clean.
-- **Post-install artifact findings** — binary executables, suspicious `.pth` files, unexpected runtimes, and large files — are diffed across versions. A finding newly present in the current version (absent from all baselines) fails closed (see [Post-Install Artifact Detection](#post-install-artifact-detection)).
+- **Post-install artifact findings** — binary executables, suspicious `.pth` files, unexpected runtimes, and large files — are diffed across versions. A finding newly present in the current version (absent from all baselines) fails closed (see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection)).
 - When a forwarded command exits non-zero, `gyrseek` **exits with the same code** rather than masking the failure as success.
 
 ## Docker Security
@@ -650,7 +647,7 @@ Details worth knowing once you're past the basics.
 See [`docs/DOCKER_SECURITY.md`](docs/DOCKER_SECURITY.md) for the canonical reference on Docker sandbox hardening, including:
 
 - **Seccomp profile** — embedded in `src/sandbox.rs`, enabled by default, materialized to a temp file at runtime. Denies high-risk syscalls — notably `io_uring`, which would otherwise let a package perform file I/O invisible to `strace` — while preserving network access for package managers. Active on every platform, including macOS Docker Desktop and WSL2, because it is enforced by the container's Linux kernel rather than the host OS. **This is the layer detection integrity depends on; do not disable it.**
-- **AppArmor profile** — embedded in `src/sandbox.rs`, disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`); enable explicitly with `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`. Loaded via `apparmor_parser` at runtime. **Native Linux hosts only** (requires `apparmor-utils` + a prebuilt scanner image): permanently unavailable on macOS, where no `apparmor_parser` exists and Docker Desktop's LinuxKit kernel lacks the AppArmor LSM — gyrseek warns once and falls back to Docker's default profile. Recommended on Linux for stronger path-based protection, but marginal for supply-chain detection; see [Is seccomp enough, or is AppArmor required?](docs/DOCKER_SECURITY.md#is-seccomp-enough-or-is-apparmor-required).
+- **AppArmor profile** — embedded in `src/sandbox.rs`, disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`); enable explicitly with `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`. Loaded via `apparmor_parser` at runtime. **Native Linux hosts only** (requires `apparmor-utils` + a prebuilt scanner image): permanently unavailable on macOS, where no `apparmor_parser` exists and Docker Desktop's LinuxKit kernel lacks the AppArmor LSM — gyrseek prints nothing and no AppArmor profile applies. Recommended on Linux for stronger path-based protection, but marginal for supply-chain detection; see [Is seccomp enough, or is AppArmor required?](docs/DOCKER_SECURITY.md#is-seccomp-enough-or-is-apparmor-required).
 - **Capabilities** — `SYS_PTRACE` added for cross-UID strace; `no-new-privileges` enabled.
 - **Unprivileged payload** — traced install runs as unprivileged user; trace logs are root-owned. On native Linux the bind mount enforces that; on macOS Docker Desktop it does not, so the payload could alter its own trace (see `docs/OPEN_FINDINGS.md` #411).
 - **Validation checklist**, troubleshooting, backout plan, and current hardening limitations.
@@ -680,6 +677,7 @@ cargo test --test forward_fail_closed_tests
 cargo test --test lock_routing_tests
 cargo test --test pnpm_routing_tests
 cargo test --test version_flag_tests
+cargo test --test sandbox_startup_exit_tests
 
 # Run one specific test case by name
 cargo test parses_npm_install_with_pinned_version
@@ -717,6 +715,7 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 - `tests/forward_fail_closed_tests.rs` — fail-closed forwarding and exit-status propagation tests (spawn binary)
 - `tests/lock_routing_tests.rs` — `poetry lock`, `uv lock`, `pnpm install` routing and `uv venv` passthrough tests (spawn binary)
 - `tests/pnpm_routing_tests.rs` — `pnpm add` / `pnpm install` package.json fallback routing tests (spawn binary)
+- `tests/sandbox_startup_exit_tests.rs` — sandbox startup failures (Docker missing or daemon down, an unscanned passthrough never initializing the sandbox, the retired `GYRSEEK_SANDBOX` variable being ignored) exit 1 with a cause-specific message (spawn binary with a fake `docker`)
 - `tests/version_flag_tests.rs` — `--version`/`-V` print-and-exit and forwarded trailing `--version` passthrough tests (spawn binary)
 
 **Just recipes**
@@ -732,8 +731,7 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 
 **Collaboration docs** (for multi-developer / multi-LLM work)
 
-- `docs/ARCHITECTURE.md` — control-flow and component map
-- `docs/DEV_GUIDE.md` — contributor workflow and change hygiene
+- `docs/ARCHITECTURE.md` — control-flow and component map, plus the contributor workflow and change hygiene
 - `docs/ROADMAP.md` — planned improvements and next steps
 - `docs/OPEN_FINDINGS.md`, `docs/FIXED_FINDINGS.md`, `docs/WONT_FIX_FINDINGS.md` — security and correctness findings logs
 - `docs/DOCKER_SECURITY.md` — Docker sandbox security reference (seccomp, AppArmor, capabilities, validation)
