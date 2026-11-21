@@ -27,14 +27,14 @@ lint:
 [working-directory: 'tests/npm']
 test-npm +args='': build
     "{{bin}}" {{args}} npm install lodash
-    "{{bin}}" {{args}} npm update
+    "{{bin}}" {{args}} npm ci
     "{{bin}}" {{args}} npm i
 
 # End-to-end tests for pnpm
 [working-directory: 'tests/pnpm']
 test-pnpm +args='': build
     "{{bin}}" {{args}} pnpm add lodash
-    "{{bin}}" {{args}} pnpm update
+    "{{bin}}" {{args}} pnpm install --frozen-lockfile
     "{{bin}}" {{args}} pnpm i
 
 # End-to-end tests for pip
@@ -57,7 +57,7 @@ test-poetry +args='': build
 [working-directory: 'tests/uv']
 test-uv +args='': build
     "{{bin}}" {{args}} uv add black
-    "{{bin}}" {{args}} uv pip install -r ./pyproject.toml
+    "{{bin}}" {{args}} uv pip install -r ./requirements.txt
     "{{bin}}" {{args}} uv sync
     "{{bin}}" {{args}} uv lock
 
@@ -79,6 +79,19 @@ docker-build-python:
 # Build Docker image for npm/pnpm scanning
 docker-build-npm:
     docker build -f docker/Dockerfile.npm -t gyrseek-npm-scanner:latest .
+
+# Lint the Dockerfiles with the hadolint version CI runs (hadolint-action v3.1.0 uses v2.12.0)
+lint-dockerfiles:
+    #!/usr/bin/env sh
+    for f in docker/Dockerfile.*; do docker run --rm -i hadolint/hadolint:v2.12.0-debian hadolint - < "$f" || exit 1; done
+
+# Compare the digest-pinned sandbox base images in src/runtime_image.rs with the registry (needs Docker)
+image-pins:
+    #!/usr/bin/env sh
+    grep -oE '(python|node):[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}' src/runtime_image.rs | while IFS=@ read -r ref pinned; do
+        now=$(docker buildx imagetools inspect "$ref" | awk '/^Digest:/{print $2}')
+        if [ "$now" = "$pinned" ]; then echo "ok     $ref"; else echo "DRIFT  $ref  pinned=$pinned  now=$now"; fi
+    done
 
 # Tag current HEAD with version from Cargo.toml (force-update)
 tag:

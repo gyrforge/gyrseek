@@ -1,4 +1,9 @@
-FROM node:26.3-bookworm-slim@sha256:3fe807a03a4436e7bc76b7e84e6861899cd75c9028ae99bc00581940141ae150
+# Base image. The default matches gyrseek's built-in Node 26 image. To match your project's Node,
+# pass one of the digest-pinned images gyrseek ships (see NODE_IMAGES in src/runtime_image.rs):
+#   docker build --build-arg NODE_BASE=node:22-bookworm-slim@sha256:<digest> ...
+ARG NODE_BASE=node:26.3-bookworm-slim@sha256:9898bb74f4ee319780e87819df703b3633113bc3422f151fd11155cf974a2749
+# hadolint ignore=DL3006
+FROM ${NODE_BASE}
 
 # hadolint ignore=DL3008,DL3016
 RUN apt-get update && \

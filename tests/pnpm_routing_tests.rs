@@ -31,13 +31,19 @@ fn pnpm_add_reaches_scan_branch() {
 }
 
 #[test]
-fn pnpm_install_uses_package_json_fallback() {
+fn pnpm_install_scans_the_lockfile_not_package_json() {
     let dir = tempfile::tempdir().expect("temp dir should be created");
+    // package.json holds a range; only the lockfile says what is installed.
     fs::write(
         dir.path().join("package.json"),
         r#"{"dependencies":{"left-pad":"^1.3.0"}}"#,
     )
     .expect("package.json should be written");
+    fs::write(
+        dir.path().join("pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\npackages:\n  left-pad@1.3.0:\n    resolution: {integrity: sha512-a}\n  is-odd@3.0.1:\n    resolution: {integrity: sha512-b}\nsnapshots: {}\n",
+    )
+    .expect("lockfile should be written");
 
     let output = pnpm_command(&["pnpm", "install"])
         .current_dir(dir.path())
@@ -48,13 +54,8 @@ fn pnpm_install_uses_package_json_fallback() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("'install' detected. Testing 1 package(s)")
-            || stdout.contains("Sandbox execution failed"),
-        "expected pnpm install to scan package.json dependencies, got: {stdout}"
-    );
-    assert!(
-        !stdout.contains("no parseable package entries were found"),
-        "pnpm install should find package.json dependencies, got: {stdout}"
+        stdout.contains("'install' detected. Testing 2 package(s)"),
+        "expected pnpm install to scan the 2 locked packages, got: {stdout}"
     );
 }
 

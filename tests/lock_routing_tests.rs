@@ -100,7 +100,7 @@ fn pnpm_install_is_routed_to_package_scan() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("'pnpm install' detected but no parseable package entries were found"),
+        stdout.contains("No pnpm-lock.yaml found") && stdout.contains("Failing closed"),
         "expected pnpm scan-branch fail-closed message, got: {stdout}"
     );
     assert!(

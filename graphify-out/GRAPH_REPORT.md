@@ -1,17 +1,17 @@
-# Graph Report - gyrseek  (2026-11-21)
+# Graph Report - gyrseek  (2026-11-22)
 
 ## Corpus Check
-- 94 files · ~193,693 words
+- 97 files · ~218,709 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 10 file(s) not represented in the graph (top: (none) 6, .npm 1, .python 1)
 
 ## Summary
-- 2027 nodes · 2744 edges · 181 communities (130 shown, 51 thin omitted)
-- Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 91 edges (avg confidence: 0.85)
+- 2270 nodes · 3297 edges · 178 communities (125 shown, 53 thin omitted)
+- Extraction: 95% EXTRACTED · 5% INFERRED · 0% AMBIGUOUS · INFERRED: 154 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `d2364cab`
+- Built from commit: `cc0da1f5`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -24,11 +24,11 @@
 - Bun Execution Detection & Exemptions
 - FCrDNS Allowlist Verification
 - High Impact
-- select_effective_baselines
+- parse_npm_install_packages_from_args
 - NonoRunner backend
 - run
 - Semgrep Quick Reference
-- Step 6: Validate and Test
+- trace_install_docker_matrix
 - Docker Security
 - extract_process_exec_signatures
 - Code Correctness Rules
@@ -38,31 +38,31 @@
 - Version Flag Tests
 - npm/package.json
 - trace_sandbox_install_matrix
-- decode_dns_name
-- forward_confirmed_hostname
-- Fixed Findings (Detailed)
+- runtime_image.rs
+- extract_sensitive_file_reads
+- parse_global_options
 - Critical Impact
 - parsing.rs
-- cli_burst_exit_tests.rs
+- select_effective_baselines
 - build_matrix_script
 - filter_domain_allowlisted_new_connections_with
 - gyrseek
 - Prevent Insecure Deserialization
 - Semgrep Skill
-- sandbox_startup_exit_tests.rs
-- uses
+- Command
+- with
 - Code Security Skill
 - Prevent Path Traversal
 - Prevent Cross-Site Scripting (XSS)
 - LLM Security Skill
 - Decision Model
-- parse_global_options
-- env
+- deserialize_new_package_exemptions
+- python_multi_package_tests.rs
 - General Best Practices for Avoiding Race Conditions
 - Semgrep Rule Creation Workflow
-- jobs
+- collect_probe_traces
 - load_policy_config
-- SandboxEnvVarGuard
+- build_docker_run_args
 - extract_connection_ips
 - Process-Execution Behavior Detection
 - Prevent XML External Entity (XXE) Injection
@@ -70,13 +70,13 @@
 - .new
 - Architecture
 - Roadmap
-- with
+- main.rs
 - pnpm/package.json
 - Code Best Practices
 - terraform-gcp.md
 - Categories
 - LLM Security Guidelines (OWASP Top 10 for LLM 2025)
-- Step 5: Write Taint Rules
+- parse_python_install_packages_from_args
 - Network Behavior Detection
 - Prevent Cross-Site Request Forgery
 - Secure Kubernetes Configurations
@@ -89,7 +89,7 @@
 - Ponytail
 - Agents Memory and Workflow
 - Sandbox Modes
-- name
+- NpmResponse
 - Post-install artifact detection
 - Code Security
 - Secure Docker Configurations
@@ -117,35 +117,33 @@
 - Open Findings
 - How It Works
 - Prebuilt Scanner Images
-- extract_dns_map
+- decode_dns_name
 - env_lock
 - LLM01: Prevent Prompt Injection
-- trace_install_docker_matrix
+- read_install_failure
 - Understand Code
 - WONT_FIX_FINDINGS_DETAILED.md
-- Step 8: Optimize the Rule
-- Step 2: Create Test Cases First
-- strace_install_command
+- Pattern Operators
+- Common Patterns by Vulnerability
+- rewrite_args_with_pinned_versions
 - .yamllint.yaml
 - Prevent Regular Expression DoS (ReDoS)
 - ponytail-review/SKILL.md
 - AppArmor
-- build_docker_run_args
-- Troubleshooting
+- Taint Mode
+- build_runner_from_env
 - Configuration
 - AllowlistEntry
 - docker_apparmor_profile_name
 - code-injection.md
-- NpmResponse
+- parsing.rs
 - Quick Start
 - PolicyConfig
-- steps
 - Seccomp
-- on
-- steps
-- steps
+- test
 - Usage
 - reviews
+- Fixed Findings (Detailed)
 - Feedback
 - ForwardMode
 - 10. Insecure Cryptography
@@ -179,25 +177,23 @@
 - prototype-pollution.md
 - _template.md
 - unsafe-functions.md
-- deserialize_new_package_exemptions
 - copilot-instructions.md
 - opencode.json
-- steps
 - gyrseek
 - test
-- test
+- parse_npm_spec
 
 ## God Nodes (most connected - your core abstractions)
-1. `Review history` - 178 edges
+1. `Review history` - 193 edges
 2. `Won't Fix Findings - Detailed` - 118 edges
-3. `Detailed Findings` - 100 edges
-4. `scan_packages_versions()` - 58 edges
-5. `load()` - 40 edges
-6. `Code Security` - 31 edges
-7. `run()` - 30 edges
+3. `Detailed Findings` - 107 edges
+4. `scan_packages_versions()` - 63 edges
+5. `load()` - 45 edges
+6. `run()` - 33 edges
+7. `Code Security` - 31 edges
 8. `find_new_connections_domain_aware()` - 28 edges
-9. `extract_process_exec_signatures()` - 24 edges
-10. `rewrite_args_with_pinned_versions()` - 23 edges
+9. `rewrite_args_with_pinned_versions()` - 24 edges
+10. `extract_process_exec_signatures()` - 24 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `run()` --implements--> `Fail-closed policy`  [INFERRED]
@@ -226,11 +222,11 @@
 - **Install-time behavioral signal extraction** — src_scanning_extract_connection_ips, src_scanning_extract_git_clone_signatures, src_scanning_extract_process_exec_signatures [INFERRED 0.85]
 - **Scan-then-forward orchestration pipeline** — src_lib_run, src_scanning_scan_packages_versions, src_lib_forward_pinned_command [INFERRED 0.85]
 
-## Communities (181 total, 51 thin omitted)
+## Communities (178 total, 53 thin omitted)
 
 ### Community 0 - "Review history"
 Cohesion: 0.01
-Nodes (178): Finding 100 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 101 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 102 — Medium | `.github/workflows/post_review.yml` | ✅ Fixed, Finding 103 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 104 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 105 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 106 — High | `.github/workflows/ci.yml` | ✅ Fixed, Finding 107 — Low | `docs/ARCHITECTURE.md` | ✅ Fixed (+170 more)
+Nodes (193): Finding 100 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 101 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 102 — Medium | `.github/workflows/post_review.yml` | ✅ Fixed, Finding 103 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 104 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 105 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 106 — High | `.github/workflows/ci.yml` | ✅ Fixed, Finding 107 — Low | `docs/ARCHITECTURE.md` | ✅ Fixed (+185 more)
 
 ### Community 1 - "Routing, Config & Scan Orchestration"
 Cohesion: 0.02
@@ -238,31 +234,31 @@ Nodes (118): Finding 118 — Low | `.github/workflows/ci.yml` | 🛑 Wont Fix, F
 
 ### Community 2 - "Detailed Findings"
 Cohesion: 0.02
-Nodes (100): Detailed Findings, Finding 14 — Low | `parsing.rs:880` | ⚠️ Open, Finding 170 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 171 — High | `scanning.rs` | ⚠️ Open, Finding 172 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 173 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 177 — Low | `*_DETAILED.md` | ⚠️ Open, Finding 180 — Low | `lib.rs:1092-1173` | ⚠️ Open (+92 more)
+Nodes (107): Detailed Findings, Finding 14 — Low | `parsing.rs:880` | ⚠️ Open, Finding 170 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 171 — High | `scanning.rs` | ⚠️ Open, Finding 172 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 173 — Medium | `ARCHITECTURE.md` | ⚠️ Open, Finding 177 — Low | `*_DETAILED.md` | ⚠️ Open, Finding 180 — Low | `lib.rs:1092-1173` | ⚠️ Open (+99 more)
 
 ### Community 3 - "scanning.rs"
-Cohesion: 0.03
-Nodes (55): DNS wire-format parser (extract_dns_map), scan_packages_versions / ScanReport, artifact_allowlist_does_not_leak_across_packages(), artifact_allowlist_matches_exact_finding_and_prefix(), ARTIFACT_DELIMITER, burst_policy_emits_warning_when_triggered(), burst_policy_no_warning_below_threshold_or_disabled(), burst_policy_warning() (+47 more)
+Cohesion: 0.04
+Nodes (53): DNS wire-format parser (extract_dns_map), scan_packages_versions / ScanReport, artifact_allowlist_does_not_leak_across_packages(), artifact_allowlist_matches_exact_finding_and_prefix(), ARTIFACT_DELIMITER, burst_policy_emits_warning_when_triggered(), burst_policy_no_warning_below_threshold_or_disabled(), burst_policy_warning() (+45 more)
 
 ### Community 4 - "sandbox.rs"
-Cohesion: 0.08
-Nodes (17): announce_seccomp_status(), APPARMOR_LOAD_ERR, artifact_scan_steps_inventory_all_files(), artifact_scan_steps_output_to_correct_log(), artifact_scan_steps_pipe_char_in_content_replaced(), artifact_scan_steps_uses_null_byte_delimiter(), build_artifact_scan_steps(), docker_daemon_error_message() (+9 more)
+Cohesion: 0.06
+Nodes (28): APPARMOR_LOAD_ERR, artifact_scan_steps_inventory_all_files(), artifact_scan_steps_output_to_correct_log(), artifact_scan_steps_pipe_char_in_content_replaced(), artifact_scan_steps_uses_null_byte_delimiter(), build_artifact_scan_steps(), DEFAULT_PROBE_TIMEOUT_SECS, docker_preflight_distinguishes_daemon_down_permission_and_broken_cli() (+20 more)
 
 ### Community 5 - "Bun Execution Detection & Exemptions"
-Cohesion: 0.08
-Nodes (40): validate_allowlist_pkg_key, accepts_new_package_exemptions_empty_list_as_no_exemptions(), baseline_count_zero_falls_back_to_default_two(), clamps_min_baseline_age_hours_to_hard_floor(), DEFAULT_CONFIG_PATH, domain_allowlist_bare_tld_rejected_in_global_and_per_package_positions(), domain_allowlist_empty_value_dropped_in_global_and_per_package_positions(), domain_allowlist_star_value_rejected_in_global_and_per_package_positions() (+32 more)
+Cohesion: 0.07
+Nodes (44): validate_allowlist_pkg_key, accepts_new_package_exemptions_empty_list_as_no_exemptions(), baseline_count_zero_falls_back_to_default_two(), clamps_min_baseline_age_hours_to_hard_floor(), DEFAULT_CONFIG_PATH, domain_allowlist_bare_tld_rejected_in_global_and_per_package_positions(), domain_allowlist_empty_value_dropped_in_global_and_per_package_positions(), domain_allowlist_star_value_rejected_in_global_and_per_package_positions() (+36 more)
 
 ### Community 6 - "FCrDNS Allowlist Verification"
 Cohesion: 0.08
-Nodes (40): allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline(), artifact_allowlist_unblocks_new_findings(), artifact_delimiter_injection_attack_defeated_end_to_end(), artifact_delimiter_injection_does_not_block_clean_package(), exemption_behavior(), find_new_git_clone_signatures() (+32 more)
+Nodes (44): a_candidate_that_ran_something_new_before_failing_reports_both(), a_failed_baseline_blocks_on_install_failed_alone(), a_failed_install_blocks_only_its_own_package_in_a_batch(), a_new_package_exemption_cannot_clear_a_failed_install(), allows_new_bun_when_allowlisted(), allows_when_artifact_findings_match_baseline(), allows_when_bun_behavior_matches_baseline(), artifact_allowlist_unblocks_new_findings() (+36 more)
 
 ### Community 7 - "High Impact"
 Cohesion: 0.06
 Nodes (34): 10. Insecure Cryptography (insecure-crypto), 11. Insecure Transport (insecure-transport), 12. Server-Side Request Forgery (ssrf), 13. JWT Authentication (authentication-jwt), 14. Cross-Site Request Forgery (csrf), 15. Prototype Pollution (prototype-pollution), 16. Unsafe Functions (unsafe-functions), 17. Terraform AWS Security (terraform-aws) (+26 more)
 
-### Community 8 - "select_effective_baselines"
-Cohesion: 0.12
-Nodes (17): baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_does_not_fail_closed(), baseline_count_zero_returns_no_effective_baselines(), baseline_count_zero_with_override_equal_to_current_returns_empty(), BaselineOverrides, both_override_slots_none_falls_through_to_fetched_baselines(), both_overrides_equal_to_current_skipped_and_filled_from_fetched(), duplicate_override_versions_are_deduped_and_truncated() (+9 more)
+### Community 8 - "parse_npm_install_packages_from_args"
+Cohesion: 0.11
+Nodes (29): on, pull_request, push, workflow_dispatch, branches, has_only_non_registry_npm_specs(), is_lockfile_only_command(), is_non_registry_npm_spec() (+21 more)
 
 ### Community 9 - "NonoRunner backend"
 Cohesion: 0.50
@@ -270,23 +266,23 @@ Nodes (4): CanaryTrap FIFO decoys, NonoRunner backend, PathShims, scan_target_ar
 
 ### Community 10 - "run"
 Cohesion: 0.13
-Nodes (11): exit_with(), no_sandbox_flag_is_consumed_wherever_it_appears(), run(), take_no_sandbox_flag(), main(), test: minimum_release_age_package not met exits 1, test: release_burst_threshold triggers exit 1, bare_uv_lock_is_routed_to_lockfile_scan() (+3 more)
+Nodes (11): exit_with(), GyrSeek, no_sandbox_flag_is_consumed_wherever_it_appears(), run(), take_no_sandbox_flag(), test: minimum_release_age_package not met exits 1, test: release_burst_threshold triggers exit 1, bare_uv_lock_is_routed_to_lockfile_scan() (+3 more)
 
 ### Community 11 - "Semgrep Quick Reference"
-Cohesion: 0.07
-Nodes (27): Basic Matching, Basic Structure, Command Injection, Commands, Common Patterns by Vulnerability, Dangerous Functions (Pattern Matching), Deep Matching, Hardcoded Secrets (Pattern Matching) (+19 more)
+Cohesion: 0.25
+Nodes (8): Commands, Metadata Fields, Path Filtering, Required Rule Fields, Semgrep Quick Reference, Supported Languages, Test Annotations, Testing
 
-### Community 12 - "Step 6: Validate and Test"
-Cohesion: 0.33
-Nodes (6): Debug Failures, Debug Taint Rules, Expected Output, Run Tests, Step 6: Validate and Test, Validate YAML Syntax
+### Community 12 - "trace_install_docker_matrix"
+Cohesion: 0.20
+Nodes (7): DockerRunner, InstallFailure, ProbeTrace, trace_install_docker_matrix(), FailingInstallRunner, install_failed_message(), MockRunner
 
 ### Community 13 - "Docker Security"
 Cohesion: 0.20
 Nodes (11): Backout plan, Current hardening limitations, Docker Security, Overview, Platform support matrix, Prebuilt scanner images, Regression signals, Related env vars (+3 more)
 
 ### Community 14 - "extract_process_exec_signatures"
-Cohesion: 0.10
-Nodes (25): case_1_new_bun_is_flagged_against_clean_baseline(), case_2_existing_bun_plus_additional_invocation_is_flagged(), case_2b_changed_bun_arguments_are_flagged(), executable_basename(), extract_git_clone_signatures(), extract_process_exec_captures_all_executables(), extract_process_exec_captures_bun_run_with_argv(), extract_process_exec_preserves_brackets_in_argv() (+17 more)
+Cohesion: 0.08
+Nodes (29): case_1_new_bun_is_flagged_against_clean_baseline(), case_2_existing_bun_plus_additional_invocation_is_flagged(), case_2b_changed_bun_arguments_are_flagged(), executable_basename(), extract_git_clone_signatures(), extract_process_exec_captures_all_executables(), extract_process_exec_captures_bun_run_with_argv(), extract_process_exec_preserves_brackets_in_argv() (+21 more)
 
 ### Community 15 - "Code Correctness Rules"
 Cohesion: 0.08
@@ -305,44 +301,44 @@ Cohesion: 0.12
 Nodes (17): Detailed Findings, Finding 10 — Critical | `scanning.rs:654` | ✅ Fixed, Finding 13 — Medium | `scanning.rs:1852` | ✅ Fixed, Finding 15 — Low | `sandbox.rs:511` | ✅ Fixed, Finding 16 — Medium | `scanning.rs:509` | ✅ Fixed, Finding 17 — High | `scanning.rs:972` | ✅ Fixed, Finding 18 — Medium | `scanning.rs:467` | ✅ Fixed, Finding 19 — High | `scanning.rs:392` | ✅ Fixed (+9 more)
 
 ### Community 19 - "Version Flag Tests"
-Cohesion: 0.09
-Nodes (22): detects_anomalous_new_connection(), detects_new_connection_in_git_clone_simulation(), dns_interceptor_skips_when_domain_not_in_baseline(), dns_interceptor_skips_when_forward_resolver_does_not_confirm(), domain_aware_diff_cdn_rotation_without_ptr_handled_by_dns_interceptor(), domain_aware_diff_current_resolves_baseline_ip_unresolvable(), domain_aware_diff_current_unresolved_ip_in_baseline_not_flagged(), domain_aware_diff_discards_ip_when_domain_seen_in_baseline() (+14 more)
+Cohesion: 0.06
+Nodes (30): detects_anomalous_new_connection(), detects_new_connection_in_git_clone_simulation(), dns_interceptor_skips_when_domain_not_in_baseline(), dns_interceptor_skips_when_forward_resolver_does_not_confirm(), domain_aware_diff_cdn_rotation_without_ptr_handled_by_dns_interceptor(), domain_aware_diff_current_resolves_baseline_ip_unresolvable(), domain_aware_diff_current_unresolved_ip_in_baseline_not_flagged(), domain_aware_diff_discards_ip_when_domain_seen_in_baseline() (+22 more)
 
 ### Community 20 - "npm/package.json"
 Cohesion: 0.15
 Nodes (14): author, dependencies, lodash@^4.18.1, typescript@^6.0.3, description, lodash, typescript, license (+6 more)
 
 ### Community 21 - "trace_sandbox_install_matrix"
-Cohesion: 0.09
-Nodes (20): artifact_delimiter_pipe_in_path_is_not_injected(), artifact_findings_empty_for_clean_install(), classify_inventory_benign_pth(), classify_inventory_binary_elf(), classify_inventory_empty_input(), classify_inventory_large_file(), classify_inventory_lines(), classify_inventory_mixed_findings() (+12 more)
+Cohesion: 0.11
+Nodes (19): artifact_delimiter_pipe_in_path_is_not_injected(), artifact_findings_empty_for_clean_install(), classify_inventory_benign_pth(), classify_inventory_binary_elf(), classify_inventory_empty_input(), classify_inventory_large_file(), classify_inventory_lines(), classify_inventory_mixed_findings() (+11 more)
 
-### Community 22 - "decode_dns_name"
-Cohesion: 0.22
-Nodes (9): decode_dns_name(), decode_dns_name_circular_pointer_returns_none(), decode_dns_name_excessive_pointer_hops_returns_none(), decode_dns_name_long_but_not_circular_pointer_chain(), decode_dns_name_out_of_bounds_returns_none(), decode_dns_name_recursive_pointer_chain(), decode_dns_name_root_label_only(), decode_dns_name_simple_two_label() (+1 more)
+### Community 22 - "runtime_image.rs"
+Cohesion: 0.07
+Nodes (53): an_empty_blank_or_unreadable_version_file_is_skipped_not_fatal(), choice(), config_value_wins_over_project_files(), config_values_are_normalised_and_validated(), DEFAULT_NODE, DEFAULT_PYTHON, dir_with(), engines_node_of_the_wrong_json_shape_is_ignored() (+45 more)
 
-### Community 23 - "forward_confirmed_hostname"
-Cohesion: 0.25
-Nodes (6): fcrdns_accepts_hostname_that_forward_resolves_back_to_ip(), fcrdns_rejects_spoofed_ptr_that_does_not_forward_confirm(), fcrdns_rejects_when_no_ptr_record(), forward_confirmed_hostname(), reverse_dns_domain(), reverse_dns_domain_invalid_ip_returns_none()
+### Community 23 - "extract_sensitive_file_reads"
+Cohesion: 0.14
+Nodes (14): extract_first_arg_fd(), extract_sensitive_file_reads(), is_sensitive_file_read(), lexical_clean_path(), parse_syscall_return(), test_appsec_evasion_bypasses(), test_appsec_evasion_exhaustive_variants(), test_extract_sensitive_file_reads() (+6 more)
 
-### Community 24 - "Fixed Findings (Detailed)"
+### Community 24 - "parse_global_options"
 Cohesion: 0.33
-Nodes (4): Cross-Finding Chains (Architectural Context), Fixed Findings (Detailed), Fixed Findings, Summary
+Nodes (6): config_equals_form_preserves_equals_in_path(), config_path_starting_with_dash_is_accepted(), danger_disable_seccomp_parsing_edge_cases(), keeps_args_untouched_when_no_global_options_present(), parse_global_options(), parses_global_config_flag_and_strips_it_from_manager_args()
 
 ### Community 27 - "Critical Impact"
 Cohesion: 0.12
 Nodes (16): 10. Unbounded Consumption (unbounded-consumption), 1. Prompt Injection (prompt-injection), 2. Sensitive Information Disclosure (sensitive-disclosure), 3. Supply Chain (supply-chain), 4. Data and Model Poisoning (data-poisoning), 5. Improper Output Handling (output-handling), 6. Excessive Agency (excessive-agency), 7. System Prompt Leakage (system-prompt-leakage) (+8 more)
 
 ### Community 28 - "parsing.rs"
-Cohesion: 0.05
-Nodes (72): rewrite_args_with_pinned_versions, Exact-version pinning of forwarded command, GyrSeek, args(), does_not_pin_npm_package_with_latest_sentinel(), does_not_pin_pip_package_with_latest_sentinel(), does_not_pin_unrelated_packages(), does_not_repin_npm_package_that_already_has_a_version() (+64 more)
+Cohesion: 0.10
+Nodes (32): LOCKFILE_ONLY_FLAGS, MAX_REQUIREMENTS_DEPTH, parse_poetry_lock_packages_from_content(), parse_pylock_packages_from_content(), parse_requirements_packages_from_content(), parse_requirements_spec(), parse_toml_quoted_value(), parse_uv_lock_packages_from_content() (+24 more)
 
-### Community 29 - "cli_burst_exit_tests.rs"
-Cohesion: 0.26
-Nodes (7): exits_with_code_1_and_rejects_versions_newer_than_72_hours_by_default(), exits_with_code_1_and_uses_configured_release_burst_window_hours(), exits_with_code_1_and_warning_when_release_burst_threshold_triggers(), exits_with_code_1_when_minimum_release_age_package_is_not_met(), minimum_release_age_package_runs_before_burst_threshold(), run_with_config(), run_with_config_and_env()
+### Community 29 - "select_effective_baselines"
+Cohesion: 0.12
+Nodes (17): baseline_count_limits_fetched_baselines_without_overrides(), baseline_count_zero_does_not_fail_closed(), baseline_count_zero_returns_no_effective_baselines(), baseline_count_zero_with_override_equal_to_current_returns_empty(), BaselineOverrides, both_override_slots_none_falls_through_to_fetched_baselines(), both_overrides_equal_to_current_skipped_and_filled_from_fetched(), duplicate_override_versions_are_deduped_and_truncated() (+9 more)
 
 ### Community 30 - "build_matrix_script"
-Cohesion: 0.18
-Nodes (13): build_matrix_script(), build_single_script(), image_setup_steps(), is_npm_family_manager(), matrix_and_single_scripts_disable_truncation(), matrix_script_captures_strace_stderr_not_devnull(), matrix_script_creates_scanner_user_before_install(), matrix_script_includes_artifact_scan_after_each_probe() (+5 more)
+Cohesion: 0.14
+Nodes (17): build_matrix_script(), build_single_script(), every_probe_runs_under_the_configured_timeout(), image_setup_steps(), is_npm_family_manager(), matrix_and_single_scripts_disable_truncation(), matrix_script_captures_strace_stderr_not_devnull(), matrix_script_creates_scanner_user_before_install() (+9 more)
 
 ### Community 31 - "filter_domain_allowlisted_new_connections_with"
 Cohesion: 0.12
@@ -360,13 +356,13 @@ Nodes (14): BinaryFormatter Deserialization, General Prevention Guidelines, Lang
 Cohesion: 0.13
 Nodes (14): Acknowledgments, Capabilities, Creating Custom Rules, Example Prompts, For End Users, Quick Reference, Resources, Rule Creation Workflow (+6 more)
 
-### Community 35 - "sandbox_startup_exit_tests.rs"
-Cohesion: 0.12
-Nodes (17): forward_args, forward_original_command, forward_pinned_command, fake_binary(), test: missing host binary fails closed, forwarding_preserves_host_success_exit_status(), forwarding_propagates_host_nonzero_exit_status(), prepend_path() (+9 more)
+### Community 35 - "Command"
+Cohesion: 0.07
+Nodes (38): forward_args, forward_original_command, forward_pinned_command, exits_with_code_1_and_rejects_versions_newer_than_72_hours_by_default(), exits_with_code_1_and_uses_configured_release_burst_window_hours(), exits_with_code_1_and_warning_when_release_burst_threshold_triggers(), exits_with_code_1_when_minimum_release_age_package_is_not_met(), minimum_release_age_package_runs_before_burst_threshold() (+30 more)
 
-### Community 36 - "uses"
-Cohesion: 0.22
-Nodes (11): linux-docker-seccomp-uv-test, linux-docker-uv-test, steps, name, runs-on, steps, name, runs-on (+3 more)
+### Community 36 - "with"
+Cohesion: 0.05
+Nodes (61): name, permissions, runs-on, steps, env, CARGO_TERM_COLOR, GYRSEEK_DOCKER_APPARMOR_PROFILE, GYRSEEK_NPM_SCANNER_IMAGE (+53 more)
 
 ### Community 37 - "Code Security Skill"
 Cohesion: 0.14
@@ -388,33 +384,29 @@ Nodes (13): Acknowledgments, Categories (10 Total), Creating a New Rule, Critica
 Cohesion: 0.29
 Nodes (7): Policy allowlists (global and per-package), Config-loading helpers (parse_list_map, validate_allowlist_pkg_key, option_zero_to_none), Decision Model, DNS interceptor (extract_dns_map, parse_dns_response, decode_dns_name), Domain-aware IP diff (find_new_connections_domain_aware), FCrDNS (forward_confirmed_hostname), Process-execution signature diffing (Shai-Hulud class)
 
-### Community 42 - "parse_global_options"
-Cohesion: 0.33
-Nodes (6): config_equals_form_preserves_equals_in_path(), config_path_starting_with_dash_is_accepted(), danger_disable_seccomp_parsing_edge_cases(), keeps_args_untouched_when_no_global_options_present(), parse_global_options(), parses_global_config_flag_and_strips_it_from_manager_args()
-
-### Community 43 - "env"
-Cohesion: 0.20
-Nodes (10): GYRSEEK_DOCKER_APPARMOR_PROFILE, GYRSEEK_NPM_SCANNER_IMAGE, GYRSEEK_NPM_SCANNER_PREBUILT, GYRSEEK_PY_SCANNER_IMAGE, GYRSEEK_PY_SCANNER_PREBUILT, linux-docker-apparmor-seccomp-uv-test, name, runs-on (+2 more)
+### Community 43 - "python_multi_package_tests.rs"
+Cohesion: 0.24
+Nodes (15): a_missing_requirements_file_fails_closed_for_every_spelling(), an_attached_r_option_and_unpinned_file_lines_are_not_missed(), an_empty_requirements_file_fails_closed_instead_of_scanning_nothing(), direct_references_are_not_scanned_as_if_they_were_registry_packages(), install_with_no_package_names_fails_closed(), packages_in_an_included_requirements_file_are_scanned(), poetry_add_scans_every_named_package(), r_pyproject_toml_fails_closed_instead_of_scanning_a_package_named_after_the_file() (+7 more)
 
 ### Community 44 - "General Best Practices for Avoiding Race Conditions"
 Cohesion: 0.15
 Nodes (11): General Best Practices for Avoiding Race Conditions, Hardcoded /tmp Path, Insecure Temporary File Creation, Insecure Temporary File Creation, Language: Go, Language: OCaml, Language: Python, Language-Specific Secure Alternatives (+3 more)
 
 ### Community 45 - "Semgrep Rule Creation Workflow"
-Cohesion: 0.15
-Nodes (13): Basic Pattern Matching, Common Fixes, Example: Complete Taint Rule, Focus Metavariable, Metavariable Filters, Scope Operators, Semgrep Rule Creation Workflow, Step 1: Analyze the Problem (+5 more)
+Cohesion: 0.06
+Nodes (36): Basic Pattern Matching, Basic Taint Structure, Common Fixes, Common Redundancies to Remove, Debug Failures, Debug Taint Rules, Directory Structure, Example: Complete Taint Rule (+28 more)
 
-### Community 46 - "jobs"
-Cohesion: 0.25
-Nodes (7): env, CARGO_TERM_COLOR, jobs, linux-docker-apparmor-seccomp-poetry-test, name, runs-on, name
+### Community 46 - "collect_probe_traces"
+Cohesion: 0.35
+Nodes (13): a_blank_trace_even_after_the_re_run_fails_closed_with_the_strace_error(), a_failed_re_run_is_an_error_not_a_clean_scan(), a_missing_or_blank_batch_trace_is_re_run_on_its_own(), a_timed_out_probe_is_omitted_and_never_re_run(), an_exit_code_file_marks_only_that_probe_as_a_failed_install(), collect_probe_traces(), collects_each_probes_trace_in_order_and_appends_the_artifact_inventory(), empty_or_whitespace_artifact_inventories_add_nothing() (+5 more)
 
 ### Community 47 - "load_policy_config"
-Cohesion: 0.18
-Nodes (13): load_policy_config(), missing_default_config_returns_empty_allowlist(), missing_explicit_config_fails_closed(), option_zero_to_none(), option_zero_to_none_direct(), parse_list(), parse_list_map(), parses_new_package_exemptions_invalid_map_rejected_with_custom_error() (+5 more)
+Cohesion: 0.14
+Nodes (16): load_policy_config(), missing_default_config_returns_empty_allowlist(), missing_explicit_config_fails_closed(), node_version_config_is_validated_against_the_supported_table(), option_zero_to_none(), option_zero_to_none_direct(), parse_list(), parse_list_map() (+8 more)
 
-### Community 48 - "SandboxEnvVarGuard"
-Cohesion: 0.20
-Nodes (6): apparmor_env_var_default_false(), docker_args_memory_limit_defaults_to_2g_and_is_configurable(), env_lock(), sandbox_max_processes(), SandboxEnvVarGuard, test_sandbox_max_processes_env_fallback()
+### Community 48 - "build_docker_run_args"
+Cohesion: 0.12
+Nodes (14): build_docker_run_args(), custom_scanner_images_are_named_in_the_description(), docker_args_adds_seccomp_profile_by_default(), docker_args_disables_seccomp_when_danger_flag_true(), docker_args_grant_sys_ptrace_capability(), docker_args_keep_out_mount_when_provided_and_omit_when_empty(), docker_args_memory_limit_defaults_to_2g_and_is_configurable(), docker_enforces_sandbox_constraints() (+6 more)
 
 ### Community 49 - "extract_connection_ips"
 Cohesion: 0.17
@@ -444,10 +436,6 @@ Nodes (10): Architecture, CI/CD Pipeline Architecture, Core Components, Current 
 Cohesion: 0.18
 Nodes (11): External CodeRabbit review migration, Completed, Detection & Analysis, Hardening & Infrastructure, Hardening & Infrastructure, Long Term, Mid Term, Near Term (+3 more)
 
-### Community 56 - "with"
-Cohesion: 0.25
-Nodes (8): with, components, dockerfile, just-version, python-version, recursive, token, version
-
 ### Community 57 - "pnpm/package.json"
 Cohesion: 0.24
 Nodes (9): dependencies, lodash@^4.18.1, typescript@^5.9.3, lodash, typescript, name, private, type (+1 more)
@@ -468,9 +456,9 @@ Nodes (10): Categories, Code Security Guidelines, Critical Impact, High Impact, 
 Cohesion: 0.18
 Nodes (10): Categories, Critical Impact, High Impact, How to Use This Skill, Key Principles, LLM Security Guidelines (OWASP Top 10 for LLM 2025), Quick Reference, References (+2 more)
 
-### Community 63 - "Step 5: Write Taint Rules"
-Cohesion: 0.40
-Nodes (5): Basic Taint Structure, Step 5: Write Taint Rules, Taint Sanitizer Options, Taint Sink with Focus, Taint Source Options
+### Community 63 - "parse_python_install_packages_from_args"
+Cohesion: 0.18
+Nodes (12): direct_references_and_urls_are_rejected(), exact(), exact_requirements_are_accepted_in_every_form(), is_plain_version(), malformed_requirements_fail_closed_instead_of_being_guessed(), non_requirement_lines_are_skipped(), parse_exact_requirement(), poetry_at_forms_edge_cases() (+4 more)
 
 ### Community 64 - "Network Behavior Detection"
 Cohesion: 0.22
@@ -519,10 +507,6 @@ Nodes (8): Agent Portability Symlinks, Agents Memory and Workflow, graphify, Man
 ### Community 76 - "Sandbox Modes"
 Cohesion: 0.25
 Nodes (8): Default-deny seccomp architecture, Docker sandbox, Host mode (reduced safety), nono configuration, Platform support matrix, Sandbox Modes, Scanner image configuration, Seccomp and AppArmor profiles
-
-### Community 77 - "name"
-Cohesion: 0.22
-Nodes (9): name, permissions, runs-on, steps, cargo-audit, permissions, checks, contents (+1 more)
 
 ### Community 78 - "Post-install artifact detection"
 Cohesion: 0.25
@@ -632,9 +616,9 @@ Nodes (5): How It Works, How it works, Post-Install Artifact Behavior Detection,
 Cohesion: 0.29
 Nodes (7): Prebuilt scanner images as default, 1) Build the scanner images, 2) Use a prebuilt image, 3) Enable prebuilt mode globally (optional), 4) Verify images are usable, 5) Use pinned image digests (recommended for reproducibility), Prebuilt Scanner Images
 
-### Community 105 - "extract_dns_map"
-Cohesion: 0.10
-Nodes (20): dns_interceptor_end_to_end_with_realistic_strace_trace(), extract_dns_map(), extract_dns_map_connect_failure_ignored(), extract_dns_map_empty_trace(), extract_dns_map_ipv6_tcp_dns_response(), extract_dns_map_ipv6_udp_dns_response(), extract_dns_map_malformed_payload_skipped(), extract_dns_map_mixed_udp_and_tcp_dns() (+12 more)
+### Community 105 - "decode_dns_name"
+Cohesion: 0.14
+Nodes (14): decode_dns_name(), decode_dns_name_circular_pointer_returns_none(), decode_dns_name_excessive_pointer_hops_returns_none(), decode_dns_name_long_but_not_circular_pointer_chain(), decode_dns_name_out_of_bounds_returns_none(), decode_dns_name_recursive_pointer_chain(), decode_dns_name_root_label_only(), decode_dns_name_simple_two_label() (+6 more)
 
 ### Community 106 - "env_lock"
 Cohesion: 0.29
@@ -644,9 +628,9 @@ Nodes (3): active_test_env_vars_none_set_returns_empty(), env_lock(), EnvVarGuar
 Cohesion: 0.33
 Nodes (5): Direct Prompt Injection Prevention, Indirect Prompt Injection Prevention (RAG Systems), Key Prevention Rules, LLM01: Prevent Prompt Injection, Output Filtering
 
-### Community 108 - "trace_install_docker_matrix"
-Cohesion: 0.33
-Nodes (6): DockerRunner, ProbeTrace, scanner_image_config(), ScannerImageConfig, trace_install_docker_matrix(), trace_install_docker_single()
+### Community 108 - "read_install_failure"
+Cohesion: 0.40
+Nodes (6): install_failure_output_is_read_from_the_end_of_a_huge_log(), install_output_tail(), install_output_tail_is_printable_and_drops_strace_noise(), read_file_tail(), read_install_failure(), read_install_failure_needs_the_exit_code_marker()
 
 ### Community 109 - "Understand Code"
 Cohesion: 0.33
@@ -656,17 +640,17 @@ Nodes (5): Approach, Checklist, Goal, Understand Code, Verification
 Cohesion: 0.33
 Nodes (4): Detailed Rationale, Won't Fix Findings (Detailed), Summary, Won't Fix Findings
 
-### Community 111 - "Step 8: Optimize the Rule"
-Cohesion: 0.50
-Nodes (4): Common Redundancies to Remove, Optimization Checklist, Semgrep Pattern Equivalences, Step 8: Optimize the Rule
-
-### Community 112 - "Step 2: Create Test Cases First"
-Cohesion: 0.50
-Nodes (4): Directory Structure, Step 2: Create Test Cases First, Test Annotations, Test Case Design
-
-### Community 113 - "strace_install_command"
+### Community 111 - "Pattern Operators"
 Cohesion: 0.29
-Nodes (7): install_invocation(), pnpm_install_invocation_uses_pnpm_add(), SCANNER_USER, shell_single_quoted(), strace_command_disables_string_truncation(), strace_drops_payload_to_unprivileged_user(), strace_install_command()
+Nodes (7): Basic Matching, Deep Matching, Metavariable Filters, Metavariables, Negation, Pattern Operators, Scope Operators
+
+### Community 112 - "Common Patterns by Vulnerability"
+Cohesion: 0.29
+Nodes (7): Command Injection, Common Patterns by Vulnerability, Dangerous Functions (Pattern Matching), Hardcoded Secrets (Pattern Matching), Path Traversal, SQL Injection, XSS
+
+### Community 113 - "rewrite_args_with_pinned_versions"
+Cohesion: 0.18
+Nodes (19): rewrite_args_with_pinned_versions, Exact-version pinning of forwarded command, args(), does_not_pin_npm_package_with_latest_sentinel(), does_not_pin_pip_package_with_latest_sentinel(), does_not_pin_unrelated_packages(), does_not_repin_npm_package_that_already_has_a_version(), empty_pins_is_a_noop() (+11 more)
 
 ### Community 114 - ".yamllint.yaml"
 Cohesion: 0.33
@@ -684,13 +668,13 @@ Nodes (4): Boundaries, Examples, Format, Scoring
 Cohesion: 0.25
 Nodes (8): Allowed operations, AppArmor, Configuration, Platform note, Recommendation, Requirements, Setup, Status output
 
-### Community 118 - "build_docker_run_args"
-Cohesion: 0.25
-Nodes (8): build_docker_run_args(), docker_args_adds_seccomp_profile_by_default(), docker_args_disables_seccomp_when_danger_flag_true(), docker_args_grant_sys_ptrace_capability(), docker_args_keep_out_mount_when_provided_and_omit_when_empty(), docker_enforces_sandbox_constraints(), embedded_seccomp_profile_path(), sandbox_mem_limit()
+### Community 118 - "Taint Mode"
+Cohesion: 0.40
+Nodes (5): Basic Structure, Propagators, Source/Sink Options, Taint Components, Taint Mode
 
-### Community 119 - "Troubleshooting"
-Cohesion: 0.50
-Nodes (4): Pattern Not Matching, Taint Not Propagating, Too Many False Positives, Troubleshooting
+### Community 119 - "build_runner_from_env"
+Cohesion: 0.27
+Nodes (8): HostRunner, is_timeout_exit(), npm_family_install_dir_flag(), npm_family_install_subcommand(), probe_timeout_message(), timeout_exit_codes_cover_term_and_kill_only(), timeout_message_names_the_probe_and_the_setting(), trace_install_docker_single()
 
 ### Community 120 - "Configuration"
 Cohesion: 0.40
@@ -701,72 +685,64 @@ Cohesion: 0.40
 Nodes (5): AllowlistEntry, Global, PerPackage, BaselineOverrideConfig, GyrseekConfig
 
 ### Community 122 - "docker_apparmor_profile_name"
-Cohesion: 0.40
-Nodes (6): announce_apparmor_status(), apparmor_disabled_wont_call_apparmor_parser(), docker_apparmor_enabled_from_env(), docker_apparmor_profile_name(), parse_bool_env(), try_load_apparmor()
+Cohesion: 0.15
+Nodes (14): announce_apparmor_status(), announce_seccomp_status(), apparmor_disabled_wont_call_apparmor_parser(), apparmor_env_var_default_false(), build_runner_from_env(), docker_apparmor_enabled_from_env(), docker_apparmor_profile_name(), docker_daemon_error_message() (+6 more)
 
 ### Community 123 - "code-injection.md"
 Cohesion: 0.50
 Nodes (3): Key Prevention Patterns, Prevent Code Injection, References
+
+### Community 124 - "parsing.rs"
+Cohesion: 0.13
+Nodes (23): a_bad_nested_include_fails_closed(), an_attached_short_r_option_on_the_command_line_is_scanned(), boolean_flags_never_swallow_the_package_after_them(), command_lines_with_missing_values_or_empty_arguments_do_not_panic(), every_include_spelling_is_followed(), flag_values_are_not_mistaken_for_packages(), include_cycles_terminate_and_deep_nesting_fails_closed(), include_edge_cases_absolute_paths_directories_case_and_the_depth_boundary() (+15 more)
 
 ### Community 125 - "Quick Start"
 Cohesion: 0.50
 Nodes (4): 1. Prerequisites, 2. Build, 3. Run your first scan, Quick Start
 
 ### Community 126 - "PolicyConfig"
-Cohesion: 0.19
-Nodes (12): LazyRunner, NoopRunner, scan_many_with_cache(), scan_targets(), scan_with_cache(), ScanTimer, build_runner_from_env(), HostRunner (+4 more)
-
-### Community 127 - "steps"
-Cohesion: 0.50
-Nodes (4): linux-docker-apparmor-seccomp-pip-test, name, runs-on, steps
+Cohesion: 0.18
+Nodes (11): LazyRunner, NoopRunner, scan_many_with_cache(), scan_targets(), scan_with_cache(), ScanTimer, SandboxRunner, PolicyConfig (+3 more)
 
 ### Community 128 - "Seccomp"
 Cohesion: 0.40
 Nodes (5): Configuration, Platform note, Profile behavior, Seccomp, Status output
 
-### Community 129 - "on"
-Cohesion: 0.40
-Nodes (5): on, pull_request, push, workflow_dispatch, branches
-
-### Community 131 - "steps"
-Cohesion: 0.50
-Nodes (4): linux-docker-apparmor-seccomp-npm-test, name, runs-on, steps
-
-### Community 132 - "steps"
-Cohesion: 0.50
-Nodes (4): linux-docker-apparmor-seccomp-pnpm-test, name, runs-on, steps
-
 ### Community 138 - "Usage"
 Cohesion: 0.50
 Nodes (4): npm examples, pnpm examples, Python examples, Usage
+
+### Community 140 - "Fixed Findings (Detailed)"
+Cohesion: 0.33
+Nodes (4): Cross-Finding Chains (Architectural Context), Fixed Findings (Detailed), Fixed Findings, Summary
 
 ### Community 142 - "ForwardMode"
 Cohesion: 0.67
 Nodes (3): ForwardMode, Original, Pinned
 
-### Community 178 - "steps"
-Cohesion: 0.50
-Nodes (4): rust-checks, name, runs-on, steps
+### Community 184 - "parse_npm_spec"
+Cohesion: 0.16
+Nodes (16): is_valid_npm_name(), lockfile_entries_with_missing_or_odd_fields_are_handled(), lockfile_parsers_survive_hostile_and_degenerate_input(), npm_cli_specs_must_name_one_exact_registry_version(), npm_names_and_specs_edge_cases(), package_lock_v1_walks_nested_dependencies(), package_lock_v3_lists_every_installed_registry_version(), parse_exact_npm_spec() (+8 more)
 
 ## Knowledge Gaps
-- **37 isolated node(s):** `Global`, `PerPackage`, `Original`, `Pinned`, `gyrseek` (+32 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 1164 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **51 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **43 isolated node(s):** `Global`, `PerPackage`, `Original`, `Pinned`, `Python` (+38 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 1219 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **53 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `gyrseek` connect `gyrseek` to `Network Behavior Detection`, `DOCKER_SECURITY.md`, `How It Works`, `Prebuilt Scanner Images`, `Usage`, `Sandbox Modes`, `Process-Execution Behavior Detection`, `Configuration`, `parsing.rs`, `Quick Start`?**
-  _High betweenness centrality (0.039) - this node is a cross-community bridge._
-- **Are the 7 inferred relationships involving `load()` (e.g. with `baseline_count_zero_falls_back_to_default_two()` and `minimum_release_age_package_zero_disables_policy()`) actually correct?**
-  _`load()` has 7 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `on` connect `parse_npm_install_packages_from_args` to `with`?**
+  _High betweenness centrality (0.027) - this node is a cross-community bridge._
+- **Are the 12 inferred relationships involving `load()` (e.g. with `baseline_count_zero_falls_back_to_default_two()` and `minimum_release_age_package_zero_disables_policy()`) actually correct?**
+  _`load()` has 12 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `Global`, `PerPackage`, `Original` to the rest of the system?**
-  _37 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _43 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Review history` be split into smaller, more focused modules?**
-  _Cohesion score 0.011235955056179775 - nodes in this community are weakly interconnected._
-- **Why does `run()` connect `run` to `gyrseek`, `sandbox_startup_exit_tests.rs`, `Bun Execution Detection & Exemptions`, `parse_global_options`, `load_policy_config`, `.new`, `parsing.rs`, `PolicyConfig`?**
-  _High betweenness centrality (0.019) - this node is a cross-community bridge._
+  _Cohesion score 0.010362694300518135 - nodes in this community are weakly interconnected._
+- **Why does `gyrseek` connect `gyrseek` to `Network Behavior Detection`, `DOCKER_SECURITY.md`, `How It Works`, `Prebuilt Scanner Images`, `Usage`, `Sandbox Modes`, `rewrite_args_with_pinned_versions`, `Process-Execution Behavior Detection`, `Configuration`, `Quick Start`?**
+  _High betweenness centrality (0.022) - this node is a cross-community bridge._
 - **Should `Routing, Config & Scan Orchestration` be split into smaller, more focused modules?**
   _Cohesion score 0.01694915254237288 - nodes in this community are weakly interconnected._
-- **Why does `Post-install artifact detection` connect `Post-install artifact detection` to `Process-Execution Behavior Detection`?**
-  _High betweenness centrality (0.018) - this node is a cross-community bridge._
+- **Should `Detailed Findings` be split into smaller, more focused modules?**
+  _Cohesion score 0.018691588785046728 - nodes in this community are weakly interconnected._

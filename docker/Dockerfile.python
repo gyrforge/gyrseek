@@ -1,4 +1,9 @@
-FROM python:3.13-slim-bookworm@sha256:05b95397cac02b060ff1251afaa78087d92d7034369afbc8eb765631cada8257
+# Base image. The default matches gyrseek's built-in Python 3.13 image. To match your project's
+# Python, pass one of the digest-pinned images gyrseek ships (see PYTHON_IMAGES in src/sandbox.rs):
+#   docker build --build-arg PYTHON_BASE=python:3.12-slim-bookworm@sha256:<digest> ...
+ARG PYTHON_BASE=python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
+# hadolint ignore=DL3006
+FROM ${PYTHON_BASE}
 
 # hadolint ignore=DL3008,DL3013
 RUN apt-get update && \

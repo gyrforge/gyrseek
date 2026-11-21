@@ -1,4 +1,5 @@
 mod parsing;
+mod runtime_image;
 mod sandbox;
 mod scanning;
 
@@ -12,14 +13,17 @@ use std::process::Command;
 use serde::{Deserialize, Deserializer};
 
 use parsing::{
-    has_only_non_registry_npm_specs, parse_npm_install_packages_from_args,
-    parse_pip_install_packages_from_args, parse_poetry_lock_packages_from_content,
-    parse_pylock_packages_from_content, parse_requirements_packages_from_content,
-    parse_uv_lock_packages_from_content, parse_uv_lock_upgrade_packages_from_args,
-    rewrite_args_with_pinned_versions,
+    has_only_non_registry_npm_specs, is_lockfile_only_command,
+    parse_npm_install_packages_from_args, parse_poetry_lock_packages_from_content,
+    parse_pylock_packages_from_content, parse_python_install_packages_from_args,
+    parse_requirements_packages_from_content, parse_uv_lock_packages_from_content,
+    parse_uv_lock_upgrade_packages_from_args, rewrite_args_with_pinned_versions,
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
-use sandbox::{SandboxRunner, build_runner_from_env};
+use runtime_image::{
+    ImageChoice, normalize_node_config, normalize_python_config, select_for_manager,
+};
+use sandbox::{DEFAULT_PROBE_TIMEOUT_SECS, SandboxRunner, build_runner_from_env};
 use scanning::{
     HARD_MINIMUM_AGE_HOURS, PolicyConfig, ScanReport, scan_package_versions, scan_packages_versions,
 };
@@ -87,6 +91,12 @@ struct GyrseekConfig {
     release_burst_window_hours: Option<usize>,
     #[serde(default)]
     minimum_release_age_package: Option<usize>,
+    #[serde(default)]
+    probe_timeout_seconds: Option<usize>,
+    #[serde(default)]
+    python_version: Option<String>,
+    #[serde(default)]
+    node_version: Option<String>,
     #[serde(default)]
     process_exec_allowlist: HashMap<String, Vec<String>>,
     #[serde(default)]
@@ -457,6 +467,41 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         "Ignoring invalid minimum_release_age_package=0; disabling minimum release age check",
     );
 
+    let probe_timeout_seconds = option_zero_to_none(
+        cfg.probe_timeout_seconds,
+        "Ignoring invalid probe_timeout_seconds=0; using default 300",
+    )
+    .unwrap_or(DEFAULT_PROBE_TIMEOUT_SECS);
+
+    // A value that is not a supported version is a hard error: silently scanning on a
+    // different runtime than the one asked for would be misleading.
+    let runtime_version =
+        |key: &str,
+         image_var: &str,
+         raw: Option<String>,
+         normalize: fn(&str) -> Result<String, String>| {
+            raw.map(|raw| {
+            normalize(&raw).map_err(|e| {
+                format!(
+                    "{key} in '{path}': {e}. Point {image_var} at your own image to use another version."
+                )
+            })
+        })
+        .transpose()
+        };
+    let python_version = runtime_version(
+        "python_version",
+        "GYRSEEK_PY_SCANNER_IMAGE",
+        cfg.python_version,
+        normalize_python_config,
+    )?;
+    let node_version = runtime_version(
+        "node_version",
+        "GYRSEEK_NPM_SCANNER_IMAGE",
+        cfg.node_version,
+        normalize_node_config,
+    )?;
+
     let process_exec_allowlist =
         parse_list_map(cfg.process_exec_allowlist, true, "process_exec_allowlist");
     let artifact_allowlist = parse_list_map(cfg.artifact_allowlist, false, "artifact_allowlist");
@@ -504,6 +549,9 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         release_burst_threshold,
         release_burst_window_hours,
         minimum_release_age_package,
+        probe_timeout_seconds,
+        python_version,
+        node_version,
         process_exec_allowlist,
         artifact_allowlist,
         sensitive_file_access_allowlist,
@@ -1342,6 +1390,147 @@ mod config_tests {
     }
 
     #[test]
+    fn probe_timeout_defaults_to_300_and_can_be_overridden() {
+        let empty = NamedTempFile::new().expect("temp file should be created");
+        assert_eq!(load(&empty).probe_timeout_seconds, 300);
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "probe_timeout_seconds: 900").expect("config should be written");
+        assert_eq!(load(&file).probe_timeout_seconds, 900);
+    }
+
+    #[test]
+    fn probe_timeout_zero_falls_back_to_300_rather_than_disabling_it() {
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "probe_timeout_seconds: 0").expect("config should be written");
+        assert_eq!(load(&file).probe_timeout_seconds, 300);
+    }
+
+    #[test]
+    fn python_version_config_is_validated_against_the_supported_table() {
+        let mut ok = NamedTempFile::new().expect("temp file should be created");
+        writeln!(ok, "python_version: \"3.11\"").expect("config should be written");
+        assert_eq!(load(&ok).python_version.as_deref(), Some("3.11"));
+        let mut patch = NamedTempFile::new().expect("temp file should be created");
+        writeln!(patch, "python_version: \"3.12.4\"").expect("config should be written");
+        assert_eq!(load(&patch).python_version.as_deref(), Some("3.12"));
+        let empty = NamedTempFile::new().expect("temp file should be created");
+        assert_eq!(load(&empty).python_version, None);
+        let mut bad = NamedTempFile::new().expect("temp file should be created");
+        writeln!(bad, "python_version: \"3.8\"").expect("config should be written");
+        let err = load_policy_config(bad.path().to_str().unwrap(), true)
+            .expect_err("unsupported python_version must be a hard error");
+        assert!(err.contains("not a supported Python version"), "{err}");
+        assert!(err.contains("GYRSEEK_PY_SCANNER_IMAGE"), "{err}");
+    }
+
+    #[test]
+    fn node_version_config_is_validated_against_the_supported_table() {
+        let mut ok = NamedTempFile::new().expect("temp file should be created");
+        writeln!(ok, "node_version: \"22\"").expect("config should be written");
+        assert_eq!(load(&ok).node_version.as_deref(), Some("22"));
+        let mut v = NamedTempFile::new().expect("temp file should be created");
+        writeln!(v, "node_version: v20.11.0").expect("config should be written");
+        assert_eq!(load(&v).node_version.as_deref(), Some("20"));
+        let mut bad = NamedTempFile::new().expect("temp file should be created");
+        writeln!(bad, "node_version: \"16\"").expect("config should be written");
+        let err = load_policy_config(bad.path().to_str().unwrap(), true)
+            .expect_err("unsupported node_version must be a hard error");
+        assert!(err.contains("not a supported Node version"), "{err}");
+        assert!(err.contains("GYRSEEK_NPM_SCANNER_IMAGE"), "{err}");
+    }
+
+    #[test]
+    fn runtime_and_timeout_config_edge_cases() {
+        let parse = |yaml: &str| {
+            let mut f = NamedTempFile::new().expect("temp file should be created");
+            writeln!(f, "{yaml}").expect("config should be written");
+            load_policy_config(f.path().to_str().unwrap(), true)
+        };
+        // An unquoted integer for node_version is read as written; surrounding spaces and a
+        // v-prefix are tolerated.
+        assert_eq!(
+            parse("node_version: 22").unwrap().node_version.as_deref(),
+            Some("22")
+        );
+        assert_eq!(
+            parse("node_version: \" v24 \"")
+                .unwrap()
+                .node_version
+                .as_deref(),
+            Some("24")
+        );
+        assert_eq!(
+            parse("python_version: \" 3.12 \"")
+                .unwrap()
+                .python_version
+                .as_deref(),
+            Some("3.12")
+        );
+        // null and absent mean "decide from the project".
+        assert_eq!(parse("python_version: ~").unwrap().python_version, None);
+        assert_eq!(parse("node_version:").unwrap().node_version, None);
+        // Empty, unsupported and nonsense values are hard errors, never a silent default.
+        for bad in [
+            "python_version: \"\"",
+            "python_version: \"3\"",
+            "python_version: \"3.9\"",
+            "python_version: \"3.15\"",
+            "python_version: pypy3.10",
+            "python_version: [3.12]",
+            "node_version: \"\"",
+            "node_version: \"18\"",
+            "node_version: lts/*",
+            "node_version: {a: b}",
+        ] {
+            assert!(parse(bad).is_err(), "{bad} must be rejected");
+        }
+        // The timeout: a positive number is used, anything else is rejected or replaced by the default,
+        // never accepted as "no limit".
+        assert_eq!(
+            parse("probe_timeout_seconds: 1")
+                .unwrap()
+                .probe_timeout_seconds,
+            1
+        );
+        assert_eq!(
+            parse("probe_timeout_seconds: 86400")
+                .unwrap()
+                .probe_timeout_seconds,
+            86400
+        );
+        assert_eq!(
+            parse("probe_timeout_seconds: 0")
+                .unwrap()
+                .probe_timeout_seconds,
+            300
+        );
+        for bad in [
+            "probe_timeout_seconds: -5",
+            "probe_timeout_seconds: abc",
+            "probe_timeout_seconds: 1.5",
+            "probe_timeout_seconds: [1]",
+            "probe_timeout_seconds: 99999999999999999999999",
+        ] {
+            assert!(parse(bad).is_err(), "{bad} must be rejected");
+        }
+        assert_eq!(
+            parse("probe_timeout_seconds:")
+                .unwrap()
+                .probe_timeout_seconds,
+            300
+        );
+    }
+
+    #[test]
+    fn unquoted_python_version_keeps_its_trailing_zero() {
+        // serde_yaml hands a string field the scalar's original text, so an unquoted
+        // 3.10 must not turn into 3.1 (which is not a supported Python).
+        let mut file = NamedTempFile::new().expect("temp file should be created");
+        writeln!(file, "python_version: 3.10").expect("config should be written");
+        assert_eq!(load(&file).python_version.as_deref(), Some("3.10"));
+    }
+
+    #[test]
     fn parses_minimum_release_age_package_override() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "minimum_release_age_package: 7").expect("config should be written");
@@ -1513,6 +1702,8 @@ struct LazyRunner {
     runner: std::cell::OnceCell<Box<dyn SandboxRunner>>,
     danger_disable_seccomp: bool,
     no_sandbox: bool,
+    probe_timeout_secs: usize,
+    image: ImageChoice,
 }
 
 impl LazyRunner {
@@ -1522,7 +1713,12 @@ impl LazyRunner {
                 if env::var("GYRSEEK_TEST_BYPASS_RUNNER_INIT").ok().as_deref() == Some("1") {
                     return Box::new(NoopRunner) as Box<dyn SandboxRunner>;
                 }
-                match build_runner_from_env(self.danger_disable_seccomp, self.no_sandbox) {
+                match build_runner_from_env(
+                    self.danger_disable_seccomp,
+                    self.no_sandbox,
+                    self.probe_timeout_secs,
+                    self.image.clone(),
+                ) {
                     Ok(runner) => runner,
                     Err(e) => {
                         println!("❌ [gyrseek] Sandbox initialization failed: {}", e);
@@ -1644,12 +1840,14 @@ impl GyrSeek {
         packages
     }
 
-    fn parse_pip_install_packages(&self) -> Vec<(String, Option<String>)> {
-        parse_pip_install_packages_from_args(&self.passthrough_args)
+    fn parse_python_install_packages(&self) -> Vec<(String, Option<String>)> {
+        parse_python_install_packages_from_args(&self.passthrough_args)
+            .unwrap_or_else(|e| exit_with(&e))
     }
 
     fn parse_npm_install_packages(&self) -> Vec<(String, Option<String>)> {
         parse_npm_install_packages_from_args(&self.passthrough_args)
+            .unwrap_or_else(|e| exit_with(&e))
     }
 
     fn parse_uv_lock_upgrade_packages(&self) -> Vec<String> {
@@ -1881,6 +2079,12 @@ pub async fn run(args: Vec<String>) {
             threshold, policy.release_burst_window_hours
         );
     }
+    if policy.probe_timeout_seconds != DEFAULT_PROBE_TIMEOUT_SECS {
+        println!(
+            "ℹ️ [gyrseek] Probe timeout set to {}s (probe_timeout_seconds)",
+            policy.probe_timeout_seconds
+        );
+    }
     if let Some(days) = policy.minimum_release_age_package {
         println!(
             "ℹ️ [gyrseek] Minimum release age policy enabled (minimum_release_age_package={} day(s))",
@@ -1904,10 +2108,21 @@ pub async fn run(args: Vec<String>) {
     }
 
     let mut scan_cache: HashMap<String, ScanReport> = HashMap::new();
+    let image = select_for_manager(
+        &eye.manager,
+        policy.python_version.as_deref(),
+        policy.node_version.as_deref(),
+        &env::current_dir().unwrap_or_default(),
+    );
+    if !no_sandbox {
+        println!("ℹ️ [gyrseek] Sandbox {}", image.description);
+    }
     let runner = LazyRunner {
         runner: std::cell::OnceCell::new(),
         danger_disable_seccomp,
         no_sandbox,
+        probe_timeout_secs: policy.probe_timeout_seconds,
+        image,
     };
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("lock") {
@@ -2117,7 +2332,7 @@ pub async fn run(args: Vec<String>) {
     {
         let manager = eye.manager.clone();
         bulk_scan!(
-            eye.parse_pip_install_packages(),
+            eye.parse_python_install_packages(),
             Pinned,
             "pip",
             "'pip install' detected but no parseable package entries were found. Failing closed.",
@@ -2128,13 +2343,51 @@ pub async fn run(args: Vec<String>) {
         );
     }
 
+    // `uv pip install`, `uv add` and `poetry add` name packages on the command line like
+    // `pip install` does, so every named package is scanned, not just the first.
+    let named_install = match (
+        eye.manager.as_str(),
+        eye.passthrough_args.get(1).map(String::as_str),
+        eye.passthrough_args.get(2).map(String::as_str),
+    ) {
+        ("uv", Some("pip"), Some("install")) => Some("uv pip install"),
+        ("uv", Some("add"), _) => Some("uv add"),
+        ("poetry", Some("add"), _) => Some("poetry add"),
+        _ => None,
+    };
+    if let Some(command) = named_install {
+        bulk_scan!(
+            eye.parse_python_install_packages(),
+            Pinned,
+            command,
+            &format!(
+                "'{command}' detected but no parseable package entries were found. Failing closed."
+            ),
+            |n| format!("🛡️ [gyrseek] '{command}' detected. Testing {n} package(s)...")
+        );
+    }
+
     if (eye.manager == "npm" || eye.manager == "pnpm")
         && (eye.passthrough_args.get(1).map(String::as_str) == Some("install")
             || eye.passthrough_args.get(1).map(String::as_str) == Some("i")
             || eye.passthrough_args.get(1).map(String::as_str) == Some("update")
+            || (eye.manager == "npm"
+                && eye.passthrough_args.get(1).map(String::as_str) == Some("ci"))
             || (eye.manager == "pnpm"
                 && eye.passthrough_args.get(1).map(String::as_str) == Some("add")))
     {
+        if is_lockfile_only_command(&eye.passthrough_args) {
+            println!(
+                "ℹ️ [gyrseek] Lockfile-only command: it rewrites the lockfile and installs nothing, so there is nothing to scan yet. Forwarding command directly with --ignore-scripts (npm still runs the project's own lifecycle scripts, such as `prepare`, in this mode). Scan the install that follows."
+            );
+            let mut args = eye.passthrough_args.clone();
+            if !args.iter().any(|a| a == "--ignore-scripts") {
+                args.push("--ignore-scripts".to_string());
+            }
+            eye.forward_args(&args);
+            return;
+        }
+
         if has_only_non_registry_npm_specs(&eye.passthrough_args) {
             println!(
                 "ℹ️ [gyrseek] Only non-registry package specifications detected. Forwarding command directly..."
