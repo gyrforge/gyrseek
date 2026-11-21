@@ -2,6 +2,8 @@
 
 ## Completed
 - **External AI Code Review Migration** — Replaced in-repository AI review workflows and privileged `workflow_run` comment publishers with external CodeRabbit reviews (`.coderabbit.yaml`), isolating review feedback from runner execution contexts.
+- Per-probe wall-clock limit (`probe_timeout_seconds`, default 300) that blocks only the package that timed out, and `install_failed` blocking with the package manager's own error output when a probe's install fails.
+- Sandbox Python and Node versions follow the project: `python_version`/`node_version` config, `.python-version`, `requires-python`/Poetry ranges, `.nvmrc`/`.node-version` and `engines.node`, selecting from built-in tables of digest-pinned images (Python 3.10–3.14, Node 20/22/24/26).
 - Install-time git clone behavior diffing across package versions, plus `git_clone_allowlist` support.
 - Process-execution diffing for all observed `execve` calls by default, with `process_exec_allowlist` as the only escape hatch.
 - Post-install artifact inventory and diffing (`binary`, `suspicious_pth`, `unexpected_runtime`, `large_file`) with `artifact_allowlist` support.
@@ -54,9 +56,10 @@
 
 ### Reliability & UX
 
+- Resolve Python version ranges (`uv add 'pytest>=9'`, `-r pyproject.toml`) to the highest registry version that satisfies them, scan that version, and pin the forwarded command to it. Ranges currently exit 1 by design; this needs a range-aware target in the scanner and a decision about installs that resolve differently later.
 - Improve baseline selection strategy when fewer historical versions exist.
 - Add structured logging mode for CI and machine parsing.
-- Add configurable timeout and retry controls for registry lookups and slow probe execution.
+- Add configurable timeout and retry controls for registry lookups (probe execution already has `probe_timeout_seconds`).
 
 ## Long Term
 

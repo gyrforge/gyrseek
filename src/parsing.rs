@@ -324,54 +324,364 @@ pub(crate) fn parse_requirements_packages_from_content(
         .collect()
 }
 
-pub(crate) fn parse_pip_install_packages_from_args(
-    args: &[String],
-) -> Vec<(String, Option<String>)> {
-    if args.first().map(String::as_str) != Some("pip")
-        && args.first().map(String::as_str) != Some("pip3")
-    {
-        return Vec::new();
+/// Flags that take a separate value, per command. The value must not be read as a package
+/// name (`uv add --group dev pytest` installs `pytest`, not `dev`). Only flags that always
+/// take a value are listed: wrongly listing a boolean flag would silently drop the package
+/// after it, whereas missing a value flag only makes gyrseek look up one extra name.
+const PIP_VALUE_FLAGS: &[&str] = &[
+    "-c",
+    "--constraint",
+    "-e",
+    "--editable",
+    "-i",
+    "--index-url",
+    "--extra-index-url",
+    "-f",
+    "--find-links",
+    "-t",
+    "--target",
+    "--prefix",
+    "--root",
+    "--no-binary",
+    "--only-binary",
+    "--platform",
+    "--python-version",
+    "--implementation",
+    "--abi",
+    "--src",
+    "--cache-dir",
+    "-p",
+    "--python",
+    "--index",
+    "--default-index",
+    "--index-strategy",
+    "--keyring-provider",
+    "--exclude-newer",
+    "--resolution",
+    "--prerelease",
+    "--link-mode",
+    "--python-platform",
+    "-C",
+    "--config-setting",
+    "--config-settings",
+    "-b",
+    "--build-constraint",
+    "--override",
+    "--reinstall-package",
+    "-P",
+    "--upgrade-package",
+    "--refresh-package",
+    "--config-file",
+    "--extra",
+    "--group",
+];
+const UV_ADD_VALUE_FLAGS: &[&str] = &[
+    "--group",
+    "--optional",
+    "--package",
+    "-p",
+    "--python",
+    "--index",
+    "--default-index",
+    "-i",
+    "--index-url",
+    "--extra-index-url",
+    "-f",
+    "--find-links",
+    "--extra",
+    "--bounds",
+    "--branch",
+    "--tag",
+    "--rev",
+    "-m",
+    "--marker",
+    "-c",
+    "--constraint",
+    "--exclude-newer",
+    "--index-strategy",
+    "--keyring-provider",
+    "--resolution",
+    "--prerelease",
+    "--link-mode",
+    "-C",
+    "--config-setting",
+    "--project",
+    "--directory",
+    "--config-file",
+    "--cache-dir",
+    "--python-platform",
+    "-P",
+    "--upgrade-package",
+    "--refresh-package",
+    "--script",
+];
+const POETRY_ADD_VALUE_FLAGS: &[&str] = &[
+    "-G",
+    "--group",
+    "-E",
+    "--extras",
+    "--python",
+    "--platform",
+    "--source",
+    "-C",
+    "--directory",
+    "-P",
+    "--project",
+];
+
+/// Where the package arguments start and which flags take a value, for each Python command
+/// that installs packages by name. `poetry install/update/lock` and `uv sync/lock` are
+/// scanned from their lockfiles instead.
+fn python_install_layout(args: &[String]) -> Option<(usize, &'static [&'static str])> {
+    let arg = |i: usize| args.get(i).map(String::as_str);
+    match (arg(0)?, arg(1), arg(2)) {
+        ("pip" | "pip3", Some("install"), _) => Some((2, PIP_VALUE_FLAGS)),
+        ("uv", Some("pip"), Some("install")) => Some((3, PIP_VALUE_FLAGS)),
+        ("uv", Some("add"), _) => Some((2, UV_ADD_VALUE_FLAGS)),
+        ("poetry", Some("add"), _) => Some((2, POETRY_ADD_VALUE_FLAGS)),
+        _ => None,
     }
-    if args.get(1).map(String::as_str) != Some("install") {
-        return Vec::new();
+}
+
+fn is_plain_version(v: &str) -> bool {
+    v.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '!' | '_' | '-'))
+}
+
+/// Parses one requirement the way the Python install paths need it: it must name exactly one
+/// registry version (`name`, `name[extra]` or `name==1.2.3`, with spaces and a `; marker` or
+/// ` --hash` tail tolerated). gyrseek scans specific versions and pins the forwarded command
+/// to them, so a range (`>=2`, `~=1.4`, `==1.*`) cannot be vouched for, and a direct
+/// reference (`name @ https://…`, a bare URL) installs something the registry scan never
+/// saw. Both are errors. Blank lines, comments, option lines and local paths are `Ok(None)`.
+/// With `poetry`, `name@2.31.0` means `name==2.31.0` and `name@latest` means `name`.
+fn parse_exact_requirement(
+    spec: &str,
+    poetry: bool,
+) -> Result<Option<(String, Option<String>)>, String> {
+    let line = spec.split(" #").next().unwrap_or(spec).trim();
+    if line.is_empty() || line.starts_with(['#', '-', '.', '/', '~']) {
+        return Ok(None);
+    }
+    let not_exact = |why: &str| {
+        Err(format!(
+            "'{line}' {why}. gyrseek scans exact versions and pins the install to them, so it cannot vouch for it. Use an exact version (name==1.2.3), a bare name (gyrseek then scans the latest version and pins it), or a lockfile command (uv sync, uv lock, poetry install). Failing closed."
+        ))
+    };
+
+    // Drop a `; marker` or ` --option` tail and a trailing line continuation, then spaces.
+    let head = line.split(';').next().unwrap_or(line);
+    let head = head.split(" --").next().unwrap_or(head);
+    // Spaces are fine around operators, brackets and commas (`name [a, b] == 1.0`) but not
+    // inside a name or a version (`re quests==1.0`), which pip would reject.
+    let chars: Vec<char> = head.trim_end_matches('\\').chars().collect();
+    let glue = |c: char| matches!(c, '=' | '[' | ']' | ',' | '<' | '>' | '!' | '~' | '@');
+    let mut compact = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_whitespace() {
+            compact.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < chars.len() && chars[j].is_whitespace() {
+            j += 1;
+        }
+        if let (Some(prev), Some(next)) = (compact.chars().last(), chars.get(j))
+            && !glue(prev)
+            && !glue(*next)
+        {
+            return not_exact("has a space inside the requirement");
+        }
+        i = j;
+    }
+    if compact.contains("://") || compact.starts_with("git+") {
+        return not_exact("installs from a URL, not from the registry");
     }
 
+    // Extras may contain commas (`name[a,b]`), so remove them before looking at operators.
+    let plain = match (compact.find('['), compact.find(']')) {
+        (Some(open), Some(close)) if open < close => {
+            format!("{}{}", &compact[..open], &compact[close + 1..])
+        }
+        _ => compact.clone(),
+    };
+
+    let (name, version) = if poetry && let Some((name, ver)) = plain.split_once('@') {
+        match ver {
+            "" | "latest" => (name, None),
+            v if is_plain_version(v) => (name, Some(v)),
+            _ => return not_exact("is a version range"),
+        }
+    } else if plain.contains('@') {
+        return not_exact("installs from a URL or path, not from the registry");
+    } else if let Some((name, ver)) = plain.split_once("==") {
+        if !is_plain_version(ver) {
+            return not_exact("is a version range");
+        }
+        (name, Some(ver))
+    } else if plain.contains(['<', '>', '!', '~', '=', ',', '*']) {
+        return not_exact("is a version range");
+    } else {
+        (plain.as_str(), None)
+    };
+
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        return not_exact("is not a package name gyrseek can look up");
+    }
+    Ok(Some((name.to_string(), version.map(str::to_string))))
+}
+
+/// How deep `-r` includes may nest inside requirements files.
+const MAX_REQUIREMENTS_DEPTH: usize = 10;
+
+/// The path of a `-r base.txt` / `--requirement base.txt` / `--requirement=base.txt` /
+/// `-rbase.txt` include line, ignoring a trailing ` # comment`.
+fn requirements_include(line: &str) -> Option<&str> {
+    let line = line.split(" #").next().unwrap_or(line).trim();
+    let path = if let Some(rest) = line.strip_prefix("--requirement=") {
+        rest
+    } else if let Some(rest) = line.strip_prefix("--requirement") {
+        rest.strip_prefix(char::is_whitespace)?
+    } else {
+        line.strip_prefix("-r")?
+    };
+    let path = path.trim();
+    (!path.is_empty()).then_some(path)
+}
+
+/// Reads the packages listed in a `-r` file, following `-r` includes inside it (relative to
+/// the including file, as pip does). Anything that is not a plain requirements file
+/// (`pyproject.toml`, `setup.py`, ...) lists version ranges and groups that gyrseek cannot
+/// resolve to a scanned version, and a file it cannot read cannot be scanned at all, so
+/// both are errors, as is nesting that is too deep: skipping them would forward their
+/// packages unscanned.
+fn read_requirements_file(path: &str) -> Result<Vec<(String, Option<String>)>, String> {
+    let mut seen = std::collections::HashSet::new();
+    read_requirements_file_at(std::path::Path::new(path), &mut seen, 0)
+}
+
+fn read_requirements_file_at(
+    path: &std::path::Path,
+    seen: &mut std::collections::HashSet<std::path::PathBuf>,
+    depth: usize,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let shown = path.display();
+    let lower = shown.to_string().to_ascii_lowercase();
+    if [".toml", ".py", ".cfg", ".json", ".yaml", ".yml"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+    {
+        return Err(format!(
+            "'-r {shown}' lists dependencies as version ranges that gyrseek cannot resolve to a scanned version, so it cannot vouch for them. Use `uv sync` or `uv lock` (scanned from the lockfile), or give `-r` a requirements file with pinned versions. Failing closed."
+        ));
+    }
+    if depth > MAX_REQUIREMENTS_DEPTH {
+        return Err(format!(
+            "Requirements files are nested more than {MAX_REQUIREMENTS_DEPTH} levels deep at '{shown}', so gyrseek cannot scan them all. Failing closed."
+        ));
+    }
+    let unreadable = |e: std::io::Error| {
+        format!(
+            "Cannot read the requirements file '{shown}' ({e}), so its packages cannot be scanned. Failing closed."
+        )
+    };
+    // A file already read (an include cycle or a repeat) adds nothing new.
+    if !seen.insert(fs::canonicalize(path).map_err(unreadable)?) {
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(path).map_err(unreadable)?;
+    let content = content.trim_start_matches('\u{feff}'); // a BOM from a Windows editor
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new(""));
+
     let mut packages = Vec::new();
-    let mut idx = 2;
+    for line in content.lines() {
+        if let Some((name, version)) = parse_exact_requirement(line, false)? {
+            // The forwarded command cannot pin a line inside a file, so a bare name would
+            // be resolved again at install time, and a `-c` constraints file can change
+            // the result. Require the version here.
+            if version.is_none() {
+                return Err(format!(
+                    "'{name}' in {shown} has no pinned version. gyrseek cannot pin lines inside a file, so the install would resolve it again (and a -c constraints file can change the result). Pin it (name==1.2.3) or name it on the command line. Failing closed."
+                ));
+            }
+            packages.push((name, version));
+        }
+    }
+    for include in content.lines().filter_map(requirements_include) {
+        packages.extend(read_requirements_file_at(
+            &dir.join(include),
+            seen,
+            depth + 1,
+        )?);
+    }
+    Ok(packages)
+}
+
+/// Every package named on a Python install command line, including those read from
+/// `-r`/`--requirement(s)` files: `pip install a b`, `uv pip install a b`, `uv add a b`,
+/// `poetry add a b`. Scanning only the first would forward the rest unscanned.
+pub(crate) fn parse_python_install_packages_from_args(
+    args: &[String],
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let Some((start, value_flags)) = python_install_layout(args) else {
+        return Ok(Vec::new());
+    };
+    let poetry = args.first().map(String::as_str) == Some("poetry");
+
+    let mut packages = Vec::new();
+    let mut idx = start;
 
     while idx < args.len() {
         let arg = &args[idx];
 
-        if arg == "-r" || arg == "--requirements" {
-            if let Some(path) = args.get(idx + 1)
-                && let Ok(content) = fs::read_to_string(path)
-            {
-                packages.extend(parse_requirements_packages_from_content(&content));
+        if matches!(arg.as_str(), "-r" | "--requirement" | "--requirements") {
+            if let Some(path) = args.get(idx + 1) {
+                packages.extend(read_requirements_file(path)?);
             }
             idx += 2;
             continue;
         }
 
-        if let Some(path) = arg.strip_prefix("--requirements=") {
-            if let Ok(content) = fs::read_to_string(path) {
-                packages.extend(parse_requirements_packages_from_content(&content));
-            }
+        if let Some(path) = arg
+            .strip_prefix("--requirements=")
+            .or_else(|| arg.strip_prefix("--requirement="))
+        {
+            packages.extend(read_requirements_file(path)?);
+            idx += 1;
+            continue;
+        }
+
+        // pip's option parser also accepts the value attached: `-rrequirements.txt`.
+        if let Some(path) = arg
+            .strip_prefix("-r")
+            .filter(|p| !p.is_empty() && !p.starts_with('-'))
+        {
+            packages.extend(read_requirements_file(path)?);
             idx += 1;
             continue;
         }
 
         if arg.starts_with('-') {
-            idx += 1;
+            idx += if value_flags.contains(&arg.as_str()) {
+                2
+            } else {
+                1
+            };
             continue;
         }
 
-        if let Some(pkg) = parse_requirements_spec(arg) {
-            packages.push(pkg);
-        }
+        packages.extend(parse_exact_requirement(arg, poetry)?);
         idx += 1;
     }
 
-    packages
+    Ok(packages)
 }
 
 fn parse_npm_spec(arg: &str) -> (String, Option<String>) {
@@ -396,35 +706,6 @@ fn parse_npm_spec(arg: &str) -> (String, Option<String>) {
     }
 
     (arg.to_string(), None)
-}
-
-fn normalize_npm_version_spec(spec: &str) -> Option<String> {
-    let trimmed = spec.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if trimmed.starts_with("file:")
-        || trimmed.starts_with("git+")
-        || trimmed.starts_with("http://")
-        || trimmed.starts_with("https://")
-        || trimmed.starts_with("workspace:")
-        || trimmed == "latest"
-    {
-        return None;
-    }
-
-    if trimmed.starts_with('^')
-        || trimmed.starts_with('~')
-        || trimmed.starts_with('>')
-        || trimmed.starts_with('<')
-        || trimmed.starts_with('=')
-        || trimmed.starts_with('*')
-    {
-        return None;
-    }
-
-    Some(trimmed.to_string())
 }
 
 pub(crate) fn is_non_registry_npm_spec(spec: &str) -> bool {
@@ -452,34 +733,67 @@ fn is_npm_family_manager(manager: &str) -> bool {
 fn is_npm_family_package_command(manager: &str, command: Option<&str>) -> bool {
     matches!(command, Some("install") | Some("i") | Some("update"))
         || (manager == "pnpm" && command == Some("add"))
+        || (manager == "npm" && command == Some("ci"))
 }
 
-pub(crate) fn parse_npm_packages_from_package_json_content(
-    content: &str,
-) -> Vec<(String, Option<String>)> {
-    let parsed: serde_json::Value = match serde_json::from_str(content) {
-        Ok(value) => value,
-        Err(_) => return Vec::new(),
-    };
+const LOCKFILE_ONLY_FLAGS: [&str; 2] = ["--package-lock-only", "--lockfile-only"];
 
-    [
-        "dependencies",
-        "devDependencies",
-        "optionalDependencies",
-        "peerDependencies",
-    ]
-    .into_iter()
-    .filter_map(|section| parsed.get(section).and_then(serde_json::Value::as_object))
-    .flat_map(|obj| {
-        obj.into_iter().filter_map(|(name, version_val)| {
-            let spec = version_val.as_str()?;
-            if is_non_registry_npm_spec(spec) {
-                return None;
-            }
-            Some((name.to_string(), normalize_npm_version_spec(spec)))
+/// `npm install --package-lock-only` / `pnpm install --lockfile-only` only rewrite the
+/// lockfile: nothing is downloaded or run, so there is nothing to scan yet. The follow-up
+/// install is scanned from the new lockfile. The flag is a boolean, so its effective value
+/// follows the package manager: `--flag false`, `--flag=false` and `--no-flag` turn it
+/// off, and the last occurrence wins. Anything unclear counts as "off" so the command is
+/// scanned.
+pub(crate) fn is_lockfile_only_command(args: &[String]) -> bool {
+    let mut enabled = false;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if arg == "--" {
+            break;
+        }
+        if LOCKFILE_ONLY_FLAGS.contains(&arg) {
+            enabled = match args.get(i + 1).map(String::as_str) {
+                Some("false") => {
+                    i += 1;
+                    false
+                }
+                Some("true") => {
+                    i += 1;
+                    true
+                }
+                _ => true,
+            };
+        } else if let Some(value) = LOCKFILE_ONLY_FLAGS
+            .iter()
+            .find_map(|f| arg.strip_prefix(f).and_then(|rest| rest.strip_prefix('=')))
+        {
+            enabled = value == "true" || value.is_empty();
+        } else if LOCKFILE_ONLY_FLAGS.iter().any(|f| {
+            f.strip_prefix("--")
+                .is_some_and(|name| arg.strip_prefix("--no-") == Some(name))
+        }) {
+            enabled = false;
+        }
+        i += 1;
+    }
+    enabled
+}
+
+/// The non-flag arguments after the command, without the `true`/`false` that may follow a
+/// lockfile-only flag.
+fn npm_positional_args(args: &[String]) -> Vec<&str> {
+    args.iter()
+        .enumerate()
+        .skip(2)
+        .filter(|(i, arg)| {
+            let after_flag = args
+                .get(i - 1)
+                .is_some_and(|prev| LOCKFILE_ONLY_FLAGS.contains(&prev.as_str()));
+            !arg.starts_with('-') && !(after_flag && matches!(arg.as_str(), "true" | "false"))
         })
-    })
-    .collect()
+        .map(|(_, arg)| arg.as_str())
+        .collect()
 }
 
 pub(crate) fn has_only_non_registry_npm_specs(args: &[String]) -> bool {
@@ -495,12 +809,7 @@ pub(crate) fn has_only_non_registry_npm_specs(args: &[String]) -> bool {
         return false;
     }
 
-    let positional_args: Vec<&str> = args
-        .iter()
-        .skip(2)
-        .map(String::as_str)
-        .filter(|arg| !arg.starts_with('-'))
-        .collect();
+    let positional_args = npm_positional_args(args);
 
     !positional_args.is_empty()
         && positional_args
@@ -508,44 +817,208 @@ pub(crate) fn has_only_non_registry_npm_specs(args: &[String]) -> bool {
             .all(|arg| is_non_registry_npm_spec(arg))
 }
 
+fn is_valid_npm_name(name: &str) -> bool {
+    let part_ok = |p: &str| {
+        !p.is_empty()
+            && p.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
+    };
+    match name.strip_prefix('@') {
+        Some(scoped) => scoped
+            .split_once('/')
+            .is_some_and(|(s, n)| part_ok(s) && part_ok(n)),
+        None => part_ok(name),
+    }
+}
+
+/// One npm/pnpm spec from the command line must name exactly one registry version:
+/// `name`, `name@latest` or `name@1.2.3`. gyrseek scans specific versions and pins the
+/// install to them, so a range (`^4`, `>=2`, `4.x`), a dist-tag (`@next`) or an alias
+/// (`npm:other@1`) cannot be vouched for.
+fn parse_exact_npm_spec(arg: &str) -> Result<(String, Option<String>), String> {
+    let (name, version) = parse_npm_spec(arg);
+    let not_exact = |why: &str| {
+        Err(format!(
+            "'{arg}' {why}. gyrseek scans exact versions and pins the install to them, so it cannot vouch for it. Use an exact version (name@1.2.3), a bare name (gyrseek then scans the latest version and pins it), or install from a lockfile (npm ci, npm install, pnpm install). Failing closed."
+        ))
+    };
+    if !is_valid_npm_name(&name) {
+        return not_exact("is an alias or not a package name gyrseek can look up");
+    }
+    match version.as_deref() {
+        None | Some("latest") => Ok((name, None)),
+        Some(v) if semver::Version::parse(v).is_ok() => Ok((name, version)),
+        Some(_) => not_exact("is a version range or a dist-tag"),
+    }
+}
+
+/// Every package an `npm`/`pnpm` install-family command will install, as exact targets:
+/// the specs named on the command line, or with none named the lockfile (`package-lock.json`,
+/// `npm-shrinkwrap.json` or `pnpm-lock.yaml`), which is what `npm install`, `npm ci` and
+/// `pnpm install` actually install. `package.json` is not used: its dependencies are
+/// ranges, so scanning them would scan versions other than the ones installed. `update`
+/// picks new versions when it runs, so it has nothing to scan in advance.
 pub(crate) fn parse_npm_install_packages_from_args(
     args: &[String],
-) -> Vec<(String, Option<String>)> {
-    if !args
-        .first()
-        .map(String::as_str)
-        .is_some_and(is_npm_family_manager)
-    {
-        return Vec::new();
-    }
+) -> Result<Vec<(String, Option<String>)>, String> {
     let manager = args.first().map(String::as_str).unwrap_or_default();
-    if !is_npm_family_package_command(manager, args.get(1).map(String::as_str)) {
-        return Vec::new();
+    let command = args.get(1).map(String::as_str);
+    if !is_npm_family_manager(manager) || !is_npm_family_package_command(manager, command) {
+        return Ok(Vec::new());
     }
 
-    let positional_args: Vec<&str> = args
-        .iter()
-        .skip(2)
-        .map(String::as_str)
-        .filter(|arg| !arg.starts_with('-'))
-        .collect();
+    let positional_args = npm_positional_args(args);
 
     if !positional_args.is_empty() {
         return positional_args
             .into_iter()
             .filter(|arg| !is_non_registry_npm_spec(arg))
-            .map(|arg| {
-                let (name, version) = parse_npm_spec(arg);
-                (name, version.and_then(|v| normalize_npm_version_spec(&v)))
-            })
+            .map(parse_exact_npm_spec)
             .collect();
     }
 
-    if let Ok(content) = fs::read_to_string("package.json") {
-        return parse_npm_packages_from_package_json_content(&content);
+    if command == Some("update") {
+        let lockfile_only = if manager == "pnpm" {
+            "pnpm update --lockfile-only"
+        } else {
+            "npm update --package-lock-only"
+        };
+        return Err(format!(
+            "'{manager} update' chooses new versions when it runs, so gyrseek cannot scan them in advance. Run `{lockfile_only}` through gyrseek (it only rewrites the lockfile and installs nothing), then install from the new lockfile with gyrseek. Failing closed."
+        ));
     }
 
-    Vec::new()
+    let lockfiles: &[&str] = if manager == "pnpm" {
+        &["pnpm-lock.yaml"]
+    } else {
+        &["npm-shrinkwrap.json", "package-lock.json"]
+    };
+    let Some((file, content)) = lockfiles
+        .iter()
+        .find_map(|f| fs::read_to_string(f).ok().map(|c| (*f, c)))
+    else {
+        let make_one = if manager == "pnpm" {
+            "pnpm install --lockfile-only"
+        } else {
+            "npm install --package-lock-only"
+        };
+        return Err(format!(
+            "No {} found. `{manager} {}` installs whatever package.json's version ranges resolve to, which gyrseek cannot scan in advance. Create a lockfile without installing anything (`{make_one}`, which gyrseek forwards without scanning) and run gyrseek again. Failing closed.",
+            lockfiles.join(" or "),
+            command.unwrap_or("install"),
+        ));
+    };
+    let packages = if manager == "pnpm" {
+        parse_pnpm_lock_packages_from_content(&content)
+    } else {
+        parse_npm_lock_packages_from_content(&content)
+    };
+    if packages.is_empty() {
+        return Err(format!(
+            "{file} lists no registry packages to scan. Failing closed."
+        ));
+    }
+    Ok(packages)
+}
+
+/// Exact registry packages from `package-lock.json` / `npm-shrinkwrap.json`: lockfile v2/v3
+/// (`packages`, keyed by `node_modules/` path) or v1 (nested `dependencies`). Workspace
+/// links, bundled dependencies and git/file sources are not registry downloads and are left
+/// out.
+pub(crate) fn parse_npm_lock_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
+    let Ok(lock) = serde_json::from_str::<serde_json::Value>(content) else {
+        return Vec::new();
+    };
+    let mut found = std::collections::BTreeSet::new();
+    let mut add = |name: &str, entry: &serde_json::Value| {
+        let resolved = entry.get("resolved").and_then(|v| v.as_str()).unwrap_or("");
+        let from_registry = resolved.is_empty() || resolved.starts_with("http");
+        let skipped = entry.get("link").and_then(|v| v.as_bool()) == Some(true)
+            || entry.get("inBundle").and_then(|v| v.as_bool()) == Some(true)
+            || !from_registry;
+        if let Some(version) = entry.get("version").and_then(|v| v.as_str())
+            && !skipped
+            && semver::Version::parse(version).is_ok()
+        {
+            found.insert((name.to_string(), version.to_string()));
+        }
+    };
+
+    if let Some(packages) = lock.get("packages").and_then(|v| v.as_object()) {
+        for (key, entry) in packages {
+            let Some(path_name) = key.rsplit_once("node_modules/").map(|(_, n)| n) else {
+                continue; // the root project and workspace members
+            };
+            // An aliased dependency records the real package name in `name`.
+            let name = entry
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(path_name);
+            add(name, entry);
+        }
+    } else {
+        fn walk(
+            deps: &serde_json::Map<String, serde_json::Value>,
+            add: &mut impl FnMut(&str, &serde_json::Value),
+        ) {
+            for (name, entry) in deps {
+                add(name, entry);
+                if let Some(nested) = entry.get("dependencies").and_then(|v| v.as_object()) {
+                    walk(nested, add);
+                }
+            }
+        }
+        if let Some(deps) = lock.get("dependencies").and_then(|v| v.as_object()) {
+            walk(deps, &mut add);
+        }
+    }
+    found.into_iter().map(|(n, v)| (n, Some(v))).collect()
+}
+
+/// Exact registry packages from `pnpm-lock.yaml`. The `packages` keys are `/name/1.2.3`
+/// (v5), `/name@1.2.3(peer@1)` (v6) or `name@1.2.3` (v9); tarball and git sources are left
+/// out.
+pub(crate) fn parse_pnpm_lock_packages_from_content(
+    content: &str,
+) -> Vec<(String, Option<String>)> {
+    let Ok(lock) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
+        return Vec::new();
+    };
+    let Some(packages) = lock.get("packages").and_then(|v| v.as_mapping()) else {
+        return Vec::new();
+    };
+    let mut found = std::collections::BTreeSet::new();
+    for (key, entry) in packages {
+        let Some(key) = key.as_str() else { continue };
+        let resolution = entry.get("resolution");
+        let not_registry = resolution.is_some_and(|r| {
+            ["tarball", "type", "repo", "commit"]
+                .iter()
+                .any(|k| r.get(*k).is_some())
+        });
+        if not_registry {
+            continue;
+        }
+        let key = key.trim_start_matches('/');
+        let key = key.split('(').next().unwrap_or(key);
+        // v5 first (`name/1.2.3`, `name/1.2.3_peer@1`: a peer suffix contains `@`), then
+        // v6/v9 (`name@1.2.3`).
+        let v5 = key.rsplit_once('/').and_then(|(name, rest)| {
+            let version = rest.split('_').next().unwrap_or(rest);
+            semver::Version::parse(version)
+                .ok()
+                .map(|_| (name, version))
+        });
+        let Some((name, version)) =
+            v5.or_else(|| key.rsplit_once('@').filter(|(n, _)| !n.is_empty()))
+        else {
+            continue;
+        };
+        if semver::Version::parse(version).is_ok() && is_valid_npm_name(name) {
+            found.insert((name.to_string(), version.to_string()));
+        }
+    }
+    found.into_iter().map(|(n, v)| (n, Some(v))).collect()
 }
 
 pub(crate) fn parse_uv_lock_upgrade_packages_from_args(args: &[String]) -> Vec<String> {
@@ -638,6 +1111,17 @@ pub(crate) fn rewrite_args_with_pinned_versions(
                 continue;
             }
             out.push(arg.clone());
+            continue;
+        }
+
+        // Poetry's `name@latest` is resolved again by poetry at install time; pin it.
+        if manager == "poetry"
+            && let Some(name) = arg.strip_suffix("@latest")
+        {
+            match pins.get(strip_pep508_extras(name)) {
+                Some(version) if version != "latest" => out.push(format!("{name}=={version}")),
+                _ => out.push(arg.clone()),
+            }
             continue;
         }
 
@@ -1041,11 +1525,841 @@ version = "2.31.0"
         );
     }
 
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| a.to_string()).collect()
+    }
+
+    fn names(args: &[&str]) -> Vec<String> {
+        parse_python_install_packages_from_args(&strings(args))
+            .expect("args should parse")
+            .into_iter()
+            .map(|(name, version)| match version {
+                Some(v) => format!("{name}=={v}"),
+                None => name,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn parses_every_package_of_uv_pip_install_uv_add_and_poetry_add() {
+        assert_eq!(
+            names(&["uv", "pip", "install", "six==1.16.0", "pandas"]),
+            ["six==1.16.0", "pandas"]
+        );
+        assert_eq!(
+            names(&["uv", "add", "requests", "flask==3.0.0"]),
+            ["requests", "flask==3.0.0"]
+        );
+        assert_eq!(
+            names(&["poetry", "add", "requests", "flask==3.0.0"]),
+            ["requests", "flask==3.0.0"]
+        );
+        assert_eq!(names(&["pip", "install", "a", "b"]), ["a", "b"]);
+    }
+
+    #[test]
+    fn flag_values_are_not_mistaken_for_packages() {
+        assert_eq!(
+            names(&["uv", "add", "--group", "dev", "pytest"]),
+            ["pytest"]
+        );
+        assert_eq!(
+            names(&["uv", "add", "pytest", "--optional", "extra", "ruff"]),
+            ["pytest", "ruff"]
+        );
+        assert_eq!(
+            names(&[
+                "poetry", "add", "-G", "dev", "pytest", "--source", "internal", "x"
+            ]),
+            ["pytest", "x"]
+        );
+        assert_eq!(names(&["pip", "install", "--target", "vendor", "a"]), ["a"]);
+        assert_eq!(
+            names(&[
+                "uv", "pip", "install", "--python", "3.12", "a", "-c", "c.txt", "b"
+            ]),
+            ["a", "b"]
+        );
+        assert_eq!(
+            names(&[
+                "pip",
+                "install",
+                "--index-url=https://x.example/simple",
+                "a"
+            ]),
+            ["a"]
+        );
+    }
+
+    #[test]
+    fn boolean_flags_never_swallow_the_package_after_them() {
+        assert_eq!(names(&["uv", "add", "--dev", "a", "b"]), ["a", "b"]);
+        assert_eq!(names(&["uv", "add", "--editable", "a"]), ["a"]);
+        assert_eq!(
+            names(&["uv", "pip", "install", "--upgrade", "--no-deps", "a", "b"]),
+            ["a", "b"]
+        );
+        assert_eq!(
+            names(&["poetry", "add", "--dev", "--dry-run", "a", "b"]),
+            ["a", "b"]
+        );
+        assert_eq!(names(&["pip", "install", "-U", "a", "b"]), ["a", "b"]);
+    }
+
+    #[test]
+    fn requirement_files_are_read_in_every_spelling() {
+        let mut req = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut req, b"requests==2.31.0\n# comment\npytest==9.0.3\n")
+            .unwrap();
+        let path = req.path().to_string_lossy().to_string();
+        for form in [
+            vec![
+                "uv".to_string(),
+                "pip".into(),
+                "install".into(),
+                "-r".into(),
+                path.clone(),
+            ],
+            vec![
+                "uv".to_string(),
+                "add".into(),
+                "--requirements".into(),
+                path.clone(),
+            ],
+            vec![
+                "pip".to_string(),
+                "install".into(),
+                "--requirement".into(),
+                path.clone(),
+            ],
+            vec![
+                "pip".to_string(),
+                "install".into(),
+                format!("--requirement={path}"),
+            ],
+            vec![
+                "pip".to_string(),
+                "install".into(),
+                format!("--requirements={path}"),
+            ],
+        ] {
+            assert_eq!(
+                parse_python_install_packages_from_args(&form)
+                    .expect("requirements file should parse")
+                    .len(),
+                2,
+                "{form:?}"
+            );
+        }
+    }
+
+    fn write(dir: &std::path::Path, name: &str, content: &str) -> String {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, content).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    fn scan_r(path: &str) -> Result<Vec<String>, String> {
+        parse_python_install_packages_from_args(&strings(&["pip", "install", "-r", path])).map(
+            |p| {
+                p.into_iter()
+                    .map(|(name, version)| match version {
+                        Some(v) => format!("{name}=={v}"),
+                        None => name,
+                    })
+                    .collect()
+            },
+        )
+    }
+
+    fn exact(spec: &str, poetry: bool) -> Option<(String, Option<String>)> {
+        parse_exact_requirement(spec, poetry)
+            .unwrap_or_else(|e| panic!("{spec:?} should be accepted: {e}"))
+    }
+
+    #[test]
+    fn exact_requirements_are_accepted_in_every_form() {
+        let pinned = |n: &str, v: &str| Some((n.to_string(), Some(v.to_string())));
+        let bare = |n: &str| Some((n.to_string(), None));
+        assert_eq!(exact("requests", false), bare("requests"));
+        assert_eq!(
+            exact("requests==2.31.0", false),
+            pinned("requests", "2.31.0")
+        );
+        assert_eq!(
+            exact("requests == 2.31.0", false),
+            pinned("requests", "2.31.0")
+        );
+        assert_eq!(
+            exact("requests[security]==2.31.0", false),
+            pinned("requests", "2.31.0")
+        );
+        assert_eq!(exact("requests[a,b]", false), bare("requests"));
+        assert_eq!(exact("pkg==1.0rc1", false), pinned("pkg", "1.0rc1"));
+        assert_eq!(
+            exact("pkg==1!2.0+local.1", false),
+            pinned("pkg", "1!2.0+local.1")
+        );
+        assert_eq!(
+            exact("requests==2.31.0 ; python_version > \"3.8\"", false),
+            pinned("requests", "2.31.0")
+        );
+        assert_eq!(
+            exact("requests==2.31.0 --hash=sha256:abc", false),
+            pinned("requests", "2.31.0")
+        );
+        assert_eq!(
+            exact("requests==2.31.0 \\", false),
+            pinned("requests", "2.31.0")
+        );
+        assert_eq!(
+            exact("requests==2.31.0  # pinned", false),
+            pinned("requests", "2.31.0")
+        );
+        assert_eq!(exact("requests@2.31.0", true), pinned("requests", "2.31.0"));
+        assert_eq!(exact("requests@latest", true), bare("requests"));
+    }
+
+    #[test]
+    fn non_requirement_lines_are_skipped() {
+        for line in [
+            "",
+            "   ",
+            "# comment",
+            "-r base.txt",
+            "--index-url https://x/simple",
+            "./local-pkg",
+            "/abs/pkg",
+            "~/pkg",
+        ] {
+            assert_eq!(exact(line, false), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn version_ranges_are_rejected_with_a_clear_message() {
+        for spec in [
+            "requests>=2",
+            "requests>2",
+            "requests<=2",
+            "requests<3",
+            "requests!=2.0",
+            "requests~=2.1",
+            "requests==2.*",
+            "requests===2.0",
+            "requests>=2,<3",
+            "requests >= 2",
+            "requests=2.0",
+            "requests[security]>=2",
+        ] {
+            let err = parse_exact_requirement(spec, false).expect_err(spec);
+            assert!(err.contains("version range"), "{spec}: {err}");
+            assert!(err.contains("uv sync"), "{spec}: {err}");
+        }
+        let err = parse_exact_requirement("requests@^2.0", true).expect_err("poetry caret");
+        assert!(err.contains("version range"), "{err}");
+    }
+
+    #[test]
+    fn direct_references_and_urls_are_rejected() {
+        for spec in [
+            "requests @ https://evil.example/r.whl",
+            "requests@https://evil.example/r.whl",
+            "https://evil.example/r.whl",
+            "git+https://github.com/x/y.git",
+            "requests @ git+https://github.com/x/y.git",
+            "requests @ file:///tmp/r.whl",
+        ] {
+            let err = parse_exact_requirement(spec, false).expect_err(spec);
+            assert!(err.contains("not from the registry"), "{spec}: {err}");
+        }
+        assert!(parse_exact_requirement("requests@https://evil.example/r.whl", true).is_err());
+    }
+
+    #[test]
+    fn install_commands_reject_ranges_and_direct_references_for_every_manager() {
+        for args in [
+            &["uv", "add", "pytest>=9.0.3"][..],
+            &["uv", "add", "pytest", "ruff~=0.5"],
+            &["uv", "pip", "install", "requests", "six==1.*"],
+            &["pip", "install", "requests @ https://evil.example/r.whl"],
+            &["pip", "install", "requests", "https://evil.example/x.whl"],
+            &["poetry", "add", "requests@^2.0"],
+        ] {
+            let err = parse_python_install_packages_from_args(&strings(args))
+                .expect_err(&format!("{args:?}"));
+            assert!(err.contains("Failing closed"), "{args:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn requirements_files_with_ranges_or_urls_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        for (name, content) in [
+            ("range.txt", "six==1.16.0\npytest>=9\n"),
+            ("url.txt", "six==1.16.0\nreq @ https://evil.example/r.whl\n"),
+        ] {
+            let path = write(d, name, content);
+            assert!(scan_r(&path).is_err(), "{name}");
+        }
+        // Pinned lines with hashes, markers and comments are fine.
+        let ok = write(
+            d,
+            "ok.txt",
+            "# pinned\nsix==1.16.0 \\\n    --hash=sha256:abc\nattrs==24.2.0 ; python_version >= \"3.8\"\n",
+        );
+        assert_eq!(scan_r(&ok).unwrap(), ["six==1.16.0", "attrs==24.2.0"]);
+    }
+
+    #[test]
+    fn an_attached_short_r_option_on_the_command_line_is_scanned() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = write(dir.path(), "hidden.txt", "pandas==2.2.2\n");
+        // pip accepts the value attached to the short option: `-rhidden.txt`.
+        let found = names(&["pip", "install", "six==1.16.0", &format!("-r{hidden}")]);
+        assert_eq!(found, ["six==1.16.0", "pandas==2.2.2"]);
+        // A file that cannot be read must not be skipped.
+        assert!(
+            parse_python_install_packages_from_args(&strings(&[
+                "uv",
+                "pip",
+                "install",
+                "-r/no/such/file.txt"
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn unpinned_lines_inside_a_requirements_file_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let bare = write(dir.path(), "bare.txt", "six==1.16.0\nrequests\n");
+        let err = scan_r(&bare).unwrap_err();
+        assert!(
+            err.contains("'requests'") && err.contains("no pinned version"),
+            "{err}"
+        );
+        assert!(err.contains("-c constraints file"), "{err}");
+        // The same bare name on the command line is fine: the forwarded command is pinned.
+        assert_eq!(names(&["pip", "install", "requests"]), ["requests"]);
+        // A nested file is held to the same rule.
+        write(dir.path(), "base.txt", "attrs\n");
+        let top = write(dir.path(), "top.txt", "six==1.16.0\n-r base.txt\n");
+        assert!(scan_r(&top).unwrap_err().contains("no pinned version"));
+    }
+
+    #[test]
+    fn poetry_at_latest_is_pinned_to_the_scanned_version_on_forward() {
+        let pins = HashMap::from([("requests".to_string(), "2.31.0".to_string())]);
+        let args = strings(&["poetry", "add", "requests@latest", "six==1.16.0"]);
+        assert_eq!(
+            rewrite_args_with_pinned_versions("poetry", &args, &pins),
+            strings(&["poetry", "add", "requests==2.31.0", "six==1.16.0"])
+        );
+        // An unresolved (exempt) package is left alone rather than pinned to "latest".
+        let exempt = HashMap::from([("requests".to_string(), "latest".to_string())]);
+        assert_eq!(
+            rewrite_args_with_pinned_versions("poetry", &args, &exempt),
+            args
+        );
+    }
+
+    #[test]
+    fn lockfile_only_uses_the_effective_value_of_the_flag() {
+        let on = |a: &[&str]| is_lockfile_only_command(&strings(a));
+        for yes in [
+            &["npm", "install", "--package-lock-only"][..],
+            &["npm", "install", "--package-lock-only=true"],
+            &["npm", "install", "--package-lock-only", "true"],
+            &["pnpm", "install", "--lockfile-only"],
+            &[
+                "npm",
+                "install",
+                "--package-lock-only=false",
+                "--package-lock-only",
+            ],
+        ] {
+            assert!(on(yes), "{yes:?}");
+        }
+        for no in [
+            &["npm", "install"][..],
+            &["npm", "install", "--package-lock-only", "false"],
+            &["npm", "install", "--package-lock-only=false"],
+            &["npm", "install", "--no-package-lock-only"],
+            &[
+                "npm",
+                "install",
+                "--package-lock-only",
+                "--package-lock-only=false",
+            ],
+            &[
+                "npm",
+                "install",
+                "--package-lock-only",
+                "--no-package-lock-only",
+            ],
+            &["pnpm", "install", "--lockfile-only=false"],
+            &["npm", "install", "--", "--package-lock-only"],
+        ] {
+            assert!(!on(no), "{no:?}");
+        }
+        // The `false` after a flag is its value, not a package called `false`.
+        let args = strings(&["npm", "install", "--package-lock-only", "false", "lodash"]);
+        assert_eq!(npm_positional_args(&args), ["lodash"]);
+    }
+
+    // ---- edge cases: Python requirement specs ---------------------------------------
+
+    #[test]
+    fn requirement_whitespace_case_and_name_forms() {
+        let pinned = |n: &str, v: &str| Some((n.to_string(), Some(v.to_string())));
+        // CRLF and tabs from files saved on Windows, and names with dots, dashes, underscores.
+        assert_eq!(
+            exact("requests==2.31.0\r", false),
+            pinned("requests", "2.31.0")
+        );
+        assert_eq!(
+            exact("\trequests\t==\t2.31.0\t", false),
+            pinned("requests", "2.31.0")
+        );
+        assert_eq!(
+            exact("Flask-SQLAlchemy==3.1.1", false),
+            pinned("Flask-SQLAlchemy", "3.1.1")
+        );
+        assert_eq!(
+            exact("zope.interface==6.0", false),
+            pinned("zope.interface", "6.0")
+        );
+        assert_eq!(
+            exact("typing_extensions==4.9.0", false),
+            pinned("typing_extensions", "4.9.0")
+        );
+        assert_eq!(exact("1password==1.0", false), pinned("1password", "1.0"));
+        // Extras with spaces and several entries.
+        assert_eq!(
+            exact("requests [security, socks] == 2.0", false),
+            pinned("requests", "2.0")
+        );
+        // Markers with their own `==`, without a space before the semicolon.
+        assert_eq!(
+            exact("pywin32==306;sys_platform==\"win32\"", false),
+            pinned("pywin32", "306")
+        );
+        assert_eq!(
+            exact(
+                "uvloop==0.19 ; platform_machine == 'x86_64' and python_version >= '3.8'",
+                false
+            ),
+            pinned("uvloop", "0.19")
+        );
+        // Local version and epoch.
+        assert_eq!(
+            exact("torch==2.1.0+cpu", false),
+            pinned("torch", "2.1.0+cpu")
+        );
+    }
+
+    #[test]
+    fn malformed_requirements_fail_closed_instead_of_being_guessed() {
+        for bad in [
+            "requests==",
+            "==1.0",
+            "requests==1.0==2.0",
+            "requests==1.0,==2.0",
+            "requests=1.0",
+            "re quests==1.0",
+            "reque$ts==1.0",
+            "naïve==1.0",
+            "C:\\pkgs\\x.whl",
+            "requests==v",
+            "requests==1.0 @ https://x.example/r.whl",
+        ] {
+            assert!(
+                parse_exact_requirement(bad, false).is_err(),
+                "{bad:?} must not be accepted as an exact registry version"
+            );
+        }
+    }
+
+    #[test]
+    fn poetry_at_forms_edge_cases() {
+        assert_eq!(
+            exact("requests@", true),
+            Some(("requests".to_string(), None))
+        );
+        assert!(parse_exact_requirement("@2.0.0", true).is_err());
+        assert!(parse_exact_requirement("requests@2.0.0@x", true).is_err());
+        assert!(parse_exact_requirement("requests@>=2", true).is_err());
+        assert!(parse_exact_requirement("requests@*", true).is_err());
+        // `@` is a direct reference everywhere except for Poetry's version separator.
+        assert!(parse_exact_requirement("requests@2.0.0", false).is_err());
+    }
+
+    #[test]
+    fn requirements_files_tolerate_a_bom_crlf_blank_lines_and_inline_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let file = write(
+            d,
+            "win.txt",
+            "\u{feff}six==1.16.0\r\n\r\n   \r\n# a comment\r\nattrs==24.2.0  # inline\r\n",
+        );
+        assert_eq!(scan_r(&file).unwrap(), ["six==1.16.0", "attrs==24.2.0"]);
+        // An empty file is not an error here; the caller fails closed when nothing was named.
+        let empty = write(d, "empty.txt", "");
+        assert!(scan_r(&empty).unwrap().is_empty());
+    }
+
+    #[test]
+    fn include_edge_cases_absolute_paths_directories_case_and_the_depth_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        // An absolute include is used as written, from anywhere.
+        let abs = write(d, "elsewhere/abs.txt", "six==1.16.0\n");
+        let top = write(d, "sub/top.txt", &format!("-r {abs}\n"));
+        assert_eq!(scan_r(&top).unwrap(), ["six==1.16.0"]);
+        // A directory (or anything unreadable as a file) cannot be scanned.
+        std::fs::create_dir(d.join("adir")).unwrap();
+        assert!(scan_r(&d.join("adir").to_string_lossy()).is_err());
+        // The extension check is case-insensitive.
+        assert!(scan_r(&write(d, "Pyproject.TOML", "x")).is_err());
+        // Exactly MAX levels of nesting work; one more fails closed.
+        for i in 0..=MAX_REQUIREMENTS_DEPTH + 1 {
+            let content = if i == MAX_REQUIREMENTS_DEPTH {
+                "six==1.16.0\n".to_string()
+            } else {
+                format!("-r d{}.txt\n", i + 1)
+            };
+            write(d, &format!("d{i}.txt"), &content);
+        }
+        assert_eq!(
+            scan_r(&d.join("d0.txt").to_string_lossy()).unwrap(),
+            ["six==1.16.0"]
+        );
+        write(
+            d,
+            &format!("d{}.txt", MAX_REQUIREMENTS_DEPTH),
+            "-r d99.txt\n",
+        );
+        write(d, "d99.txt", "six==1.16.0\n");
+        assert!(scan_r(&d.join("d0.txt").to_string_lossy()).is_err());
+    }
+
+    #[test]
+    fn command_lines_with_missing_values_or_empty_arguments_do_not_panic() {
+        // A trailing `-r` or value flag has no value; a blank argument names nothing.
+        assert!(names(&["pip", "install", "-r"]).is_empty());
+        assert!(names(&["uv", "add", "--group"]).is_empty());
+        assert!(names(&["pip", "install", ""]).is_empty());
+        assert!(names(&["pip", "install", "--", "-x"]).is_empty());
+        assert!(names(&["pip", "install"]).is_empty());
+        assert_eq!(names(&["pip", "install", "a", "-r"]), ["a"]);
+        // Many packages keep their order.
+        let many: Vec<String> = (0..200).map(|i| format!("pkg{i}==1.0.{i}")).collect();
+        let mut args = vec!["uv".to_string(), "add".to_string()];
+        args.extend(many.clone());
+        let got = parse_python_install_packages_from_args(&args).unwrap();
+        assert_eq!(got.len(), 200);
+        assert_eq!(
+            format!("{}=={}", got[199].0, got[199].1.clone().unwrap()),
+            many[199]
+        );
+    }
+
+    // ---- edge cases: npm / pnpm -----------------------------------------------------
+
+    #[test]
+    fn npm_names_and_specs_edge_cases() {
+        for ok in [
+            "lodash",
+            "Lodash",
+            "lodash.merge",
+            "lodash_x",
+            "a",
+            "@a/b",
+            "@types/node",
+            "left-pad~",
+        ] {
+            assert!(is_valid_npm_name(ok), "{ok}");
+        }
+        for bad in [
+            "", "@", "@scope", "@scope/", "@/name", "a/b", "@a/b/c", "a b", "naïve", "../x", "a@b",
+        ] {
+            assert!(!is_valid_npm_name(bad), "{bad}");
+        }
+        // Empty version after `@`, a v-prefix and a build tag are not exact semver here.
+        for bad in [
+            "lodash@",
+            "lodash@v4.17.21",
+            "lodash@4.17",
+            "lodash@4.17.21.1",
+            "lodash@ 4.17.21",
+        ] {
+            assert!(parse_exact_npm_spec(bad).is_err(), "{bad}");
+        }
+        for (spec, name, ver) in [
+            ("lodash@4.17.21+build.5", "lodash", Some("4.17.21+build.5")),
+            ("lodash@4.17.21-beta.1", "lodash", Some("4.17.21-beta.1")),
+            ("@scope/pkg@1.0.0", "@scope/pkg", Some("1.0.0")),
+        ] {
+            assert_eq!(
+                parse_exact_npm_spec(spec).unwrap(),
+                (name.to_string(), ver.map(str::to_string)),
+                "{spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn npm_flags_are_not_packages_and_the_command_decides_what_is_scanned() {
+        let parse = |a: &[&str]| parse_npm_install_packages_from_args(&strings(a)).unwrap();
+        let pkg = |n: &str| (n.to_string(), None);
+        assert_eq!(
+            parse(&["npm", "install", "-D", "lodash", "--save-exact"]),
+            [pkg("lodash")]
+        );
+        assert_eq!(
+            parse(&["pnpm", "add", "-D", "lodash", "-w"]),
+            [pkg("lodash")]
+        );
+        // A package that is literally called `true` or `false` is still a package.
+        assert_eq!(parse(&["npm", "install", "true"]), [pkg("true")]);
+        // Commands that are not install-family commands scan nothing.
+        for cmd in [
+            &["npm", "run", "build"][..],
+            &["npm", "audit"],
+            &["pnpm", "dlx", "x"],
+            &["npm", "uninstall", "x"],
+        ] {
+            assert!(parse(cmd).is_empty(), "{cmd:?}");
+        }
+        // Local specs next to a registry spec are skipped, not scanned.
+        assert_eq!(
+            parse(&["npm", "install", "./local", "lodash"]),
+            [pkg("lodash")]
+        );
+    }
+
+    #[test]
+    fn lockfile_parsers_survive_hostile_and_degenerate_input() {
+        for junk in [
+            "",
+            "{}",
+            "[]",
+            "null",
+            "{\"packages\":null}",
+            "{\"packages\":[]}",
+            "{\"dependencies\":5}",
+            "\u{0}\u{1}",
+            "{{{{",
+        ] {
+            assert!(
+                parse_npm_lock_packages_from_content(junk).is_empty(),
+                "{junk:?}"
+            );
+        }
+        for junk in [
+            "",
+            "{}",
+            "packages:\n",
+            "packages: null\n",
+            "packages: [a, b]\n",
+            ": : :",
+            "\u{0}",
+        ] {
+            assert!(
+                parse_pnpm_lock_packages_from_content(junk).is_empty(),
+                "{junk:?}"
+            );
+        }
+        // Absurd nesting must not overflow the stack: serde_json refuses past its depth limit.
+        let deep = format!("{}1{}", "[".repeat(100_000), "]".repeat(100_000));
+        assert!(parse_npm_lock_packages_from_content(&deep).is_empty());
+        let nested_deps = format!(
+            "{{\"dependencies\":{}}}",
+            (0..300).fold("{}".to_string(), |inner, _| {
+                format!("{{\"x\":{{\"version\":\"1.0.0\",\"dependencies\":{inner}}}}}")
+            })
+        );
+        let _ = parse_npm_lock_packages_from_content(&nested_deps); // must return, whatever it finds
+    }
+
+    #[test]
+    fn lockfile_entries_with_missing_or_odd_fields_are_handled() {
+        let lock = r#"{"lockfileVersion":3,"packages":{
+            "node_modules/noversion":{"resolved":"https://registry.npmjs.org/n/-/n-1.0.0.tgz"},
+            "node_modules/badversion":{"version":"latest","resolved":"https://registry.npmjs.org/b/-/b.tgz"},
+            "node_modules/numeric":{"version":5},
+            "node_modules/empty-resolved":{"version":"1.0.0","resolved":""},
+            "node_modules/no-resolved":{"version":"2.0.0"},
+            "node_modules/@s/scoped":{"version":"3.0.0","resolved":"https://registry.npmjs.org/@s/scoped/-/scoped-3.0.0.tgz"},
+            "node_modules/dup":{"version":"1.0.0","resolved":"https://registry.npmjs.org/dup/-/dup-1.0.0.tgz"},
+            "node_modules/x/node_modules/dup":{"version":"1.0.0","resolved":"https://registry.npmjs.org/dup/-/dup-1.0.0.tgz"},
+            "node_modules/prerelease":{"version":"1.0.0-rc.1","resolved":"https://registry.npmjs.org/p/-/p.tgz"}}}"#;
+        assert_eq!(
+            pkgs(parse_npm_lock_packages_from_content(lock)),
+            [
+                "@s/scoped@3.0.0",
+                "dup@1.0.0",
+                "empty-resolved@1.0.0",
+                "no-resolved@2.0.0",
+                "prerelease@1.0.0-rc.1"
+            ]
+        );
+    }
+
+    #[test]
+    fn lockfile_only_flag_value_edge_cases_always_err_towards_scanning() {
+        let on = |a: &[&str]| is_lockfile_only_command(&strings(a));
+        // Values npm might read as false or garbage count as "not lockfile-only": scan.
+        for scanned in [
+            &["npm", "install", "--package-lock-only=1"][..],
+            &["npm", "install", "--package-lock-only=TRUE"],
+            &["npm", "install", "--package-lock-only=yes"],
+            &["npm", "install", "--package-lock-onlyx"],
+            &["npm", "install", "--lockfile-only-x"],
+        ] {
+            assert!(!on(scanned), "{scanned:?}");
+        }
+        // `maybe` is not a boolean, so npm reads it as a package name and the flag is on:
+        // a lockfile-only command, which installs nothing.
+        assert!(on(&["npm", "install", "--package-lock-only", "maybe"]));
+        // An empty value is the same as the bare flag.
+        assert!(on(&["npm", "install", "--package-lock-only="]));
+        // Turning it off then on again, then off again.
+        assert!(!on(&[
+            "npm",
+            "install",
+            "--package-lock-only",
+            "--no-package-lock-only",
+            "--package-lock-only",
+            "false"
+        ]));
+    }
+
+    #[test]
+    fn nested_r_includes_are_followed_relative_to_the_including_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "reqs/base.txt", "six==1.16.0\n-r common/shared.txt\n");
+        write(d, "reqs/common/shared.txt", "attrs==24.2.0\n");
+        let top = write(
+            d,
+            "reqs/prod.txt",
+            "flask==3.0.0\n-r base.txt  # shared deps\n--requirement=base.txt\n",
+        );
+        // base.txt is included twice but read once; paths are relative to each file.
+        assert_eq!(
+            scan_r(&top).unwrap(),
+            ["flask==3.0.0", "six==1.16.0", "attrs==24.2.0"]
+        );
+    }
+
+    #[test]
+    fn every_include_spelling_is_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "a.txt", "six==1.16.0\n");
+        for line in [
+            "-r a.txt",
+            "-ra.txt",
+            "--requirement a.txt",
+            "--requirement=a.txt",
+            "  -r   a.txt  ",
+        ] {
+            let top = write(d, "top.txt", &format!("{line}\n"));
+            assert_eq!(scan_r(&top).unwrap(), ["six==1.16.0"], "{line:?}");
+        }
+    }
+
+    #[test]
+    fn include_cycles_terminate_and_deep_nesting_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        write(d, "a.txt", "six==1.16.0\n-r b.txt\n");
+        write(d, "b.txt", "attrs==24.2.0\n-r a.txt\n");
+        assert_eq!(
+            scan_r(&d.join("a.txt").to_string_lossy()).unwrap(),
+            ["six==1.16.0", "attrs==24.2.0"]
+        );
+        for i in 0..=MAX_REQUIREMENTS_DEPTH + 1 {
+            write(d, &format!("n{i}.txt"), &format!("-r n{}.txt\n", i + 1));
+        }
+        write(
+            d,
+            &format!("n{}.txt", MAX_REQUIREMENTS_DEPTH + 2),
+            "six==1.16.0\n",
+        );
+        let err = scan_r(&d.join("n0.txt").to_string_lossy()).unwrap_err();
+        assert!(err.contains("nested more than"), "{err}");
+    }
+
+    #[test]
+    fn a_bad_nested_include_fails_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let missing = write(d, "missing.txt", "six==1.16.0\n-r gone.txt\n");
+        assert!(
+            scan_r(&missing)
+                .unwrap_err()
+                .contains("Cannot read the requirements file")
+        );
+        let toml = write(d, "toml.txt", "six==1.16.0\n-r pyproject.toml\n");
+        assert!(
+            scan_r(&toml)
+                .unwrap_err()
+                .contains("cannot resolve to a scanned version")
+        );
+        let url = write(d, "url.txt", "-r https://example.invalid/base.txt\n");
+        assert!(scan_r(&url).is_err());
+    }
+
+    #[test]
+    fn r_file_that_is_not_a_requirements_file_or_cannot_be_read_fails_closed() {
+        for file in [
+            "./pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "PYPROJECT.TOML",
+        ] {
+            let err = parse_python_install_packages_from_args(&strings(&[
+                "uv", "pip", "install", "-r", file,
+            ]))
+            .expect_err(file);
+            assert!(err.contains("Failing closed"), "{err}");
+            assert!(err.contains("uv sync"), "{err}");
+        }
+        let err = parse_python_install_packages_from_args(&strings(&[
+            "pip",
+            "install",
+            "a",
+            "--requirement=/no/such/requirements.txt",
+        ]))
+        .expect_err("a missing file must not be skipped");
+        assert!(err.contains("Cannot read the requirements file"), "{err}");
+    }
+
+    #[test]
+    fn other_python_commands_have_no_install_packages() {
+        for args in [
+            &["uv", "sync"][..],
+            &["uv", "lock"],
+            &["uv", "pip", "sync", "req.txt"],
+            &["poetry", "install"],
+            &["poetry", "update", "requests"],
+            &["npm", "install", "a"],
+        ] {
+            assert!(names(args).is_empty(), "{args:?}");
+        }
+    }
+
     #[test]
     fn parses_pip_install_multi_packages_and_requirements_file() {
         let mut req_file = tempfile::NamedTempFile::new().unwrap();
         let req_path = req_file.path().to_string_lossy().to_string();
-        std::io::Write::write_all(&mut req_file, b"requests==2.31.0\npytest\n").unwrap();
+        std::io::Write::write_all(&mut req_file, b"requests==2.31.0\npytest==9.0.3\n").unwrap();
         let a = vec![
             "pip3".to_string(),
             "install".to_string(),
@@ -1053,12 +2367,12 @@ version = "2.31.0"
             req_path,
             "flask==3.0.0".to_string(),
         ];
-        let parsed = parse_pip_install_packages_from_args(&a);
+        let parsed = parse_python_install_packages_from_args(&a).expect("should parse");
         assert_eq!(
             parsed,
             vec![
                 ("requests".to_string(), Some("2.31.0".to_string())),
-                ("pytest".to_string(), None),
+                ("pytest".to_string(), Some("9.0.3".to_string())),
                 ("flask".to_string(), Some("3.0.0".to_string())),
             ]
         );
@@ -1085,7 +2399,7 @@ version = "2.31.0"
             "lodash@4.17.21".to_string(),
             "express".to_string(),
         ];
-        let parsed = parse_npm_install_packages_from_args(&a);
+        let parsed = parse_npm_install_packages_from_args(&a).expect("should parse");
         assert_eq!(
             parsed,
             vec![
@@ -1103,7 +2417,7 @@ version = "2.31.0"
             "lodash@4.17.21".to_string(),
             "express".to_string(),
         ];
-        let parsed = parse_npm_install_packages_from_args(&a);
+        let parsed = parse_npm_install_packages_from_args(&a).expect("should parse");
         assert_eq!(
             parsed,
             vec![
@@ -1116,7 +2430,11 @@ version = "2.31.0"
     #[test]
     fn npm_add_is_not_treated_as_supported_command() {
         let a = vec!["npm".to_string(), "add".to_string(), "lodash".to_string()];
-        assert!(parse_npm_install_packages_from_args(&a).is_empty());
+        assert!(
+            parse_npm_install_packages_from_args(&a)
+                .expect("should parse")
+                .is_empty()
+        );
         assert!(!should_enforce_package_detection("npm", &a));
     }
 
@@ -1130,7 +2448,11 @@ version = "2.31.0"
             "install".to_string(),
             "file:../local-pkg".to_string(),
         ];
-        assert!(parse_npm_install_packages_from_args(&a).is_empty());
+        assert!(
+            parse_npm_install_packages_from_args(&a)
+                .expect("should parse")
+                .is_empty()
+        );
         assert!(has_only_non_registry_npm_specs(&a));
         assert!(!should_enforce_package_detection("npm", &a));
 
@@ -1140,7 +2462,11 @@ version = "2.31.0"
             "--save-dev".to_string(),
             "https://registry.example.com/tool.tgz".to_string(),
         ];
-        assert!(parse_npm_install_packages_from_args(&b).is_empty());
+        assert!(
+            parse_npm_install_packages_from_args(&b)
+                .expect("should parse")
+                .is_empty()
+        );
         assert!(has_only_non_registry_npm_specs(&b));
         assert!(!should_enforce_package_detection("npm", &b));
 
@@ -1149,7 +2475,11 @@ version = "2.31.0"
             "add".to_string(),
             "./local-pkg.tgz".to_string(),
         ];
-        assert!(parse_npm_install_packages_from_args(&c).is_empty());
+        assert!(
+            parse_npm_install_packages_from_args(&c)
+                .expect("should parse")
+                .is_empty()
+        );
         assert!(has_only_non_registry_npm_specs(&c));
         assert!(!should_enforce_package_detection("pnpm", &c));
 
@@ -1161,7 +2491,7 @@ version = "2.31.0"
             "file:../local-pkg".to_string(),
         ];
         assert_eq!(
-            parse_npm_install_packages_from_args(&mixed),
+            parse_npm_install_packages_from_args(&mixed).expect("should parse"),
             vec![("lodash".to_string(), None)]
         );
         assert!(!has_only_non_registry_npm_specs(&mixed));
@@ -1181,7 +2511,7 @@ version = "2.31.0"
             "workspace:*".to_string(),
             "lodash".to_string(),
         ];
-        let parsed = parse_npm_install_packages_from_args(&a);
+        let parsed = parse_npm_install_packages_from_args(&a).expect("should parse");
         assert_eq!(parsed, vec![("lodash".to_string(), None)]);
     }
 
@@ -1193,7 +2523,7 @@ version = "2.31.0"
             "lodash".to_string(),
             "typescript".to_string(),
         ];
-        let parsed = parse_npm_install_packages_from_args(&a);
+        let parsed = parse_npm_install_packages_from_args(&a).expect("should parse");
         assert_eq!(
             parsed,
             vec![
@@ -1204,28 +2534,145 @@ version = "2.31.0"
     }
 
     #[test]
-    fn parses_npm_packages_from_package_json_content() {
-        let j = r#"{"name":"demo","dependencies":{"lodash":"^4.17.21","axios":"1.8.2"},"devDependencies":{"vitest":"~1.6.0"}}"#;
-        let mut parsed = parse_npm_packages_from_package_json_content(j);
-        parsed.sort_by(|a, b| a.0.cmp(&b.0));
+    fn npm_cli_specs_must_name_one_exact_registry_version() {
+        let ok = |spec: &str| parse_exact_npm_spec(spec).expect(spec);
+        assert_eq!(ok("lodash"), ("lodash".to_string(), None));
+        assert_eq!(ok("lodash@latest"), ("lodash".to_string(), None));
         assert_eq!(
-            parsed,
-            vec![
-                ("axios".to_string(), Some("1.8.2".to_string())),
-                ("lodash".to_string(), None),
-                ("vitest".to_string(), None),
+            ok("lodash@4.17.21"),
+            ("lodash".to_string(), Some("4.17.21".to_string()))
+        );
+        assert_eq!(ok("@types/node"), ("@types/node".to_string(), None));
+        assert_eq!(
+            ok("@types/node@20.1.0-rc.1"),
+            ("@types/node".to_string(), Some("20.1.0-rc.1".to_string()))
+        );
+        for bad in [
+            "lodash@^4.17.0",
+            "lodash@~4",
+            "lodash@>=4 <5",
+            "lodash@4.x",
+            "lodash@*",
+            "lodash@4",
+            "lodash@next",
+            "lodash@npm:other@1.0.0",
+            "@types/node@^20",
+            "Bad Name",
+            "lo$dash",
+        ] {
+            let err = parse_exact_npm_spec(bad).expect_err(bad);
+            assert!(err.contains("exact versions"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn npm_install_commands_reject_ranges_on_the_command_line() {
+        for args in [
+            &["npm", "install", "lodash@^3.0.0"][..],
+            &["npm", "install", "express", "lodash@~4"],
+            &["pnpm", "add", "react@next"],
+            &["npm", "update", "lodash@^3"],
+        ] {
+            let err = parse_npm_install_packages_from_args(&strings(args))
+                .expect_err(&format!("{args:?}"));
+            assert!(err.contains("Failing closed"), "{args:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn update_without_packages_has_nothing_to_scan_in_advance() {
+        for (args, hint) in [
+            (&["npm", "update"][..], "npm update --package-lock-only"),
+            (&["pnpm", "update"], "pnpm update --lockfile-only"),
+        ] {
+            let err = parse_npm_install_packages_from_args(&strings(args)).expect_err("update");
+            assert!(err.contains(hint), "{err}");
+        }
+    }
+
+    #[test]
+    fn npm_ci_is_a_package_command_and_lockfile_only_flags_are_detected() {
+        assert!(is_npm_family_package_command("npm", Some("ci")));
+        assert!(!is_npm_family_package_command("pnpm", Some("ci")));
+        assert!(should_enforce_package_detection(
+            "npm",
+            &strings(&["npm", "ci"])
+        ));
+        assert!(is_lockfile_only_command(&strings(&[
+            "npm",
+            "install",
+            "--package-lock-only"
+        ])));
+        assert!(is_lockfile_only_command(&strings(&[
+            "pnpm",
+            "install",
+            "--lockfile-only"
+        ])));
+        assert!(!is_lockfile_only_command(&strings(&["npm", "install"])));
+    }
+
+    fn pkgs(list: Vec<(String, Option<String>)>) -> Vec<String> {
+        list.into_iter()
+            .map(|(n, v)| format!("{n}@{}", v.unwrap_or_default()))
+            .collect()
+    }
+
+    #[test]
+    fn package_lock_v3_lists_every_installed_registry_version() {
+        let lock = r#"{"name":"app","lockfileVersion":3,"packages":{
+            "":{"name":"app","dependencies":{"lodash":"^4"}},
+            "node_modules/lodash":{"version":"4.17.21","resolved":"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"},
+            "node_modules/@types/node":{"version":"20.1.0","resolved":"https://registry.npmjs.org/@types/node/-/node-20.1.0.tgz","dev":true},
+            "node_modules/a/node_modules/lodash":{"version":"3.10.1","resolved":"https://registry.npmjs.org/lodash/-/lodash-3.10.1.tgz"},
+            "node_modules/mine":{"resolved":"packages/mine","link":true},
+            "packages/mine":{"name":"mine","version":"1.0.0"},
+            "node_modules/gitdep":{"version":"1.0.0","resolved":"git+ssh://git@github.com/x/y.git#abc"},
+            "node_modules/filedep":{"version":"1.0.0","resolved":"file:../filedep"},
+            "node_modules/bundled":{"version":"1.0.0","inBundle":true},
+            "node_modules/alias":{"name":"real-name","version":"2.0.0","resolved":"https://registry.npmjs.org/real-name/-/real-name-2.0.0.tgz"}}}"#;
+        assert_eq!(
+            pkgs(parse_npm_lock_packages_from_content(lock)),
+            [
+                "@types/node@20.1.0",
+                "lodash@3.10.1",
+                "lodash@4.17.21",
+                "real-name@2.0.0"
             ]
         );
     }
 
     #[test]
-    fn skips_local_source_npm_dependencies_from_package_json_content() {
-        let j = r#"{"name":"demo","dependencies":{"local-file":"file:../local-file","local-workspace":"workspace:*","git-dep":"git+https://github.com/example/repo.git","url-dep":"https://example.com/pkg.tgz","axios":"1.8.2"}}"#;
-        let parsed = parse_npm_packages_from_package_json_content(j);
+    fn package_lock_v1_walks_nested_dependencies() {
+        let lock = r#"{"lockfileVersion":1,"dependencies":{
+            "lodash":{"version":"4.17.21","resolved":"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"},
+            "a":{"version":"1.0.0","resolved":"https://registry.npmjs.org/a/-/a-1.0.0.tgz","dependencies":{
+                "b":{"version":"2.0.0","resolved":"https://registry.npmjs.org/b/-/b-2.0.0.tgz"}}},
+            "gitdep":{"version":"github:x/y#abc"}}}"#;
         assert_eq!(
-            parsed,
-            vec![("axios".to_string(), Some("1.8.2".to_string()))]
+            pkgs(parse_npm_lock_packages_from_content(lock)),
+            ["a@1.0.0", "b@2.0.0", "lodash@4.17.21"]
         );
+        assert!(parse_npm_lock_packages_from_content("not json").is_empty());
+    }
+
+    #[test]
+    fn pnpm_lock_keys_are_read_in_v5_v6_and_v9_forms() {
+        let v9 = "lockfileVersion: '9.0'\npackages:\n  lodash@4.17.21:\n    resolution: {integrity: sha512-a}\n  '@types/node@20.1.0':\n    resolution: {integrity: sha512-b}\n  gitdep@https://codeload.github.com/x/y/tar.gz/abc:\n    resolution: {tarball: https://codeload.github.com/x/y/tar.gz/abc}\n    version: 1.0.0\nsnapshots: {}\n";
+        assert_eq!(
+            pkgs(parse_pnpm_lock_packages_from_content(v9)),
+            ["@types/node@20.1.0", "lodash@4.17.21"]
+        );
+        let v6 = "lockfileVersion: '6.0'\npackages:\n  /lodash@4.17.21:\n    resolution: {integrity: sha512-a}\n  /@types/react@18.2.0(react@18.2.0):\n    resolution: {integrity: sha512-b}\n";
+        assert_eq!(
+            pkgs(parse_pnpm_lock_packages_from_content(v6)),
+            ["@types/react@18.2.0", "lodash@4.17.21"]
+        );
+        let v5 = "lockfileVersion: 5.4\npackages:\n  /lodash/4.17.21:\n    resolution: {integrity: sha512-a}\n  /@types/node/20.1.0:\n    resolution: {integrity: sha512-b}\n  /foo/1.0.0_react@17.0.0:\n    resolution: {integrity: sha512-c}\n  github.com/x/y/abc:\n    resolution: {tarball: https://codeload.github.com/x/y/tar.gz/abc}\n";
+        assert_eq!(
+            pkgs(parse_pnpm_lock_packages_from_content(v5)),
+            ["@types/node@20.1.0", "foo@1.0.0", "lodash@4.17.21"]
+        );
+        assert!(parse_pnpm_lock_packages_from_content("::: not yaml :::").is_empty());
     }
 
     #[test]
@@ -1343,20 +2790,6 @@ version = "2.31.0"
         let _ = version; // whatever it returns, no crash
     }
 
-    // --- gap #8: normalize_npm_version_spec wildcard ---
-
-    #[test]
-    fn normalize_npm_version_spec_wildcard_is_not_pinnable() {
-        assert_eq!(normalize_npm_version_spec("*"), None);
-        assert_eq!(normalize_npm_version_spec(""), None);
-        assert_eq!(normalize_npm_version_spec("^1.0.0"), None);
-        assert_eq!(normalize_npm_version_spec("~1.0.0"), None);
-        assert_eq!(
-            normalize_npm_version_spec("1.2.3"),
-            Some("1.2.3".to_string())
-        );
-    }
-
     // --- gap #9: parse_npm_install_packages_from_args link: spec not filtered ---
 
     #[test]
@@ -1367,7 +2800,7 @@ version = "2.31.0"
             "link:../local-pkg".to_string(),
             "lodash".to_string(),
         ];
-        let parsed = parse_npm_install_packages_from_args(&a);
+        let parsed = parse_npm_install_packages_from_args(&a).expect("should parse");
         // link: is a non-registry spec; only lodash (a real package) should be scanned.
         assert_eq!(parsed, vec![("lodash".to_string(), None)]);
     }

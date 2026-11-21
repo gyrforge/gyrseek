@@ -1116,16 +1116,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 413 — Medium | `src/sandbox.rs` | ⚠️ Open
-
-**Summary:** Probes have no wall-clock limit. The Docker backend runs each probe session as `docker run --rm`, and the container (with every process in it) is removed when its main process exits, so a payload cannot outlive the probe. But nothing bounds how long the probe may take: `src/sandbox.rs` contains no timeout or kill path for Docker or host probes.
-
-**Impact:** a package whose install hangs or loops stalls the scan indefinitely (denial of service), and any CPU or network abuse it started continues for as long as it hangs. Memory is capped by `GYRSEEK_MEM_LIMIT`, CPU time is not.
-
-**Fix direction:** a configurable probe timeout that kills the container and fails closed (treat as a block, not a clear scan). Choose a default long enough for heavy native builds.
-
----
-
 ### Finding 415 — Low | `Cargo.toml` | ⚠️ Open
 
 **Summary:** `cargo audit` reports `chrono` 0.4.45 as unmaintained (RUSTSEC-2026-0543, dated 2026-09-14). It is a direct dependency (`features = ["clock"]`) used for release-age and burst-window calculations.
@@ -1277,3 +1267,86 @@ if next.starts_with('-') {
 **Fix direction:** fail closed. When the matrix trace is missing or blank, report a probe error instead of mixing attempts, consistent with the rule that an empty trace is a hard error. The alternative is a single-probe artifact inventory with its own output channel, which is more work. Keep reading the matrix inventory whenever the matrix trace is used.
 
 ---
+
+### Finding 420 — Medium | `src/scanning.rs` | ⚠️ Open
+
+**Summary:** `extract_process_exec_signatures` builds each signature from the full argv (`exe|arg1|arg2|…`). When a package is built from source, the installer runs helper processes whose arguments contain freshly generated temp directories, for example `python -c "… backend.build_wheel(b\"/tmp/.tmpvmamp8/builds-v0/.tmpTcdcXQ\" …"` from `uv`'s build isolation. The directory names are random, so the same build in a baseline produces a different signature and the candidate's signatures always look new.
+
+**Impact:** a false `process_exec_anomaly` (reported as the Shai-Hulud class) for any package that is built from source in the sandbox. Seen with `pandas==2.2.2` on the Python 3.13 scanner image, which has no wheel for it. Operators are pushed to add `process_exec_allowlist` entries, which cannot match random paths anyway, or to disable checks.
+
+**Note:** since FIXED #421 a source build that fails in the sandbox (the usual case today, see #425) is blocked earlier as `install_failed`; this finding still applies to builds that succeed, for example in a custom scanner image with a toolchain.
+
+**Fix direction:** normalise generated temp paths in signatures before diffing (for example collapse `/tmp/.tmp*` components) for both the candidate and the baselines. Do not "fix" it by forcing wheels only (`--only-binary`): source builds run package code, which is exactly the behaviour the probe exists to observe.
+
+---
+
+### Finding 424 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** In host mode the probe is `timeout <secs> strace …`. GNU `timeout` moves itself into a new process group so it can signal the whole tree, which means a terminal Ctrl-C is delivered to gyrseek but not to that group.
+
+**Impact:** after Ctrl-C the traced install can keep running on the host until it finishes or the limit fires. Host mode has no isolation, so a package under test keeps executing. Not tested: macOS has no `strace`, and this was reasoned from how `timeout` works, not observed.
+
+**Fix direction:** confirm on Linux first. If it reproduces, forward SIGINT/SIGTERM from gyrseek to the `timeout` process (it relays them to its child). Do not use `timeout --foreground`: it signals only the direct child, so package-manager subprocesses would survive a real timeout.
+
+---
+
+### Finding 425 — Medium | `src/sandbox.rs`, `docs/DOCKER_SECURITY.md` | ⚠️ Open
+
+**Summary:** `build_docker_run_args` mounts `/tmp` as `rw,noexec,nosuid,size=128m` and `/work` as `noexec` with the memory limit as its size. Package managers build source distributions in isolated environments under `/tmp`: `uv` creates a build venv there and executes build tools from it, and builds such as numpy need far more than 128 MB. Observed with `pandas`: 2.2.2 failed with `PermissionError: [Errno 13] Permission denied: 'meson'`, and 2.2.1/2.2.0 failed with `No space left on device` while unpacking build requirements to `/tmp`. The image also has no C compiler, and the Python 3.13 image has no wheel for these pandas versions.
+
+**Impact:** with FIXED #421, any package that has to be built from source now blocks with `install_failed`, and the operator cannot fix it by correcting their own install, because it installs fine locally. The ways out are a custom scanner image (`GYRSEEK_PY_SCANNER_IMAGE` / `GYRSEEK_NPM_SCANNER_IMAGE`) or `internal_package_exemptions`, which skips scanning entirely. Before #421 these failed installs were diffed anyway, so source builds were effectively never observed by the sandbox either.
+
+**Fix direction:** decide deliberately what the sandbox should allow for builds. Options: a larger `/tmp` (and `/work`) sized from `GYRSEEK_MEM_LIMIT`; allowing exec on a dedicated build directory while keeping it `nosuid` and unwritable to the payload's later stages; shipping a toolchain in the prebuilt scanner image; or choosing the scanner Python to match the package's wheels. Each widens what a malicious build script can do, so it needs the same review as the other hardening flags. Selecting the sandbox Python from the project (`.python-version`, `python_version`) now removes one cause, since a Python with wheels for the pinned versions avoids the source build entirely (pandas 2.2.x scans clean on 3.12), but it does not help packages that never publish wheels.
+
+---
+
+### Finding 430 — Medium | `src/parsing.rs` | ⚠️ Open
+
+**Summary:** `parse_npm_install_packages_from_args` treats every argument that does not start with `-` as a package spec. Flags that take a separate value (`-w`/`--workspace`, `--prefix`, `--registry`, `--tag`, `--omit`, `--include`, `--filter` for pnpm and similar) therefore turn their value into a package name. The Python parsers avoid this with per-command lists of value flags (`PIP_VALUE_FLAGS` and friends); the npm/pnpm parser has none.
+
+**Impact:** `npm install -w mypkg lodash` looks up `mypkg` on the registry. If an unrelated package of that name exists it is scanned and cleared (the same shape as the old `uv pip install -r ./pyproject.toml` behaviour, FIXED #426), and if not, the scan fails closed with a misleading registry error. The real packages after the flag are still scanned, so this is mostly a false block or a pointless scan rather than a bypass.
+
+**Fix direction:** add per-command lists of npm and pnpm flags that always take a value, applied the same way as the Python lists (never list a boolean flag, because that would drop the next package).
+
+---
+
+### Finding 431 — High | `src/parsing.rs` | ⚠️ Open
+
+**Summary:** For a no-argument `npm install`/`npm i`/`pnpm install`, gyrseek scans the exact versions in the lockfile, but the forwarded command is not frozen. npm re-resolves any direct dependency whose locked version no longer satisfies `package.json`, and may rewrite the lockfile. Reproduced with npm 11.20: with `package-lock.json` pinning `is-odd 2.0.0` and `package.json` requiring `^3.0.1`, `npm install --dry-run` reports `add is-odd 3.0.1`, a version gyrseek never scanned. `npm ci` fails instead of re-resolving, so it is not affected. Found in the PR #65 review (CodeRabbit).
+
+**Impact:** a lockfile edited, or left stale, so that it disagrees with the manifest makes the scan cover versions other than the installed ones. An attacker who can change `package.json` in a pull request can pick the installed version while the lockfile keeps showing a clean one.
+
+**Fix direction:** check each direct dependency's locked version against its `package.json` range (the `semver` crate is available) and fail closed on any mismatch with a message pointing at `npm install --package-lock-only` first; or forward a frozen install (`pnpm install --frozen-lockfile`, `npm ci`) so a mismatch is an error instead of a silent re-resolve.
+
+---
+
+### Finding 432 — High | `src/parsing.rs` | ⚠️ Open
+
+**Summary:** `parse_npm_lock_packages_from_content` treats an entry as a registry download when `resolved` is empty or starts with `http`, then returns only `(name, version)`. The sandbox scans the public registry's package of that name and version, but `npm ci` installs the lockfile's `resolved` URL, checked against the lockfile's own `integrity`. A pull request that changes one entry to `https://attacker.example/x.tgz` (with a matching integrity hash) installs attacker code that was never scanned. For `pnpm-lock.yaml`, entries whose `resolution` has `tarball`, `type`, `repo` or `commit` are skipped silently, so those sources install unscanned. Found in the PR #65 review (CodeRabbit).
+
+**Impact:** this is the classic lockfile-injection attack, and the new lockfile scanning makes a clean report look authoritative for it.
+
+**Fix direction:** accept only the registry host(s) that were scanned (`registry.npmjs.org`), and fail closed on any entry resolved from elsewhere or from a git/tarball source, naming the entries. `internal_package_exemptions` is the natural escape for private registries, applied before the failure.
+
+---
+
+### Finding 433 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** In host mode the probe is `timeout -k 5 N strace … ` with stderr piped back to `Command::output()`. GNU `timeout` returns when `strace` exits, so its SIGKILL timer does not reach descendants that `strace` detached on SIGTERM, and a descendant that keeps the stderr pipe open keeps `output()` waiting for end-of-file indefinitely. Docker mode is not affected: the container is the process boundary and the cleanup loop covers survivors. Not reproduced here because macOS has no `strace`.
+
+**Impact:** the probe time limit may not fire in host mode against a package that ignores SIGTERM, which is the case the limit exists for. Host mode already has no isolation, so this is a denial of service, not an escape.
+
+**Fix direction:** write the trace with `-o` to a file and send the child's stderr to a file, not a pipe, so no descendant can hold the read end; run the probe in its own process group and SIGKILL the whole group after the grace period. Test with a fixture that ignores SIGTERM and holds the pipe.
+
+---
+
+### Finding 434 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The strace trace (`/out/gyrseek_trace_N.log`), strace's stderr, which also carries the install's own stderr (`/out/gyrseek_err_N.log`), and the artifact inventory all live on the host temp directory bind-mounted into the container. Their size depends on what the package under test does during the probe window (up to `probe_timeout_seconds` per probe). `trace_install_docker_matrix` reads the trace with `read_to_string`, so a package that makes millions of syscalls inflates both host disk and gyrseek's memory. Only the failed-install tail is bounded (64 KiB, FIXED #438).
+
+**Impact:** a denial of service against the scanner host, as a failed or slow scan. It does not hide behaviour, because a trace that cannot be read fails closed.
+
+**Fix direction:** cap the files (`ulimit -f` around the strace command needs care so strace's own trace write is not what hits the limit; a size-limited tmpfs for `/out` is simpler), read with a byte limit, and fail closed with a clear message when a trace exceeds it.
+
+---
+

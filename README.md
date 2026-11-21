@@ -60,7 +60,7 @@ Check these before your first scan. If Docker is missing or not running, `gyrsee
 | **The package manager you wrap** | The forwarded install | `uv`, `pip`/`pip3`, `poetry`, `npm`, or `pnpm`, installed on the machine where you run `gyrseek`. The scan itself runs inside the container, but a clear scan forwards your command to the real tool. |
 | **Network access to the package registries** | Registry lookups and the probes | PyPI and/or npm (or your configured registries). |
 | **Rust toolchain** (`cargo`, `rustc`) and [`just`](https://github.com/casey/just) | Building from source only | Not needed if you already have a built `gyrseek` binary. |
-| `strace` on your `PATH` | Host mode only | Only for `--no-sandbox` (no isolation, detection only), and only on Linux or WSL2. Not needed for the default Docker mode. |
+| `strace` and GNU `timeout` on your `PATH` | Host mode only | Only for `--no-sandbox` (no isolation, detection only), and only on Linux or WSL2. `timeout` comes with coreutils and enforces `probe_timeout_seconds`. Not needed for the default Docker mode. |
 
 Quick check:
 
@@ -106,6 +106,7 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just test-docker` | Runs all Docker end-to-end tests (`test-npm`, `test-pnpm`, `test-pip`, `test-poetry`, `test-uv`). |
 | `just docker-build-python` | Builds the Python scanner image from `docker/Dockerfile.python` as `gyrseek-python-scanner:latest`. |
 | `just docker-build-npm` | Builds the npm/pnpm scanner image from `docker/Dockerfile.npm` as `gyrseek-npm-scanner:latest`. |
+| `just image-pins` | Compares the digest-pinned Python and Node sandbox base images built into `gyrseek` (`src/runtime_image.rs`) with the registry and prints `ok` or `DRIFT` for each. Needs Docker; run it before a release (see `AGENTS.md` for the refresh steps). |
 
 **Typical workflow:**
 
@@ -442,6 +443,9 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 | `internal_package_exemptions` | none          | Skip specific packages **entirely** — no registry history fetch, no sandbox install, no diff. For first-party / internal packages served from a private index (e.g. Nexus) that `gyrseek`'s public-registry lookups can't resolve, so scanning only yields noise. The package is forwarded unscanned at its requested version.            |
 | `minimum_release_age_package` | off           | Minimum release age in **days**. When set, runs before burst/anomaly checks and fails closed if the current release is younger.                                                                                                                                |
 | `release_burst_threshold`     | off           | Fails closed if a package published at least this many versions within the burst window.                                                                                                                                                                       |
+| `python_version`              | auto          | Python minor version for the Python sandbox (`"3.11"`; supported: 3.10–3.14). Wins over project files. An unsupported value is a config error. |
+| `node_version`                | auto          | Node major version for the npm/pnpm sandbox (`"22"`; supported: 20, 22, 24, 26). Wins over project files. An unsupported value is a config error. |
+| `probe_timeout_seconds`       | `300`         | Wall-clock limit (seconds) for each install probe. A probe that exceeds it blocks that package (fail closed); the rest of the batch is still scanned. `0` falls back to `300`. Raise it for slow native builds. |
 | `release_burst_window_hours`  | `24`          | Lookback window (hours) for the burst checker.                                                                                                                                                                                                                 |
 | `process_exec_allowlist`      | empty         | Process-execution signatures (`bun\|run\|build`) or bare executables (`bun`) that are allowed **per package** even when newly introduced. All executables are monitored by default; only signatures in this list escape the fail-closed diff. Sandbox harness commands are always excluded. |
 
@@ -494,6 +498,9 @@ internal_package_exemptions:
 minimum_release_age_package: 3
 release_burst_threshold: 3
 release_burst_window_hours: 24
+probe_timeout_seconds: 300
+python_version: "3.12"        # optional; otherwise .python-version / pyproject.toml, then 3.13
+node_version: "22"            # optional; otherwise .nvmrc / .node-version / engines.node, then 26
 ```
 
 ### Config loading behavior
@@ -532,8 +539,8 @@ release_burst_window_hours: 24
 
 | Variable                                                       | Default                 | Purpose                                      |
 | -------------------------------------------------------------- | ----------------------- | -------------------------------------------- |
-| `GYRSEEK_NPM_SCANNER_IMAGE`                                    | `node:26.3-bookworm-slim@sha256:3fe8...` | npm/pnpm scanner image.                      |
-| `GYRSEEK_PY_SCANNER_IMAGE`                                     | `python:3.13-slim-bookworm@sha256:05b9...` | Python scanner image (pip/uv/poetry).     |
+| `GYRSEEK_NPM_SCANNER_IMAGE`                                    | `node:26.3-bookworm-slim@sha256:9898...` | npm/pnpm scanner image.                      |
+| `GYRSEEK_PY_SCANNER_IMAGE`                                     | `python:3.13-slim-bookworm@sha256:a5a7...` | Python scanner image (pip/uv/poetry).     |
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES`                              | `false`                 | Enable prebuilt fast path for both managers. |
 | `GYRSEEK_NPM_SCANNER_PREBUILT` / `GYRSEEK_PY_SCANNER_PREBUILT` | `false`                 | Per-manager prebuilt override.               |
 | `GYRSEEK_DOCKER_APPARMOR_PROFILE`                               | `false`                 | Boolean toggle (`true`/`false`) for embedded AppArmor profile use in Docker sandbox runs. Loaded via `apparmor_parser` at runtime. On macOS (where `apparmor_parser` is unavailable) nothing is printed and no AppArmor profile applies. Requires `apparmor-utils` + prebuilt scanner image on native Linux hosts (runtime apt setup conflicts with profile). Defaults to `false` because the prerequisites are not always met. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection. |
@@ -541,6 +548,25 @@ release_burst_window_hours: 24
 | `GYRSEEK_MAX_PROCESSES`                                        | `256`                   | Container process limit for probes. `GYRSEEK_PIDS_LIMIT` is accepted as a fallback. |
 
 In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency.
+
+#### Python and Node version for the sandbox
+
+The sandbox runs on the Python or Node your project uses, so the wheels, dependency markers and `engines` checks it sees match your real install. gyrseek picks the version in this order and prints the choice (for example `Sandbox Python 3.11 (from .../.python-version)`):
+
+1. `GYRSEEK_PY_SCANNER_IMAGE` / `GYRSEEK_NPM_SCANNER_IMAGE`, if set (your own image; nothing else is consulted).
+2. `python_version` / `node_version` in the gyrseek config.
+3. The nearest project file, searched from the current directory upwards, first match wins:
+
+   | Runtime | Exact version files (read first, in one directory) | Version ranges (read if the directory has no exact file) |
+   | --- | --- | --- |
+   | Python (pip, uv, poetry) | `.python-version` | `[project] requires-python`, else Poetry's `[tool.poetry.dependencies] python` in `pyproject.toml` |
+   | Node (npm, pnpm) | `.nvmrc`, `.node-version` | `engines.node` in `package.json` |
+
+4. The default: Python 3.13, Node 26.
+
+A file naming one version (`3.11`, `3.11.4`, `cpython-3.11.4`, `v22.1.0`, `22`) selects that Python minor or Node major. A range (`>=3.9,<3.13`, Poetry's `^3.9` / `~3.10` / `3.11.*` / `^3.9 || ^3.10`, npm's `>=18 <23` / `^20.9.0 || ^22` / `20.x`) selects the **default if it fits, otherwise the closest supported version below it, otherwise the closest above**. For example `>=3.9` gives 3.13, `>=3.9,<3.13` gives 3.12 and `<3.11` gives 3.10. Newer Pythons have fewer wheels for older releases, so staying near the default is the safer choice.
+
+Supported versions: **Python 3.10, 3.11, 3.12, 3.13, 3.14** and **Node 20, 22, 24, 26**. Each is a digest-pinned image built into gyrseek, so a project file can only choose from this list, never name an arbitrary image. Anything unusable (`pypy3.10`, `system`, `lts/*`, `3.8`, a range that allows none of the supported versions, a hyphen range such as `16 - 18`, or a range gyrseek cannot parse) is ignored with a warning and the default is used. An unsupported value in the config file is an error instead. Only the runtime being scanned is read: an npm run ignores `.python-version` and the reverse. To build a prebuilt image for a version, pass `--build-arg PYTHON_BASE=<image>` to `docker/Dockerfile.python` or `--build-arg NODE_BASE=<image>` to `docker/Dockerfile.npm`.
 
 ## Prebuilt Scanner Images
 
@@ -630,7 +656,7 @@ Details worth knowing once you're past the basics.
 - `uv lock` (bare) and `uv lock --upgrade` scan all packages in `uv.lock`; both fail closed if `uv.lock` is missing or empty. `uv lock -P/--upgrade-package` scans the explicitly targeted packages. When `-P` is followed by a flag (e.g. `-P --dry-run`), the flag is not consumed as a package name and the next real `-P pkg` argument is not silently skipped.
 - `pip install` / `pip3 install` scan all parseable entries, including `-r/--requirements` files.
 - `poetry install`, `poetry update`, and `poetry lock` scan all packages in `poetry.lock`, excluding local directory/path/editable source blocks. `poetry lock` fails closed if `poetry.lock` is missing or empty.
-- `npm install`, `npm i`, `npm update`, `pnpm add`, `pnpm install`, `pnpm i`, and `pnpm update` scan explicit targets; with no targets they scan `package.json` dependencies. Both paths exclude non-registry specs (`file:`, `workspace:`, `git+`, URL, `link:`) — previously `link:` was filtered in the `package.json` fallback but passed through as a package name on the CLI arg path.
+- **npm and pnpm scan exact versions.** With packages named (`npm install lodash@4.17.21`, `pnpm add react`) each must be an exact version, a bare name (the latest version is scanned and pinned) or `@latest`; a range (`@^4`), dist-tag (`@next`) or alias is refused with exit 1. With nothing named, `npm install`, `npm i`, `npm ci`, `pnpm install` and `pnpm i` scan every registry package in the lockfile (`package-lock.json` or `npm-shrinkwrap.json`, `pnpm-lock.yaml`), because that is what is installed. `package.json` is not used: its dependencies are ranges. With no lockfile they fail closed; create one without installing anything via `npm install --package-lock-only` or `pnpm install --lockfile-only`, which `gyrseek` forwards without a scan. `npm update` / `pnpm update` with no packages choose new versions when they run, so they fail closed too: run them with `--package-lock-only` / `--lockfile-only`, then install from the new lockfile. Non-registry specs (`file:`, `workspace:`, `git+`, URL, `link:`) are excluded.
 - `uv venv` and other unrecognized `uv` subcommands are forwarded verbatim (unscanned passthrough).
 
 **Fail-closed guarantees**
@@ -638,6 +664,11 @@ Details worth knowing once you're past the basics.
 - **Unrecognized manager:** any first argument other than `pip`, `pip3`, `uv`, `poetry`, `npm`, or `pnpm` is rejected with a non-zero exit and a clear error message listing the supported managers. Previously, unrecognized managers were silently forwarded unscanned.
 - For supported install/sync paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
 - If the host command itself cannot be launched after a clean scan, `gyrseek` also fails closed.
+- A probe that runs longer than `probe_timeout_seconds` (default 300) is stopped and **that package is blocked**; the rest of the batch is still scanned. Slow but legitimate source builds (for example numpy or pandas in an image with a compiler) can hit it: the message names the package and the setting, and the fix is to raise `probe_timeout_seconds` in `gyrseek.yaml`.
+- Inside a `-r` requirements file every line must be pinned (`name==1.2.3`): `gyrseek` cannot pin lines in a file, so a bare name there would be resolved again at install time. `npm install --package-lock-only false` is an ordinary install and is scanned; a real `--package-lock-only` / `--lockfile-only` command is forwarded with `--ignore-scripts` because npm still runs the project's `prepare` script in that mode.
+- Python install commands need **exact versions**: write `name==1.2.3`, or just `name` (`gyrseek` then scans the latest version and pins it). A version range (`name>=2`, `name~=1.4`, `name==1.*`) or a direct reference (`name @ https://…`) exits 1 with an explanation: `gyrseek` scans specific versions and pins the install to them, so it cannot vouch for what a range or URL would install. For a whole project use `uv sync`, `uv lock` or `poetry install`, which are scanned from the lockfile.
+- `pip`, `uv pip install`, `uv add` and `poetry add` scan **every** package named on the command line, including those in `-r` requirements files. `-r` includes inside a requirements file are followed. `-r pyproject.toml` (or any other non-requirements file) and an unreadable `-r` file, at any depth, fail closed: use `uv sync`/`uv lock`, or a requirements file with pinned versions.
+- If a package's **install fails inside the sandbox** (the candidate or any baseline version), `gyrseek` blocks it with `install_failed`. The message names the failed versions and exit codes and prints the package manager's own error. This is not a `gyrseek` error: fix the install (a dependency that does not resolve, a build that fails) and run `gyrseek` again. The sandbox is a locked-down Linux container, so a package that must be built from source can fail there even though it installs on your machine; point `GYRSEEK_PY_SCANNER_IMAGE` or `GYRSEEK_NPM_SCANNER_IMAGE` at an image that matches your project.
 - A sandbox probe that produces an **empty/whitespace trace** (e.g. `strace` could not attach) is a hard error: every package in that batch is blocked. Blank traces are never interpreted as clean.
 - **Post-install artifact findings** — binary executables, suspicious `.pth` files, unexpected runtimes, and large files — are diffed across versions. A finding newly present in the current version (absent from all baselines) fails closed (see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection)).
 - When a forwarded command exits non-zero, `gyrseek` **exits with the same code** rather than masking the failure as success.
@@ -710,11 +741,13 @@ Tests follow Rust convention — inline in their module under `#[cfg(test)]`, on
 - `src/lib.rs` — command routing, orchestration, config loading; inline tests for `GyrSeek::parse_package_details`
 - `src/parsing.rs` — command, lockfile, and requirements parsing; inline tests for all parsers and `rewrite_args_with_pinned_versions`
 - `src/scanning.rs` — registry lookup and behavior scanning engine; inline tests for version ordering, trace extraction, network/git-clone/process-execution detection, FCrDNS, and full scan pipeline
+- `src/runtime_image.rs` — Python/Node sandbox image selection from project version files and config; inline tests for ranges and precedence
 - `src/sandbox.rs` — sandbox backends and mode selection; inline tests for docker args, strace flags, and unprivileged-payload integrity
 - `tests/cli_burst_exit_tests.rs` — release burst and minimum release age CLI exit-code tests (spawn binary)
 - `tests/forward_fail_closed_tests.rs` — fail-closed forwarding and exit-status propagation tests (spawn binary)
 - `tests/lock_routing_tests.rs` — `poetry lock`, `uv lock`, `pnpm install` routing and `uv venv` passthrough tests (spawn binary)
-- `tests/pnpm_routing_tests.rs` — `pnpm add` / `pnpm install` package.json fallback routing tests (spawn binary)
+- `tests/pnpm_routing_tests.rs` — `pnpm add` / `pnpm install` routing tests (lockfile scan, non-registry specs; spawn binary)
+- `tests/npm_lockfile_tests.rs` — `npm install` / `i` / `ci` scan the lockfile, no-lockfile and `update` fail closed, ranges on the command line exit 1, lockfile-only commands are forwarded (spawn binary)
 - `tests/sandbox_startup_exit_tests.rs` — sandbox startup failures (Docker missing or daemon down, an unscanned passthrough never initializing the sandbox, the retired `GYRSEEK_SANDBOX` variable being ignored) exit 1 with a cause-specific message (spawn binary with a fake `docker`)
 - `tests/version_flag_tests.rs` — `--version`/`-V` print-and-exit and forwarded trailing `--version` passthrough tests (spawn binary)
 

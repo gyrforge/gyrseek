@@ -28,6 +28,8 @@ The traced install payload runs as an unprivileged in-container user (`strace -u
 
 The Docker backend batches multiple package-version probes (current + baselines for each package) into a single container session while preserving per-package, per-version trace attribution.
 
+Each probe writes its own trace, strace stderr and artifact inventory to `/out`. The probes share one container, so `/work` and `/tmp` are wiped after each probe's artifact scan; otherwise a later probe's scan would list files left by earlier ones. The wipe never touches `/out`. Leftover background processes are not killed: `strace -f` waits for the traced process tree, so they show up as a hang, which `probe_timeout_seconds` now turns into a blocked scan (FIXED #413), rather than as noise in a later probe.
+
 ### strace configuration
 
 - `-s 4096 -v -xx` — long argv strings (git clone URLs, etc.) and socket addresses are not truncated from the default 32 bytes.
@@ -236,7 +238,7 @@ Docker mode is not "weaker on macOS because it lacks seccomp and AppArmor". Secc
 | Container escape blast radius | The container shares the host kernel, so an escape lands on the host | An escape lands in Docker Desktop's VM first, which is an extra boundary | Documented, not measured |
 | `noexec` on `/work` and `/tmp` | Same | Works there, but a dropped binary can still run from `/home/gyrseek` or `/var/tmp` | Measured on macOS |
 | Network egress during the probe | Open | Open. Private-address reach is unmeasured on both (OPEN_FINDINGS #412) | Measured (open), not tested (private addresses) |
-| Probe time limit | None (OPEN_FINDINGS #413) | None (OPEN_FINDINGS #413) | Documented |
+| Probe time limit | 300s per probe, `probe_timeout_seconds` (FIXED #413) | 300s per probe, `probe_timeout_seconds` (FIXED #413) | Measured on macOS; not run on native Linux |
 | CI coverage | Yes (`ubuntu-latest` jobs) | None. GitHub-hosted macOS runners cannot run Docker. Tested by hand only | Documented |
 
 What this means in practice:
@@ -275,7 +277,9 @@ Digest pinning is recommended for reproducibility and supply-chain integrity.
 - Full `--read-only` rootfs is not enabled.
 - Capabilities are not fully dropped, and `SYS_PTRACE` is explicitly added.
 - Outbound network is enabled so package managers can reach registries during probes. A malicious package running during the probe can download and run a 2nd stage, or send data to any host, from inside the container; only decoy secrets are present, but the container acts from the host's IP. Whether the container can reach private addresses (LAN, `host.docker.internal`) is unmeasured (OPEN_FINDINGS #412).
-- Probes have no wall-clock timeout, so a hanging install stalls the scan and anything it started keeps running until the container exits (OPEN_FINDINGS #413). The container is `--rm`, so nothing survives the probe.
+- The Python (3.10–3.14) and Node (20, 22, 24, 26) sandbox images are chosen from built-in tables of digest-pinned images using the config or the project's version files; a project file cannot name an arbitrary image. See the README section "Python and Node version for the sandbox".
+- The probe container's `/tmp` is `noexec` and 128 MB, so packages that must be built from source cannot build in it and are blocked as `install_failed` (OPEN_FINDINGS #425).
+- Each probe is limited to `probe_timeout_seconds` (default 300) of wall-clock time; an expired probe blocks only that package (FIXED_FINDINGS #413, #422). The limit does not cover the setup phase (`apt-get` when the image is not prebuilt) or a hung Docker daemon. The container is `--rm`, so nothing survives the probe.
 - Trace integrity is not guaranteed on macOS Docker Desktop (OPEN_FINDINGS #411, see "Unprivileged payload integrity").
 - Behavioral detection observes what runs during the sandbox install. Payloads designed to fire outside the install window (e.g. import-time Python hooks) may not detonate during the scan.
 

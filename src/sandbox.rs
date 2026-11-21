@@ -1,3 +1,4 @@
+use crate::runtime_image::ImageChoice;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use tempfile::TempDir;
@@ -166,11 +167,32 @@ struct ScannerImageConfig {
     prebuilt: bool,
 }
 
-/// A single traced probe: `((package, version), raw_strace_output)`.
-pub(crate) type ProbeTrace = ((String, String), String);
+/// The package manager's install command exited non-zero inside the probe, so the
+/// trace covers a failed install rather than a normal one.
+#[derive(Clone, Debug)]
+pub(crate) struct InstallFailure {
+    pub exit_code: i32,
+    /// Tail of the install's own error output (empty when it could not be captured).
+    pub output: String,
+}
+
+/// A single traced probe.
+#[derive(Debug)]
+pub(crate) struct ProbeTrace {
+    pub probe: (String, String),
+    /// Raw strace output, with the post-install artifact inventory appended.
+    pub trace: String,
+    pub install_failure: Option<InstallFailure>,
+}
 
 pub(crate) trait SandboxRunner {
     fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String>;
+
+    /// What the probes run on, for error messages (for example `Python 3.11 (from
+    /// .python-version)`). `None` when there is nothing useful to say.
+    fn sandbox_description(&self, _manager: &str) -> Option<String> {
+        None
+    }
 
     fn trace_install_matrix(
         &self,
@@ -181,15 +203,36 @@ pub(crate) trait SandboxRunner {
             .iter()
             .map(|(package, version)| {
                 let trace = self.trace_install(manager, package, version)?;
-                Ok(((package.clone(), version.clone()), trace))
+                Ok(ProbeTrace {
+                    probe: (package.clone(), version.clone()),
+                    trace,
+                    install_failure: None,
+                })
             })
             .collect()
     }
 }
 
+/// Wall-clock limit for a single install probe unless `probe_timeout_seconds` overrides it.
+pub(crate) const DEFAULT_PROBE_TIMEOUT_SECS: usize = 300;
+
+/// `timeout` exits 124 when it had to stop the command it wrapped, or 137 when it
+/// then had to SIGKILL it (`-k`). A payload that ignores SIGTERM keeps strace
+/// alive, so without the follow-up SIGKILL the limit could hang forever.
+const TIMEOUT_EXIT_CODES: [i32; 2] = [124, 137];
+
+fn is_timeout_exit(code: Option<i32>) -> bool {
+    code.is_some_and(|c| TIMEOUT_EXIT_CODES.contains(&c))
+}
+
+/// Seconds `timeout` waits after SIGTERM before sending SIGKILL.
+const TIMEOUT_KILL_AFTER_SECS: u32 = 5;
+
 pub(crate) fn build_runner_from_env(
     danger_disable_seccomp: bool,
     no_sandbox: bool,
+    probe_timeout_secs: usize,
+    image: ImageChoice,
 ) -> Result<Box<dyn SandboxRunner>, String> {
     let runner: Result<Box<dyn SandboxRunner>, String> = if no_sandbox {
         eprintln!(
@@ -198,11 +241,13 @@ pub(crate) fn build_runner_from_env(
         if danger_disable_seccomp {
             eprintln!("⚠️ [gyrseek] Warning: --danger-disable-seccomp has no effect in host mode.");
         }
-        Ok(Box::new(HostRunner))
+        Ok(Box::new(HostRunner { probe_timeout_secs }))
     } else {
         docker_preflight("docker", std::env::consts::OS)?;
         Ok(Box::new(DockerRunner {
             danger_disable_seccomp,
+            probe_timeout_secs,
+            image,
         }))
     };
 
@@ -214,10 +259,60 @@ pub(crate) fn build_runner_from_env(
     runner
 }
 
-struct HostRunner;
+struct HostRunner {
+    probe_timeout_secs: usize,
+}
 
 impl SandboxRunner for HostRunner {
     fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String> {
+        match self.probe(manager, package, version)? {
+            Some((trace, _)) => Ok(trace),
+            None => Err(probe_timeout_message(
+                self.probe_timeout_secs,
+                package,
+                version,
+            )),
+        }
+    }
+
+    fn trace_install_matrix(
+        &self,
+        manager: &str,
+        probes: &[(String, String)],
+    ) -> Result<Vec<ProbeTrace>, String> {
+        // Like Docker mode, a probe that timed out is left out so the scanner blocks just
+        // that package (its trace is missing); the rest of the batch is still scanned.
+        let mut traces = Vec::new();
+        let mut timed_out = Vec::new();
+        for (package, version) in probes {
+            match self.probe(manager, package, version)? {
+                Some((trace, install_failure)) => traces.push(ProbeTrace {
+                    probe: (package.clone(), version.clone()),
+                    trace,
+                    install_failure,
+                }),
+                None => timed_out.push(probe_timeout_message(
+                    self.probe_timeout_secs,
+                    package,
+                    version,
+                )),
+            }
+        }
+        if traces.is_empty() && !timed_out.is_empty() {
+            return Err(timed_out.join("; "));
+        }
+        Ok(traces)
+    }
+}
+
+impl HostRunner {
+    /// `Ok(None)` means the probe exceeded `probe_timeout_seconds`.
+    fn probe(
+        &self,
+        manager: &str,
+        package: &str,
+        version: &str,
+    ) -> Result<Option<(String, Option<InstallFailure>)>, String> {
         let temp_dir =
             tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
         let target_path = temp_dir.path().to_string_lossy().to_string();
@@ -254,29 +349,69 @@ impl SandboxRunner for HostRunner {
             ]
         };
 
-        let output = Command::new("strace")
+        // GNU `timeout` signals its whole process group, so strace and the
+        // package manager it traces are stopped together.
+        let output = Command::new("timeout")
+            .arg("-k")
+            .arg(TIMEOUT_KILL_AFTER_SECS.to_string())
+            .arg(self.probe_timeout_secs.to_string())
+            .arg("strace")
             .args(&cmd_args)
             .stderr(Stdio::piped())
             .stdout(Stdio::null())
             .output()
-            .map_err(|e| format!("failed to execute host strace: {e}"))?;
+            .map_err(|e| format!("failed to execute host strace (needs GNU `timeout`): {e}"))?;
 
-        Ok(String::from_utf8_lossy(&output.stderr).to_string())
+        if is_timeout_exit(output.status.code()) {
+            eprintln!(
+                "⚠️ [gyrseek] {}",
+                probe_timeout_message(self.probe_timeout_secs, package, version)
+            );
+            return Ok(None);
+        }
+
+        // The trace and the install's own stderr share this stream in host mode, so
+        // only the exit code can be reported here, not the install's error text.
+        let install_failure = match output.status.code() {
+            Some(0) => None,
+            code => Some(InstallFailure {
+                exit_code: code.unwrap_or(-1),
+                output: String::new(),
+            }),
+        };
+        Ok(Some((
+            String::from_utf8_lossy(&output.stderr).to_string(),
+            install_failure,
+        )))
     }
 }
 
 struct DockerRunner {
     danger_disable_seccomp: bool,
+    probe_timeout_secs: usize,
+    image: ImageChoice,
 }
 
 impl SandboxRunner for DockerRunner {
+    fn sandbox_description(&self, manager: &str) -> Option<String> {
+        let image_var = if is_npm_family_manager(manager) {
+            "GYRSEEK_NPM_SCANNER_IMAGE"
+        } else {
+            "GYRSEEK_PY_SCANNER_IMAGE"
+        };
+        match std::env::var(image_var) {
+            Ok(image) if !image.is_empty() => Some(format!("your custom image {image}")),
+            _ => Some(self.image.description.clone()),
+        }
+    }
+
     fn trace_install(&self, manager: &str, package: &str, version: &str) -> Result<String, String> {
         let probes = vec![(package.to_string(), version.to_string())];
         let mut results = self.trace_install_matrix(manager, &probes)?;
         if results.is_empty() {
             return Err("docker matrix tracing returned no results".to_string());
         }
-        Ok(results.remove(0).1)
+        Ok(results.remove(0).trace)
     }
 
     fn trace_install_matrix(
@@ -284,7 +419,13 @@ impl SandboxRunner for DockerRunner {
         manager: &str,
         probes: &[(String, String)],
     ) -> Result<Vec<ProbeTrace>, String> {
-        trace_install_docker_matrix(manager, probes, self.danger_disable_seccomp)
+        trace_install_docker_matrix(
+            manager,
+            probes,
+            self.danger_disable_seccomp,
+            self.probe_timeout_secs,
+            &self.image.image,
+        )
     }
 }
 
@@ -314,17 +455,19 @@ fn trace_install_docker_matrix(
     manager: &str,
     probes: &[(String, String)],
     danger_disable_seccomp: bool,
+    probe_timeout_secs: usize,
+    default_image: &str,
 ) -> Result<Vec<ProbeTrace>, String> {
     if probes.is_empty() {
         return Ok(Vec::new());
     }
 
-    let image_config = scanner_image_config(manager);
+    let image_config = scanner_image_config(manager, default_image);
 
     let out_dir = tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
     let out_dir_path = out_dir.path().to_string_lossy().to_string();
 
-    let script = build_matrix_script(manager, probes, image_config.prebuilt);
+    let script = build_matrix_script(manager, probes, image_config.prebuilt, probe_timeout_secs);
     let args = build_docker_run_args(
         &image_config.image,
         &out_dir_path,
@@ -338,6 +481,13 @@ fn trace_install_docker_matrix(
         .stdout(Stdio::piped())
         .output()
         .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
+
+    if output.status.code() == Some(124) {
+        // Only the cleanup after a timed-out probe exits 124 (see KILL_PAYLOAD_PROCESSES_STEP).
+        return Err(format!(
+            "a probe exceeded probe_timeout_seconds={probe_timeout_secs} and left processes running that could not be stopped, so the whole batch was aborted"
+        ));
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -353,18 +503,58 @@ fn trace_install_docker_matrix(
         ));
     }
 
+    collect_probe_traces(
+        out_dir.path(),
+        probes,
+        probe_timeout_secs,
+        &|package, version| {
+            trace_install_docker_single(
+                manager,
+                package,
+                version,
+                danger_disable_seccomp,
+                probe_timeout_secs,
+                default_image,
+            )
+        },
+    )
+}
+
+/// Reads what the container script left in `out_dir` for each probe: the trace, the
+/// artifact inventory, an exit-code file for a failed install and a marker for a probe that
+/// timed out. `retry_single` re-runs one probe on its own when its trace in the batch is
+/// missing.
+fn collect_probe_traces(
+    out_dir: &std::path::Path,
+    probes: &[(String, String)],
+    probe_timeout_secs: usize,
+    retry_single: &dyn Fn(&str, &str) -> Result<String, String>,
+) -> Result<Vec<ProbeTrace>, String> {
     let mut results = Vec::new();
+    let mut timed_out: Vec<String> = Vec::new();
     for (idx, (package, version)) in probes.iter().enumerate() {
-        let trace_path = out_dir.path().join(format!("gyrseek_trace_{}.log", idx));
+        // A probe the script stopped for exceeding the limit has no usable trace.
+        // Leave it out so the scanner blocks just that package ("trace missing"),
+        // and do not retry it: that would only wait out the limit a second time.
+        if out_dir
+            .join(format!("gyrseek_timeout_{}.log", idx))
+            .exists()
+        {
+            let msg = probe_timeout_message(probe_timeout_secs, package, version);
+            eprintln!("⚠️ [gyrseek] {msg}");
+            timed_out.push(msg);
+            continue;
+        }
+        let trace_path = out_dir.join(format!("gyrseek_trace_{}.log", idx));
         // Prefer the matrix log; if it is missing/unreadable, retry the probe in
         // isolation. Either way, a blank trace means strace produced no data and
         // MUST NOT be treated as a clean zero-connection scan — fail closed.
         let mut trace = match std::fs::read_to_string(&trace_path) {
             Ok(contents) if !contents.trim().is_empty() => contents,
-            _ => trace_install_docker_single(manager, package, version, danger_disable_seccomp)?,
+            _ => retry_single(package, version)?,
         };
         if trace.trim().is_empty() {
-            let err_path = out_dir.path().join(format!("gyrseek_err_{}.log", idx));
+            let err_path = out_dir.join(format!("gyrseek_err_{}.log", idx));
             let strace_err = std::fs::read_to_string(&err_path).unwrap_or_default();
             return Err(format!(
                 "empty trace for '{}@{}': strace produced no output (ptrace likely unavailable in this environment). strace stderr: {}",
@@ -375,9 +565,7 @@ fn trace_install_docker_matrix(
         }
         // Append post-install artifact scan findings to the trace, separated by
         // a marker so the scanner can split them during signal extraction.
-        let artifact_path = out_dir
-            .path()
-            .join(format!("gyrseek_artifacts_{}.log", idx));
+        let artifact_path = out_dir.join(format!("gyrseek_artifacts_{}.log", idx));
         if let Ok(artifact_content) = std::fs::read_to_string(&artifact_path) {
             let trimmed = artifact_content.trim();
             if !trimmed.is_empty() {
@@ -385,7 +573,16 @@ fn trace_install_docker_matrix(
                 trace.push_str(trimmed);
             }
         }
-        results.push(((package.clone(), version.clone()), trace));
+        let install_failure = read_install_failure(out_dir, idx);
+        results.push(ProbeTrace {
+            probe: (package.clone(), version.clone()),
+            trace,
+            install_failure,
+        });
+    }
+
+    if results.is_empty() && !timed_out.is_empty() {
+        return Err(timed_out.join("; "));
     }
 
     Ok(results)
@@ -396,9 +593,17 @@ fn trace_install_docker_single(
     package: &str,
     version: &str,
     danger_disable_seccomp: bool,
+    probe_timeout_secs: usize,
+    default_image: &str,
 ) -> Result<String, String> {
-    let image_config = scanner_image_config(manager);
-    let script = build_single_script(manager, package, version, image_config.prebuilt);
+    let image_config = scanner_image_config(manager, default_image);
+    let script = build_single_script(
+        manager,
+        package,
+        version,
+        image_config.prebuilt,
+        probe_timeout_secs,
+    );
     // No /out bind mount here: the single-probe fallback captures strace output
     // from stderr rather than a log file.
     let args = build_docker_run_args(&image_config.image, "", &script, danger_disable_seccomp)?;
@@ -409,6 +614,10 @@ fn trace_install_docker_single(
         .stdout(Stdio::null())
         .output()
         .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
+
+    if is_timeout_exit(output.status.code()) {
+        return Err(probe_timeout_message(probe_timeout_secs, package, version));
+    }
 
     if !output.status.success() {
         return Err(format!(
@@ -429,7 +638,68 @@ fn trace_install_docker_single(
 /// overwrite or delete its own trace.
 const SCANNER_USER: &str = "gyrseek";
 
-fn is_npm_family_manager(manager: &str) -> bool {
+/// Reads the exit code the matrix script saved for a probe whose install failed
+/// (`/out/gyrseek_rc_N.log` exists only then) plus the tail of its error output.
+fn read_install_failure(out_dir: &std::path::Path, idx: usize) -> Option<InstallFailure> {
+    let rc = std::fs::read_to_string(out_dir.join(format!("gyrseek_rc_{idx}.log"))).ok()?;
+    let output = read_file_tail(&out_dir.join(format!("gyrseek_err_{idx}.log")))
+        .map(|raw| install_output_tail(&raw))
+        .unwrap_or_default();
+    Some(InstallFailure {
+        // A marker we cannot parse is still a failure: fail closed.
+        exit_code: rc.trim().parse().unwrap_or(-1),
+        output,
+    })
+}
+
+/// How much of a failed install's stderr is read. The file is written by the package under
+/// test and can be arbitrarily large, so only its end is ever loaded into memory.
+const INSTALL_OUTPUT_READ_BYTES: u64 = 64 * 1024;
+
+fn read_file_tail(path: &std::path::Path) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    file.seek(SeekFrom::Start(
+        len.saturating_sub(INSTALL_OUTPUT_READ_BYTES),
+    ))?;
+    let mut bytes = Vec::new();
+    file.take(INSTALL_OUTPUT_READ_BYTES)
+        .read_to_end(&mut bytes)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+const INSTALL_OUTPUT_MAX_LINES: usize = 15;
+const INSTALL_OUTPUT_MAX_LINE_CHARS: usize = 300;
+
+/// The last lines of a failed install's output, safe to print. The text comes from
+/// the package under test, so control characters (terminal escape sequences) are
+/// dropped, and strace's own `Process N attached` chatter is removed.
+fn install_output_tail(raw: &str) -> String {
+    let lines: Vec<String> = raw
+        .lines()
+        .filter(|l| !l.starts_with("strace: Process "))
+        .map(|l| {
+            l.chars()
+                .filter(|c| !c.is_control() || *c == '\t')
+                .take(INSTALL_OUTPUT_MAX_LINE_CHARS)
+                .collect::<String>()
+        })
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let start = lines.len().saturating_sub(INSTALL_OUTPUT_MAX_LINES);
+    lines[start..].join("\n")
+}
+
+fn probe_timeout_message(secs: usize, package: &str, version: &str) -> String {
+    format!(
+        "sandbox probe for '{package}@{version}' exceeded probe_timeout_seconds={secs}; treating it as a block. \
+If this is a slow but legitimate build, raise the limit in your gyrseek.yaml (for example `probe_timeout_seconds: {}`)",
+        secs.saturating_mul(2)
+    )
+}
+
+pub(crate) fn is_npm_family_manager(manager: &str) -> bool {
     manager == "npm" || manager == "pnpm"
 }
 
@@ -500,9 +770,14 @@ fn install_invocation(manager: &str, pkg_spec: &str) -> String {
 /// The syscalls every gyrseek strace records.
 const STRACE_SYSCALL_FILTER: &str = "network,execve,?execveat,open,openat,?openat2,?openat64,link,linkat,symlink,symlinkat,clone,?clone3,fork,vfork,dup,dup2,?dup3,fcntl";
 
-fn strace_install_command(manager: &str, pkg_spec: &str, out_log: Option<&str>) -> String {
+fn strace_install_command(
+    manager: &str,
+    pkg_spec: &str,
+    out_log: Option<&str>,
+    timeout_secs: usize,
+) -> String {
     let mut cmd = format!(
-        "strace -f -s 4096 -v -xx -u {u} -e trace={STRACE_SYSCALL_FILTER}",
+        "timeout -k {TIMEOUT_KILL_AFTER_SECS} {timeout_secs} strace -f -s 4096 -v -xx -u {u} -e trace={STRACE_SYSCALL_FILTER}",
         u = SCANNER_USER
     );
     if let Some(path) = out_log {
@@ -562,10 +837,30 @@ fn build_artifact_scan_steps(idx: usize) -> Vec<String> {
     ]
 }
 
+/// Empties the shared install tree (and `/tmp`) between probes. Traces and
+/// artifact inventories live in `/out`, so they are untouched. The trailing
+/// `|| true` is needed because the script runs under `set -e` and a failed
+/// cleanup must not abort the remaining probes.
+const WORK_RESET_STEP: &str =
+    "find /work /tmp -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true";
+
+/// SIGKILLs every process owned by the scanner user, repeating until none is left (a
+/// survivor can fork between a scan of `/proc` and its kill; zombies are already dead and
+/// are skipped). Walks `/proc` because `pkill` is not in the slim scanner images. If
+/// processes are still alive after ten passes the script exits 124, which stops the
+/// container and with it everything in it: the next probe must never share a workspace
+/// with an untraced survivor. Runs only after a probe timed out.
+const KILL_PAYLOAD_PROCESSES_STEP: &str = "n=1; for _ in 1 2 3 4 5 6 7 8 9 10; do n=0; for p in /proc/[0-9]*; do [ \"$(stat -c %U \"$p\" 2>/dev/null)\" = gyrseek ] || continue; case \"$(sed -n 's/^State:[[:space:]]*//p' \"$p/status\" 2>/dev/null)\" in Z*) continue;; esac; kill -9 \"${p#/proc/}\" 2>/dev/null || true; n=1; done; [ $n -eq 0 ] && break; done; [ $n -eq 0 ] || exit 124";
+
 /// Builds the full `sh -lc` script for the matrix (multi-probe) run: per-probe
 /// strace logs written to /out, payload dropped to the scanner user, followed
 /// by a targeted artifact scan of the installed file tree.
-fn build_matrix_script(manager: &str, probes: &[(String, String)], prebuilt: bool) -> String {
+fn build_matrix_script(
+    manager: &str,
+    probes: &[(String, String)],
+    prebuilt: bool,
+    timeout_secs: usize,
+) -> String {
     let mut steps = image_setup_steps(manager, prebuilt);
     steps.extend(scanner_user_setup_steps());
 
@@ -574,29 +869,43 @@ fn build_matrix_script(manager: &str, probes: &[(String, String)], prebuilt: boo
         let log = format!("/out/gyrseek_trace_{}.log", idx);
         let err = format!("/out/gyrseek_err_{}.log", idx);
         // Drop the install's own stdout, but capture strace's stderr to a per-probe
-        // file instead of discarding it with `>/dev/null 2>&1`. `|| true` keeps a
-        // single failing install (e.g. a yanked baseline) from aborting sibling
-        // probes; a genuine strace-attach failure leaves an empty trace log, which
+        // file instead of discarding it with `>/dev/null 2>&1`. Only a timeout aborts
+        // the script, so a single failing install (e.g. a yanked baseline) cannot abort
+        // its sibling probes; a genuine strace-attach failure leaves an empty trace log, which
         // the reader treats as a hard error (fail closed) using the captured stderr.
+        // A probe stopped by `timeout` (exit 124, or 137 after its SIGKILL) leaves a
+        // marker; the host blocks only that package. A payload can ignore SIGTERM, so
+        // whatever it left running is killed before the next probe starts. Any other
+        // non-zero exit is a failed install: its exit code is saved for the host, which
+        // blocks the package and shows the install's own error output.
         steps.push(format!(
-            "{} >/dev/null 2>{} || true",
-            strace_install_command(manager, &spec, Some(&log)),
+            "{} >/dev/null 2>{} || {{ rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then : > /out/gyrseek_timeout_{idx}.log; {KILL_PAYLOAD_PROCESSES_STEP}; else echo $rc > /out/gyrseek_rc_{idx}.log; fi; true; }}",
+            strace_install_command(manager, &spec, Some(&log), timeout_secs),
             err
         ));
         // After each install, scan the installed tree for suspicious artifacts.
         steps.extend(build_artifact_scan_steps(idx));
+        // Then wipe the install tree so the next probe starts from the same
+        // empty state and its scan cannot see this probe's files.
+        steps.push(WORK_RESET_STEP.to_string());
     }
 
     steps.join("; ")
 }
 
 /// Builds the `sh -lc` script for the single-probe fallback (trace to stderr).
-fn build_single_script(manager: &str, package: &str, version: &str, prebuilt: bool) -> String {
+fn build_single_script(
+    manager: &str,
+    package: &str,
+    version: &str,
+    prebuilt: bool,
+    timeout_secs: usize,
+) -> String {
     let mut steps = image_setup_steps(manager, prebuilt);
     steps.extend(scanner_user_setup_steps());
 
     let spec = package_spec(manager, package, version);
-    steps.push(strace_install_command(manager, &spec, None));
+    steps.push(strace_install_command(manager, &spec, None, timeout_secs));
 
     steps.join("; ")
 }
@@ -872,18 +1181,18 @@ fn docker_daemon_error_message(stderr: &str, os: &str) -> String {
     format!("{hint}. Docker said: {detail}")
 }
 
-fn scanner_image_config(manager: &str) -> ScannerImageConfig {
+fn scanner_image_config(manager: &str, default_image: &str) -> ScannerImageConfig {
     let (image_var, prebuilt_var, default_image) = if is_npm_family_manager(manager) {
         (
             "GYRSEEK_NPM_SCANNER_IMAGE",
             "GYRSEEK_NPM_SCANNER_PREBUILT",
-            "node:26.3-bookworm-slim@sha256:3fe807a03a4436e7bc76b7e84e6861899cd75c9028ae99bc00581940141ae150",
+            default_image,
         )
     } else {
         (
             "GYRSEEK_PY_SCANNER_IMAGE",
             "GYRSEEK_PY_SCANNER_PREBUILT",
-            "python:3.13-slim-bookworm@sha256:05b95397cac02b060ff1251afaa78087d92d7034369afbc8eb765631cada8257",
+            default_image,
         )
     };
 
@@ -923,12 +1232,18 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
-        EMBEDDED_SECCOMP_PROFILE_JSON, SCANNER_USER, build_artifact_scan_steps,
-        build_docker_run_args, build_matrix_script, build_runner_from_env, build_single_script,
-        docker_apparmor_enabled_from_env, docker_apparmor_profile_name, sandbox_max_processes,
-        strace_install_command,
+        DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, is_timeout_exit,
+        read_file_tail,
     };
+    use super::{
+        EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
+        EMBEDDED_SECCOMP_PROFILE_JSON, KILL_PAYLOAD_PROCESSES_STEP, SCANNER_USER, WORK_RESET_STEP,
+        build_artifact_scan_steps, build_docker_run_args, build_matrix_script,
+        build_runner_from_env, build_single_script, docker_apparmor_enabled_from_env,
+        docker_apparmor_profile_name, install_output_tail, probe_timeout_message,
+        read_install_failure, sandbox_max_processes, strace_install_command,
+    };
+    use crate::sandbox::SandboxRunner;
     use std::sync::Mutex;
 
     fn env_lock() -> &'static Mutex<()> {
@@ -997,7 +1312,12 @@ mod tests {
 
     #[test]
     fn strace_command_disables_string_truncation() {
-        let cmd = strace_install_command("npm", "left-pad@1.3.0", Some("/out/gyrseek_trace_0.log"));
+        let cmd = strace_install_command(
+            "npm",
+            "left-pad@1.3.0",
+            Some("/out/gyrseek_trace_0.log"),
+            300,
+        );
         // -s 4096 lifts the 32-byte argv string cap; -v expands addresses;
         // -xx forces all bytes to \xNN hex-escape for deterministic parsing.
         assert!(cmd.contains("-s 4096"), "missing -s flag: {cmd}");
@@ -1015,12 +1335,13 @@ mod tests {
             "npm",
             &[("left-pad".to_string(), "1.3.0".to_string())],
             true,
+            300,
         );
         assert!(matrix.contains("-s 4096"));
         assert!(matrix.contains(" -v "));
         assert!(matrix.contains(" -xx "));
 
-        let single = build_single_script("pip", "requests", "2.31.0", true);
+        let single = build_single_script("pip", "requests", "2.31.0", true, 300);
         assert!(single.contains("-s 4096"));
         assert!(single.contains(" -v "));
         assert!(single.contains(" -xx "));
@@ -1030,7 +1351,12 @@ mod tests {
 
     #[test]
     fn strace_drops_payload_to_unprivileged_user() {
-        let cmd = strace_install_command("npm", "left-pad@1.3.0", Some("/out/gyrseek_trace_0.log"));
+        let cmd = strace_install_command(
+            "npm",
+            "left-pad@1.3.0",
+            Some("/out/gyrseek_trace_0.log"),
+            300,
+        );
         // strace itself runs as root (owns the log) but -u runs the install as
         // the scanner user, which has no write access to root-owned /out.
         assert!(
@@ -1047,6 +1373,7 @@ mod tests {
             "npm",
             &[("left-pad".to_string(), "1.3.0".to_string())],
             true,
+            300,
         );
         let user_setup = script
             .find(SCANNER_USER)
@@ -1062,8 +1389,12 @@ mod tests {
 
     #[test]
     fn pnpm_install_invocation_uses_pnpm_add() {
-        let cmd =
-            strace_install_command("pnpm", "left-pad@1.3.0", Some("/out/gyrseek_trace_0.log"));
+        let cmd = strace_install_command(
+            "pnpm",
+            "left-pad@1.3.0",
+            Some("/out/gyrseek_trace_0.log"),
+            300,
+        );
         assert!(cmd.contains("pnpm add 'left-pad@1.3.0' --dir /work --lockfile=false"));
     }
 
@@ -1073,6 +1404,7 @@ mod tests {
             "pnpm",
             &[("left-pad".to_string(), "1.3.0".to_string())],
             false,
+            300,
         );
         assert!(script.contains("corepack enable pnpm"));
         assert!(script.contains("pnpm add"));
@@ -1280,6 +1612,7 @@ mod tests {
             "npm",
             &[("left-pad".to_string(), "1.3.0".to_string())],
             true,
+            300,
         );
         // strace's stderr must land in a per-probe error log so an attach
         // failure is diagnosable, never silently routed to /dev/null.
@@ -1370,6 +1703,7 @@ mod tests {
                 ("pkg-b".to_string(), "2.0.0".to_string()),
             ],
             true,
+            300,
         );
         // After the first probe's install, expect the artifact scan log for idx 0.
         let probe0_install = script.find("gyrseek_trace_0.log").expect("trace 0 log");
@@ -1388,6 +1722,454 @@ mod tests {
         assert!(
             probe1_artifacts > probe1_install,
             "artifact scan must follow install for probe 1"
+        );
+    }
+
+    #[test]
+    fn every_probe_runs_under_the_configured_timeout() {
+        let probes = [
+            ("pkg-a".to_string(), "1.0.0".to_string()),
+            ("pkg-b".to_string(), "2.0.0".to_string()),
+        ];
+        let matrix = build_matrix_script("pip", &probes, true, 45);
+        assert_eq!(matrix.matches("timeout -k 5 45 strace -f").count(), 2);
+        assert!(!matrix.contains("timeout -k 5 300"));
+        let single = build_single_script("pip", "pkg-a", "1.0.0", true, 45);
+        assert!(single.contains("timeout -k 5 45 strace -f"));
+    }
+
+    #[test]
+    fn matrix_script_marks_a_timed_out_probe_and_keeps_going() {
+        let script = build_matrix_script(
+            "pip",
+            &[("pkg-a".to_string(), "1.0.0".to_string())],
+            true,
+            45,
+        );
+        // Exit 124 or 137 (timeout, then SIGKILL) leaves a marker and kills the payload's leftovers; the
+        // script must not exit, so sibling probes still run.
+        assert!(script.contains("gyrseek_timeout_0.log"));
+        assert!(script.contains(KILL_PAYLOAD_PROCESSES_STEP));
+        assert!(KILL_PAYLOAD_PROCESSES_STEP.contains(SCANNER_USER));
+        // The only `exit 124` is the cleanup's last resort, after ten kill passes.
+        assert_eq!(script.matches("exit 124").count(), 1);
+        assert!(script.contains("for _ in 1 2 3 4 5 6 7 8 9 10"));
+        // The non-timeout path must still end in success so `set -e` does not abort.
+        assert!(script.contains("; true; }"));
+    }
+
+    #[test]
+    fn matrix_script_saves_the_exit_code_of_a_failed_install() {
+        let script = build_matrix_script(
+            "pip",
+            &[("pkg-a".to_string(), "1.0.0".to_string())],
+            true,
+            45,
+        );
+        // Only a non-timeout failure writes the exit-code file the host reads.
+        assert!(script.contains("echo $rc > /out/gyrseek_rc_0.log"));
+        assert!(script.contains("; else echo $rc"));
+    }
+
+    #[test]
+    fn install_output_tail_is_printable_and_drops_strace_noise() {
+        let raw = "strace: Process 12 attached\n\x1b[31merror: build failed\x1b[0m\n\nstrace: Process 13 attached\nhint: use a compiler\n";
+        let tail = install_output_tail(raw);
+        assert_eq!(tail, "[31merror: build failed[0m\nhint: use a compiler");
+        assert!(!tail.contains('\x1b'));
+        let many: String = (0..40).map(|i| format!("line {i}\n")).collect();
+        let tail = install_output_tail(&many);
+        assert_eq!(tail.lines().count(), 15);
+        assert!(tail.ends_with("line 39"));
+    }
+
+    #[test]
+    fn install_failure_output_is_read_from_the_end_of_a_huge_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = std::fs::File::create(dir.path().join("gyrseek_err_0.log")).unwrap();
+        for i in 0..40_000 {
+            std::io::Write::write_all(&mut f, format!("noise line {i}\n").as_bytes()).unwrap();
+        }
+        std::io::Write::write_all(&mut f, b"error: the real failure\n").unwrap();
+        drop(f);
+        std::fs::write(dir.path().join("gyrseek_rc_0.log"), "1\n").unwrap();
+        let big = std::fs::metadata(dir.path().join("gyrseek_err_0.log"))
+            .unwrap()
+            .len();
+        assert!(
+            big > 4 * INSTALL_OUTPUT_READ_BYTES,
+            "the fixture must dwarf the read limit"
+        );
+        let tail = read_file_tail(&dir.path().join("gyrseek_err_0.log")).unwrap();
+        assert!(
+            tail.len() as u64 <= INSTALL_OUTPUT_READ_BYTES + 4,
+            "{}",
+            tail.len()
+        );
+        let failure = read_install_failure(dir.path(), 0).unwrap();
+        assert!(
+            failure.output.ends_with("error: the real failure"),
+            "{}",
+            failure.output
+        );
+        assert_eq!(failure.output.lines().count(), 15);
+    }
+
+    // ---- collect_probe_traces: what the container script leaves behind -------------------
+
+    fn probe(name: &str, version: &str) -> (String, String) {
+        (name.to_string(), version.to_string())
+    }
+
+    fn put(dir: &std::path::Path, file: &str, content: &str) {
+        std::fs::write(dir.join(file), content).unwrap();
+    }
+
+    fn no_retry(_: &str, _: &str) -> Result<String, String> {
+        panic!("the probe's trace was present, so it must not be re-run");
+    }
+
+    #[test]
+    fn collects_each_probes_trace_in_order_and_appends_the_artifact_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        put(d, "gyrseek_trace_0.log", "execve(\"/bin/a\") = 0\n");
+        put(d, "gyrseek_trace_1.log", "execve(\"/bin/b\") = 0\n");
+        put(d, "gyrseek_artifacts_1.log", "  /work/x\0\0\0  \n");
+        let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
+        let got = collect_probe_traces(d, &probes, 300, &no_retry).unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].probe, probe("a", "1.0.0"));
+        assert_eq!(got[0].trace, "execve(\"/bin/a\") = 0\n");
+        assert!(got[0].install_failure.is_none());
+        assert_eq!(got[1].probe, probe("b", "2.0.0"));
+        assert!(
+            got[1].trace.contains("=== gyrseek_artifacts ===\n/work/x"),
+            "{}",
+            got[1].trace
+        );
+    }
+
+    #[test]
+    fn empty_or_whitespace_artifact_inventories_add_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        put(d, "gyrseek_trace_0.log", "trace\n");
+        put(d, "gyrseek_artifacts_0.log", " \n\n");
+        let got = collect_probe_traces(d, &[probe("a", "1")], 300, &no_retry).unwrap();
+        assert_eq!(got[0].trace, "trace\n");
+    }
+
+    #[test]
+    fn a_missing_or_blank_batch_trace_is_re_run_on_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        put(d, "gyrseek_trace_1.log", "  \n"); // blank
+        let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
+        let calls = std::cell::RefCell::new(Vec::new());
+        let retry = |p: &str, v: &str| -> Result<String, String> {
+            calls.borrow_mut().push(format!("{p}@{v}"));
+            Ok(format!("retried {p}\n"))
+        };
+        let got = collect_probe_traces(d, &probes, 300, &retry).unwrap();
+        assert_eq!(*calls.borrow(), ["a@1.0.0", "b@2.0.0"]);
+        assert_eq!(got[0].trace, "retried a\n");
+        assert_eq!(got[1].trace, "retried b\n");
+    }
+
+    #[test]
+    fn a_failed_re_run_is_an_error_not_a_clean_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let retry = |_: &str, _: &str| -> Result<String, String> { Err("docker exploded".into()) };
+        let err = collect_probe_traces(dir.path(), &[probe("a", "1")], 300, &retry).unwrap_err();
+        assert!(err.contains("docker exploded"), "{err}");
+    }
+
+    #[test]
+    fn a_blank_trace_even_after_the_re_run_fails_closed_with_the_strace_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        put(
+            d,
+            "gyrseek_err_0.log",
+            "strace: ptrace(PTRACE_SEIZE): Operation not permitted\n",
+        );
+        let retry = |_: &str, _: &str| -> Result<String, String> { Ok("  \n".into()) };
+        let err = collect_probe_traces(d, &[probe("a", "1.0.0")], 300, &retry).unwrap_err();
+        assert!(err.contains("empty trace for 'a@1.0.0'"), "{err}");
+        assert!(err.contains("Operation not permitted"), "{err}");
+    }
+
+    #[test]
+    fn a_timed_out_probe_is_omitted_and_never_re_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        put(d, "gyrseek_trace_0.log", "partial trace\n"); // exists, but the marker wins
+        put(d, "gyrseek_timeout_0.log", "");
+        put(d, "gyrseek_trace_1.log", "good\n");
+        let probes = [probe("slow", "1.0.0"), probe("fast", "1.0.0")];
+        let got = collect_probe_traces(d, &probes, 300, &no_retry).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].probe, probe("fast", "1.0.0"));
+    }
+
+    #[test]
+    fn when_every_probe_timed_out_the_batch_is_an_error_naming_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        put(d, "gyrseek_timeout_0.log", "");
+        put(d, "gyrseek_timeout_1.log", "");
+        let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
+        let err = collect_probe_traces(d, &probes, 45, &no_retry).unwrap_err();
+        assert!(err.contains("a@1.0.0") && err.contains("b@2.0.0"), "{err}");
+        assert!(err.contains("probe_timeout_seconds=45"), "{err}");
+    }
+
+    #[test]
+    fn an_exit_code_file_marks_only_that_probe_as_a_failed_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        put(d, "gyrseek_trace_0.log", "t0\n");
+        put(d, "gyrseek_trace_1.log", "t1\n");
+        put(d, "gyrseek_rc_1.log", "2\n");
+        put(
+            d,
+            "gyrseek_err_1.log",
+            "strace: Process 7 attached\nerror: no solution\n",
+        );
+        let probes = [probe("ok", "1"), probe("bad", "1")];
+        let got = collect_probe_traces(d, &probes, 300, &no_retry).unwrap();
+        assert!(got[0].install_failure.is_none());
+        let failure = got[1].install_failure.as_ref().expect("probe 1 failed");
+        assert_eq!(failure.exit_code, 2);
+        assert_eq!(failure.output, "error: no solution");
+    }
+
+    #[test]
+    fn files_are_matched_to_probes_by_index_beyond_nine() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let probes: Vec<_> = (0..13).map(|i| probe(&format!("p{i}"), "1")).collect();
+        for i in 0..13 {
+            put(
+                d,
+                &format!("gyrseek_trace_{i}.log"),
+                &format!("trace of p{i}\n"),
+            );
+        }
+        put(d, "gyrseek_timeout_11.log", "");
+        put(d, "gyrseek_rc_12.log", "1\n");
+        let got = collect_probe_traces(d, &probes, 300, &no_retry).unwrap();
+        assert_eq!(got.len(), 12, "probe 11 timed out");
+        assert!(
+            got.iter()
+                .all(|g| g.trace == format!("trace of {}\n", g.probe.0))
+        );
+        assert!(
+            got.iter()
+                .find(|g| g.probe.0 == "p1")
+                .unwrap()
+                .install_failure
+                .is_none()
+        );
+        assert!(
+            got.iter()
+                .find(|g| g.probe.0 == "p12")
+                .unwrap()
+                .install_failure
+                .is_some()
+        );
+        assert!(got.iter().all(|g| g.probe.0 != "p11"));
+    }
+
+    #[test]
+    fn no_probes_means_no_results() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            collect_probe_traces(dir.path(), &[], 300, &no_retry)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn timeout_exit_codes_cover_term_and_kill_only() {
+        for (code, expected) in [
+            (Some(124), true),
+            (Some(137), true),
+            (Some(0), false),
+            (Some(1), false),
+            (Some(143), false),
+            (None, false),
+        ] {
+            assert_eq!(is_timeout_exit(code), expected, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn custom_scanner_images_are_named_in_the_description() {
+        use crate::runtime_image::ImageChoice;
+        let runner = DockerRunner {
+            danger_disable_seccomp: false,
+            probe_timeout_secs: 300,
+            image: ImageChoice {
+                image: "python:3.12-slim-bookworm@sha256:x".into(),
+                description: "Python 3.12 (from .python-version)".into(),
+            },
+        };
+        let _lock = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var("GYRSEEK_PY_SCANNER_IMAGE").ok();
+        // SAFETY: the env lock serialises every test that touches this variable.
+        unsafe { std::env::remove_var("GYRSEEK_PY_SCANNER_IMAGE") };
+        assert_eq!(
+            runner.sandbox_description("uv").as_deref(),
+            Some("Python 3.12 (from .python-version)")
+        );
+        unsafe { std::env::set_var("GYRSEEK_PY_SCANNER_IMAGE", "myorg/py@sha256:y") };
+        assert_eq!(
+            runner.sandbox_description("pip").as_deref(),
+            Some("your custom image myorg/py@sha256:y")
+        );
+        // The npm variable is separate: the Python override does not describe an npm run.
+        assert_ne!(
+            runner.sandbox_description("npm").as_deref(),
+            Some("your custom image myorg/py@sha256:y")
+        );
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("GYRSEEK_PY_SCANNER_IMAGE", v),
+                None => std::env::remove_var("GYRSEEK_PY_SCANNER_IMAGE"),
+            }
+        }
+    }
+
+    #[test]
+    fn shell_quoting_neutralises_quotes_and_metacharacters() {
+        assert_eq!(super::shell_single_quoted("plain"), "'plain'");
+        assert_eq!(super::shell_single_quoted("it's"), "'it'\"'\"'s'");
+        for nasty in [
+            "a; rm -rf /",
+            "$(id)",
+            "`id`",
+            "a && b",
+            "a\nb",
+            "a b",
+            "$HOME",
+            "*",
+            "\"q\"",
+        ] {
+            let quoted = super::shell_single_quoted(nasty);
+            assert!(
+                quoted.starts_with('\'') && quoted.ends_with('\''),
+                "{nasty}"
+            );
+            // Nothing inside the quotes can end them except the escaped form of `'`.
+            assert_eq!(
+                quoted[1..quoted.len() - 1].matches('\'').count(),
+                0,
+                "{nasty}"
+            );
+        }
+    }
+
+    #[test]
+    fn matrix_script_for_many_probes_numbers_every_file_and_quotes_the_spec() {
+        let probes: Vec<_> = (0..12)
+            .map(|i| (format!("pkg{i}"), format!("1.0.{i}")))
+            .collect();
+        let script = build_matrix_script("pip", &probes, true, 300);
+        for i in 0..12 {
+            for stem in [
+                "gyrseek_trace",
+                "gyrseek_err",
+                "gyrseek_artifacts",
+                "gyrseek_rc",
+                "gyrseek_timeout",
+            ] {
+                assert!(
+                    script.contains(&format!("/out/{stem}_{i}.log")),
+                    "{stem}_{i}"
+                );
+            }
+            assert!(script.contains(&format!("'pkg{i}==1.0.{i}'")), "probe {i}");
+        }
+        assert_eq!(script.matches(WORK_RESET_STEP).count(), 12);
+        // An empty batch is an empty install section, not a crash.
+        let empty = build_matrix_script("npm", &[], true, 300);
+        assert!(!empty.contains("strace"));
+    }
+
+    #[test]
+    fn scripts_differ_by_manager_but_always_drop_privileges_and_set_the_timeout() {
+        for manager in ["pip", "uv", "poetry", "npm", "pnpm"] {
+            let script = build_matrix_script(manager, &[("p".into(), "1.0.0".into())], true, 77);
+            assert!(script.contains("timeout -k 5 77 strace"), "{manager}");
+            assert!(script.contains("-u gyrseek"), "{manager}");
+            assert!(script.contains("-xx"), "{manager}");
+        }
+        let npm = build_matrix_script("npm", &[("p".into(), "1.0.0".into())], true, 5);
+        assert!(
+            npm.contains("npm install 'p@1.0.0'") && npm.contains("--no-save"),
+            "{npm}"
+        );
+        let pnpm = build_matrix_script("pnpm", &[("p".into(), "1.0.0".into())], true, 5);
+        assert!(
+            pnpm.contains("pnpm add 'p@1.0.0'") && pnpm.contains("--lockfile=false"),
+            "{pnpm}"
+        );
+        let py = build_matrix_script("uv", &[("p".into(), "1.0.0".into())], true, 5);
+        assert!(py.contains("uv pip install 'p==1.0.0'"), "{py}");
+        // Prebuilt images skip the runtime apt setup; others run it.
+        assert!(!py.contains("apt-get"));
+        assert!(
+            build_matrix_script("uv", &[("p".into(), "1".into())], false, 5).contains("apt-get")
+        );
+    }
+
+    #[test]
+    fn read_install_failure_needs_the_exit_code_marker() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        std::fs::write(dir.path().join("gyrseek_err_0.log"), "error: boom\n").unwrap();
+        assert!(read_install_failure(dir.path(), 0).is_none());
+        std::fs::write(dir.path().join("gyrseek_rc_0.log"), "2\n").unwrap();
+        let failure = read_install_failure(dir.path(), 0).expect("failure");
+        assert_eq!(failure.exit_code, 2);
+        assert_eq!(failure.output, "error: boom");
+        // An unreadable marker still counts as a failure.
+        std::fs::write(dir.path().join("gyrseek_rc_1.log"), "??").unwrap();
+        assert_eq!(read_install_failure(dir.path(), 1).unwrap().exit_code, -1);
+    }
+
+    #[test]
+    fn timeout_message_names_the_probe_and_the_setting() {
+        let msg = probe_timeout_message(300, "left-pad", "1.3.0");
+        assert!(msg.contains("left-pad@1.3.0"));
+        assert!(msg.contains("probe_timeout_seconds=300"));
+        // The message tells the operator how to raise the limit, with a larger example.
+        assert!(msg.contains("gyrseek.yaml"));
+        assert!(msg.contains("probe_timeout_seconds: 600"));
+    }
+
+    #[test]
+    fn matrix_script_wipes_work_between_probes_after_the_artifact_scan() {
+        let script = build_matrix_script(
+            "pip",
+            &[
+                ("pkg-a".to_string(), "1.0.0".to_string()),
+                ("pkg-b".to_string(), "2.0.0".to_string()),
+            ],
+            true,
+            300,
+        );
+        let scan0 = script.find("gyrseek_artifacts_0.log").expect("artifacts 0");
+        let install1 = script.find("gyrseek_trace_1.log").expect("trace 1");
+        let wipe = script.find(WORK_RESET_STEP).expect("work reset step");
+        assert!(wipe > scan0, "wipe must come after probe 0's artifact scan");
+        assert!(wipe < install1, "wipe must come before probe 1's install");
+        assert_eq!(script.matches(WORK_RESET_STEP).count(), 2);
+        assert!(
+            !WORK_RESET_STEP.contains("/out"),
+            "the wipe must never touch the trace logs"
         );
     }
 
@@ -1590,6 +2372,19 @@ Stderr: {}",
 
     #[test]
     fn no_sandbox_builds_the_host_runner_without_docker() {
-        assert!(build_runner_from_env(false, true).is_ok());
+        assert!(
+            build_runner_from_env(
+                false,
+                true,
+                300,
+                crate::runtime_image::select_for_manager(
+                    "uv",
+                    None,
+                    None,
+                    std::path::Path::new("/nonexistent"),
+                )
+            )
+            .is_ok()
+        );
     }
 }
