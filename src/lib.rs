@@ -103,6 +103,18 @@ struct BaselineOverrideConfig {
     baseline_2: Option<String>,
 }
 
+/// Removes every `--no-sandbox` from `args` and reports whether it was present, like
+/// `--danger-disable-seccomp`: it is consumed wherever it appears and never forwarded.
+fn take_no_sandbox_flag(args: Vec<String>) -> (Vec<String>, bool) {
+    let found = args.iter().any(|arg| arg == "--no-sandbox");
+    (
+        args.into_iter()
+            .filter(|arg| arg != "--no-sandbox")
+            .collect(),
+        found,
+    )
+}
+
 fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool, bool), String> {
     if env::var("GYRSEEK_DOCKER_SECCOMP_PROFILE").is_ok() {
         eprintln!(
@@ -500,7 +512,7 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
 
 #[cfg(test)]
 mod config_tests {
-    use super::{load_policy_config, parse_global_options};
+    use super::{load_policy_config, parse_global_options, take_no_sandbox_flag};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -1428,6 +1440,20 @@ mod config_tests {
     }
 
     #[test]
+    fn no_sandbox_flag_is_consumed_wherever_it_appears() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (rest, found) = take_no_sandbox_flag(args(&["--no-sandbox", "npm", "install"]));
+        assert!(found);
+        assert_eq!(rest, args(&["npm", "install"]));
+        let (rest, found) = take_no_sandbox_flag(args(&["npm", "install", "x", "--no-sandbox"]));
+        assert!(found);
+        assert_eq!(rest, args(&["npm", "install", "x"]));
+        let (rest, found) = take_no_sandbox_flag(args(&["npm", "install"]));
+        assert!(!found);
+        assert_eq!(rest, args(&["npm", "install"]));
+    }
+
+    #[test]
     fn danger_disable_seccomp_parsing_edge_cases() {
         // (a) Flag before --config
         let args = vec![
@@ -1486,6 +1512,7 @@ pub struct GyrSeek {
 struct LazyRunner {
     runner: std::cell::OnceCell<Box<dyn SandboxRunner>>,
     danger_disable_seccomp: bool,
+    no_sandbox: bool,
 }
 
 impl LazyRunner {
@@ -1495,7 +1522,7 @@ impl LazyRunner {
                 if env::var("GYRSEEK_TEST_BYPASS_RUNNER_INIT").ok().as_deref() == Some("1") {
                     return Box::new(NoopRunner) as Box<dyn SandboxRunner>;
                 }
-                match build_runner_from_env(self.danger_disable_seccomp) {
+                match build_runner_from_env(self.danger_disable_seccomp, self.no_sandbox) {
                     Ok(runner) => runner,
                     Err(e) => {
                         println!("❌ [gyrseek] Sandbox initialization failed: {}", e);
@@ -1760,6 +1787,7 @@ pub async fn run(args: Vec<String>) {
         return;
     }
 
+    let (args, no_sandbox) = take_no_sandbox_flag(args);
     let (args, config_path, config_explicit, danger_disable_seccomp) =
         match parse_global_options(args) {
             Ok(v) => v,
@@ -1827,7 +1855,7 @@ pub async fn run(args: Vec<String>) {
         );
     }
     let os = std::env::consts::OS;
-    let sandbox_mode = env::var("GYRSEEK_SANDBOX").unwrap_or_else(|_| "docker".to_string());
+    let sandbox_mode = if no_sandbox { "host" } else { "docker" };
     println!("🖥️ [gyrseek] OS: {} | Sandbox mode: {}", os, sandbox_mode);
     if !policy.min_baseline_age_hours_by_package.is_empty() {
         println!(
@@ -1879,6 +1907,7 @@ pub async fn run(args: Vec<String>) {
     let runner = LazyRunner {
         runner: std::cell::OnceCell::new(),
         danger_disable_seccomp,
+        no_sandbox,
     };
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("lock") {

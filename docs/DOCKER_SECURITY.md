@@ -6,7 +6,7 @@ This document is the canonical reference for Docker sandbox security in gyrseek.
 
 gyrseek runs install probes inside Docker containers using `strace` to capture behavioral signals (network endpoints, process execution, git clones, installed artifacts). The Docker sandbox is tuned for practical compatibility with package managers and throughput, not maximum isolation — though an embedded seccomp profile (active on every platform) and an optional AppArmor profile (native Linux hosts only) add defense-in-depth. The two are not interchangeable: see [Is seccomp enough, or is AppArmor required?](#is-seccomp-enough-or-is-apparmor-required) for which layer actually carries weight.
 
-Sandbox mode is selected via `GYRSEEK_SANDBOX` (`docker` default, or `host`, which has no isolation and only detects).
+Docker is the sandbox. Host mode, which has no isolation and only detects, must be requested with `--no-sandbox`; there is no environment variable for it.
 
 ## Sandbox Infrastructure
 
@@ -14,6 +14,7 @@ Sandbox mode is selected via `GYRSEEK_SANDBOX` (`docker` default, or `host`, whi
 
 - **`--cap-add SYS_PTRACE`** — `strace` runs as root but attaches to the install process running as an unprivileged scanner user (`strace -u gyrseek`). Cross-UID ptrace requires `CAP_SYS_PTRACE`, which Docker does not grant by default. Scoped to the container's own PID namespace; cannot trace host processes. Without it, `strace` fails with `ptrace(PTRACE_SEIZE): Operation not permitted`, which produces an empty trace and the scan fails closed.
 - **`--security-opt no-new-privileges`** — prevents the container process from gaining additional privileges.
+- **Resource and filesystem limits** — `--network bridge`, `--pids-limit` (`GYRSEEK_MAX_PROCESSES`, default 256), `--memory` (`GYRSEEK_MEM_LIMIT`, default `2g`), `--cpus 1`, and `noexec,nosuid` tmpfs mounts for `/tmp` (128m) and `/work` (sized like the memory limit). The container runs as `--user root`; the traced install is dropped to the unprivileged `gyrseek` user by `strace -u`.
 - **Read-only rootfs not enabled** — the runtime apt-based probe tooling setup requires a writable root filesystem. Prebuilt scanner images unblock `--read-only` rootfs (see [Prebuilt Scanner Images](#prebuilt-scanner-images)).
 - **Capabilities not fully dropped** — apt-based setup (used in the non-prebuilt path) fails under a full capability drop.
 
@@ -29,7 +30,7 @@ The Docker backend batches multiple package-version probes (current + baselines 
 
 ### strace configuration
 
-- `-s 4096 -v` — long argv strings (git clone URLs, etc.) and socket addresses are not truncated from the default 32 bytes.
+- `-s 4096 -v -xx` — long argv strings (git clone URLs, etc.) and socket addresses are not truncated from the default 32 bytes.
 - `-f` — follows child processes (default since a package manager's install step can spawn subprocesses).
 - stderr captured per-probe to `/out/gyrseek_err_N.log` (not discarded).
 - `|| true` is kept only so one failing baseline install does not abort sibling probes. A genuine attach failure produces a blank trace, which the reader turns into a hard error.
@@ -43,20 +44,19 @@ The profile can be disabled via the `--danger-disable-seccomp` CLI flag.
 
 ```bash
 # Disable seccomp
-gyrseek ... --danger-disable-seccomp \
-./target/release/gyrseek npm install lodash
+./target/release/gyrseek npm install lodash --danger-disable-seccomp
 ```
 
 ### Profile behavior
 
-The profile is intentionally conservative: tracing compatibility comes first. It denies a focused set of high-risk kernel syscalls while leaving networking syscalls available so DNS, apt, and package-manager registry access keep working inside the sandbox.
+The profile is intentionally conservative: tracing compatibility comes first. It denies a focused set of high-risk kernel syscalls while leaving outbound client networking syscalls (`socket`, `connect`, `sendto`, `recvfrom`) available so DNS, apt, and package-manager registry access keep working inside the sandbox. Inbound `listen`, `accept` and `accept4` are denied.
 
 An early version of the profile denied core networking syscalls (`socket`, `connect`, `sendto`, `recvfrom`), which broke DNS and apt. This was fixed so the profile is compatible with package-manager probe workflows.
 
 ### Status output
 
 - Enabled: `ℹ️ [gyrseek] Seccomp profile enabled: seccomp.gyrseek-tracing.json (embedded)`
-- Disabled: `⚠️ [gyrseek] Seccomp profile not in use. Remove --danger-disable-seccomp to enable it.`
+- Disabled: `⚠️ [gyrseek] Embedded seccomp profile disabled via --danger-disable-seccomp. Omit the flag to re-enable.`
 
 ### Platform note
 
@@ -100,7 +100,6 @@ Install `apparmor-utils` on Linux hosts:
 
 ```bash
 sudo apt-get install apparmor-utils   # Debian/Ubuntu
-sudo dnf install apparmor-utils       # Fedora
 ```
 
 Build a prebuilt scanner image (required for AppArmor to work during scans):
@@ -121,12 +120,12 @@ GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
 ### Status output
 
 - Loaded: `ℹ️ [gyrseek] AppArmor profile loaded: gyrseek-tracing (embedded)`
-- Not available: `⚠️ [gyrseek] AppArmor profile not available: {apparmor_parser stderr}. Container uses Docker's default AppArmor profile. Set GYRSEEK_DOCKER_APPARMOR_PROFILE=false to silence this warning.`
+- Not available: `⚠️ [gyrseek] AppArmor profile not available: {apparmor_parser stderr}. Container will use Docker's default AppArmor profile. Set GYRSEEK_DOCKER_APPARMOR_PROFILE=false to silence this warning.`
 - Disabled: `ℹ️ [gyrseek] AppArmor profile disabled via GYRSEEK_DOCKER_APPARMOR_PROFILE=false`
 
 ### Platform note
 
-Custom AppArmor profiles require native Linux host control over AppArmor profile loading (`apparmor-utils` package). On macOS Docker Desktop, AppArmor is not available — gyrseek emits a warning and falls back to Docker's default profile.
+Custom AppArmor profiles require native Linux host control over AppArmor profile loading (`apparmor-utils` package). On macOS Docker Desktop, AppArmor is not available — gyrseek prints no AppArmor status line there, and no AppArmor profile (embedded or Docker's default) applies because the VM kernel lacks the AppArmor LSM.
 
 ### Recommendation
 
@@ -190,8 +189,8 @@ partly addresses and a future egress proxy would (OPEN_FINDINGS #412) — not fr
 
 | Mode | Linux host/VM | macOS (Docker Desktop) | Windows (WSL2) | Windows (native) |
 |---|---|---|---|---|
-| `docker` | Supported | Supported | Supported — run gyrseek inside a WSL2 distro | Not supported |
-| `host` | Supported (requires `strace`) | **Not supported** (`strace` is Linux-only) | Supported (requires `strace`) | Not supported |
+| Docker (default) | Supported | Supported | Supported — run gyrseek inside a WSL2 distro | Not supported |
+| Host (`--no-sandbox`) | Supported (requires `strace`) | **Not supported** (`strace` is Linux-only) | Supported (requires `strace`) | Not supported |
 
 `host` mode on macOS cannot work: `HostRunner` invokes `strace`, which has no macOS build. The nearest
 equivalent, `dtruss`, is a different tool and SIP blocks it against system binaries.
@@ -208,7 +207,7 @@ equivalent, `dtruss`, is a different tool and SIP blocks it against system binar
 - **AppArmor needs a native Linux host.** Loading the profile requires `apparmor_parser` to install it
   into the kernel that runs the container. On macOS that binary does not exist on the host, and Docker
   Desktop's LinuxKit kernel does not carry the AppArmor LSM — so this is a permanent platform
-  limitation, not a setup problem. gyrseek warns once and falls back to Docker's default profile.
+  limitation, not a setup problem. gyrseek prints no AppArmor status line there, and no AppArmor profile (embedded or Docker's default) applies.
 - **WSL2 is a Linux target, not a Windows one.** gyrseek built and run inside a WSL2 distro reports
   `linux` for `std::env::consts::OS`, so the AppArmor path is attempted rather than skipped. The WSL
   kernel does ship AppArmor support, but it must be an active LSM (kernel cmdline `lsm=`/`security=`,
@@ -223,6 +222,29 @@ ls /sys/kernel/security/apparmor/.load             # must exist to load profiles
 
 - **Native Windows is not supported** in any mode: Docker mode needs WSL2, and `host` mode has no
   `strace`.
+
+## macOS vs Linux (Docker mode)
+
+Docker mode is not "weaker on macOS because it lacks seccomp and AppArmor". Seccomp applies on both. AppArmor is off by default on both, and unavailable on macOS. The real differences are trace integrity, how much has been tested, and one extra isolation layer on macOS. The last column says how well each statement is established: **measured** (observed with the real `docker run` flags), **documented** (follows from how the layer works) or **not tested**.
+
+| Aspect | Native Linux | macOS (Docker Desktop) | Basis |
+|---|---|---|---|
+| Seccomp profile (blocks `io_uring`) | Enforced by the host kernel | Enforced by Docker Desktop's Linux VM kernel | Documented |
+| AppArmor | Opt-in (`GYRSEEK_DOCKER_APPARMOR_PROFILE=true`), needs `apparmor-utils` | Unavailable (no host `apparmor_parser`, VM kernel has no AppArmor LSM). Not a coverage gap, since it is off by default on Linux too | Documented |
+| Payload privileges | Unprivileged user, no capabilities, `no-new-privileges` | Same (payload `CapEff` 0, no `docker.sock`) | Measured on macOS, same flags on Linux |
+| Trace integrity | Root-owned trace on the `/out` bind mount should hold, since Linux enforces the ownership | **Not guaranteed.** The payload appended to and deleted the root-owned trace, and the file was gone on the host (OPEN_FINDINGS #411) | Measured on macOS, **not tested** on Linux |
+| Container escape blast radius | The container shares the host kernel, so an escape lands on the host | An escape lands in Docker Desktop's VM first, which is an extra boundary | Documented, not measured |
+| `noexec` on `/work` and `/tmp` | Same | Works there, but a dropped binary can still run from `/home/gyrseek` or `/var/tmp` | Measured on macOS |
+| Network egress during the probe | Open | Open. Private-address reach is unmeasured on both (OPEN_FINDINGS #412) | Measured (open), not tested (private addresses) |
+| Probe time limit | None (OPEN_FINDINGS #413) | None (OPEN_FINDINGS #413) | Documented |
+| CI coverage | Yes (`ubuntu-latest` jobs) | None. GitHub-hosted macOS runners cannot run Docker. Tested by hand only | Documented |
+
+What this means in practice:
+
+- Treat the macOS trace as less trustworthy than the Linux one until #411 is fixed. A malicious package that knows about gyrseek could hide earlier events.
+- Containment of the host is at least as good on macOS as on Linux, probably better, because of the VM.
+- Neither platform restricts what the payload can reach over the network during the probe.
+- WSL2 is a Linux target for gyrseek and has not been tested (see "Hardening availability per platform").
 
 ## Prebuilt scanner images
 
@@ -315,7 +337,7 @@ Test with and without seccomp:
 
 ```bash
 just test-npm
-just test-npm # note: you would need to pass --danger-disable-seccomp to gyrseek inside the test
+just test-npm --danger-disable-seccomp
 ```
 
 Expected: no widespread "empty trace" failures; normal fail-closed behavior only for genuine findings.
@@ -345,7 +367,7 @@ Expected: scan results and behavior are identical with or without AppArmor.
 
 ### Step 5a: Troubleshooting
 
-- **macOS:** AppArmor is unavailable in Docker Desktop — gyrseek warns and falls back; no action needed.
+- **macOS:** AppArmor is unavailable in Docker Desktop — nothing is printed and no AppArmor profile applies (seccomp still does); no action needed.
 - **Linux:** If scans fail with "AppArmor profile not available", install `apparmor-utils` and verify the kernel module: `cat /sys/module/apparmor/parameters/enabled` should print `Y`.
 
 ## Regression signals
@@ -366,8 +388,10 @@ If scans regress:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `GYRSEEK_SANDBOX` | `docker` | Sandbox mode: `docker` or `host`. |
-
+| `GYRSEEK_CONFIG` | `gyrseek.yaml` | Path to the policy file (overridden by `--config`/`-c`). |
+| `GYRSEEK_MEM_LIMIT` | `2g` | Container `--memory` and the size of the `/work` tmpfs. |
+| `GYRSEEK_MAX_PROCESSES` | `256` | Container `--pids-limit`. `GYRSEEK_PIDS_LIMIT` is accepted as a fallback. |
+| `GYRSEEK_DOCKER_SECCOMP_PROFILE` | — | Deprecated and ignored (a warning is printed). Use `--danger-disable-seccomp`. |
 | `GYRSEEK_DOCKER_APPARMOR_PROFILE` | `false` | Boolean toggle for embedded AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on Linux. Defaults to `false` because prerequisites are not always met. |
 | `GYRSEEK_PREBUILT_SCANNER_IMAGES` | `false` | Enable prebuilt fast path for all managers. |
 | `GYRSEEK_NPM_SCANNER_PREBUILT` | `false` | Prebuilt override for npm/pnpm. |
@@ -379,5 +403,5 @@ If scans regress:
 
 - **Seccomp profile**: `src/sandbox.rs` (`EMBEDDED_SECCOMP_PROFILE_JSON`)
 - **AppArmor profile**: `src/sandbox.rs` (`EMBEDDED_APPARMOR_PROFILE_TEXT`)
-- **Docker runner**: `src/sandbox.rs` (`build_docker_command`, `trace_install_docker_matrix`)
-- **seccomp toggle tests**: `src/sandbox.rs` (`docker_seccomp_profile_content`, `docker_apparmor_profile_content`, etc.)
+- **Docker runner**: `src/sandbox.rs` (`build_docker_run_args`, `trace_install_docker_matrix`)
+- **seccomp toggle tests**: `src/sandbox.rs` (`docker_args_adds_seccomp_profile_by_default`, `docker_args_disables_seccomp_when_danger_flag_true`, `embedded_seccomp_profile_keeps_networking_available`, `embedded_apparmor_profile_*`, `apparmor_env_var_default_false`, etc.)
