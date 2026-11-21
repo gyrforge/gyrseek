@@ -31,17 +31,17 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
 - Behavior capture:
    - trace_sandbox_install_matrix runs via SandboxRunner backend and captures, per package-version: connection IPs (IPv4 via inet_addr and IPv6 via inet_pton, normalized by extract_connection_ips), install-time git clone command signatures, and process-execution signatures (extract_process_exec_signatures: `exe|arg1|...` for every execve). Sandbox-internal commands (the install probe itself, interpreter discovery) are excluded via `is_harness_command` so version-specific command strings do not cause false positives.
   - extract_connection_ips normalizes via normalize_ip_string (canonical IPv6 plus IPv4-mapped IPv6 `::ffff:1.2.3.4` collapsed to bare IPv4 `1.2.3.4`) and drops sandbox-local addresses via is_sandbox_local_ip — loopback, link-local (`fe80::/10`, `169.254/16`), and private/RFC1918 ranges (including the Docker bridge `172.17/16` and Docker Desktop gateway `192.168.65/24`). This happens at extraction, before the baseline diff and on both current and baseline traces, so the container's own plumbing (gateway, DNS resolver) never registers as a "new" endpoint. The cloud instance metadata endpoint `169.254.169.254` is deliberately exempt (kept) because a package reaching for it is a real SSRF/credential-theft signal.
-  - strace runs with `-s 4096 -v` (no argv/address truncation) and `-u <scanner-user>` so the traced install payload runs unprivileged while strace and its root-owned /out trace logs remain tamper-resistant.
+  - In Docker mode strace runs with `-s 4096 -v -xx` (no argv/address truncation, hex-escaped strings) and `-u <scanner-user>` so the traced install payload runs unprivileged while strace and its root-owned /out trace logs remain tamper-resistant (on native Linux; see OPEN_FINDINGS #411 for macOS Docker Desktop). Host mode runs plain `strace -f -e trace=...` without these flags, so it truncates argv at 32 bytes.
   - execve argv parsing (extract_process_exec_signatures / git-clone signature extraction) uses a balanced-bracket-aware regex so arguments containing `]` (e.g. PEP 508 extras `requests[security]`, paths like `script[obf].js`) are captured intact rather than truncated at the first `]`.
   - The Docker container is run with `--cap-add SYS_PTRACE`: strace runs as root but attaches to the install running as the unprivileged scanner user, and cross-UID ptrace requires CAP_SYS_PTRACE (not in Docker's default capability set). The capability is scoped to the container PID namespace and cannot trace host processes.
   - strace's own stderr is captured to a per-probe `/out/gyrseek_err_N.log` (not `>/dev/null 2>&1`); `|| true` is retained only so a single failing install does not abort sibling probes. A genuine attach failure produces a blank trace log, which the reader turns into a hard error (fail closed) carrying the captured stderr.
   - Docker backend can execute probe matrices (multiple packages with their current and baseline versions) in one container session.
-  - `build_runner_from_env` selects backend mode (`docker` default, or `host` — no isolation, detection only).
+  - `build_runner_from_env` selects backend mode (`docker` default, or `host` — no isolation, detection only — selected only by the `--no-sandbox` flag).
 - Anomaly decision:
    - Packages listed in `internal_package_exemptions` are skipped entirely before the registry fetch and sandbox install (no history lookup, no probe, no diff) and forwarded unscanned at their requested version. This is for first-party/internal packages on a private index (e.g. Nexus) that the public-registry lookups cannot resolve, where scanning only produces `(n/a)`-baseline noise. Distinct from `new_package_exemptions`, which still fetches and probes and only relaxes the under-2-baselines block.
    - `new_package_exemptions` is a per-package map (`pkg: "version"`) that exempts a specific pinned version from the insufficient-baselines block. The `List` variant in the untagged `NewPkgExemptions` enum now returns `Err(serde::de::Error::custom(...))` with a clear message telling the user to migrate to map format. The YAML config parse fails with a hard error that includes the config file path and the migration instruction. (Note: an empty list `[]` is explicitly handled as an exception and silently maps to no exemptions without error). Empty version values in maps are rejected with a warning at parse time. The exemption only matches the resolved `v_curr` — the former `tgt_version` comparison was removed to prevent a bypass where `"latest"` as an exemption value matched unpinned installs (`new_package_exemption_tgt_version_no_longer_checked` regression test).
    - find_new_connections_domain_aware resolves each IP via FCrDNS and diffs at the domain level rather than the IP level. If a current IP resolves to a domain already seen in baseline traffic, it is silently discarded (benign CDN edge rotation). Unresolvable IPs fall back to plain IP membership so the diff stays fail-closed for genuinely new or spoofed endpoints.
-   - Unresolvable IPs also get a second chance via the **DNS interceptor**: the strace trace is scanned for `recvfrom` and `read` syscalls to port 53 (DNS) across both IPv4 (`sin_port`) and IPv6 (`sin6_port`) sockets, and raw response bytes are parsed by a wire-format DNS parser (`extract_dns_map` / `parse_dns_response` / `decode_dns_name` in `scanning.rs`). If the current IP appears in the container's observed DNS map under a domain that was also seen in baseline DNS traces, host-side `lookup_host` re-verifies the binding before trusting it. This handles CDN edge rotations that lack PTR records (e.g. Fastly, Cloudflare) without any hardcoded domain allowlist. It skips short TCP reads (< 3 bytes) without crashing, but lacks full TCP reassembly (fragmented responses are dropped).
+   - Unresolvable IPs also get a second chance via the **DNS interceptor**: the strace trace is scanned for `recvfrom` (UDP) and `read`/`recvmsg` (TCP) syscalls to port 53 (DNS) across both IPv4 (`sin_port`) and IPv6 (`sin6_port`) sockets, and raw response bytes are parsed by a wire-format DNS parser (`extract_dns_map` / `parse_dns_response` / `decode_dns_name` in `scanning.rs`). If the current IP appears in the container's observed DNS map under a domain that was also seen in baseline DNS traces, host-side `lookup_host` re-verifies the binding before trusting it. This handles CDN edge rotations that lack PTR records (e.g. Fastly, Cloudflare) without any hardcoded domain allowlist. It skips short TCP reads (< 3 bytes) without crashing, but lacks full TCP reassembly (fragmented responses are dropped).
    - **Two-layer anti-spoofing:** The domain→IP binding is verified twice. First, FCrDNS confirms the PTR record's hostname resolves forward back to the original IP (attackers who set a fake PTR on their C2 cannot bypass because the allowlisted domain's real DNS doesn't point to their C2). Second, when FCrDNS fails (no PTR), the DNS interceptor fallback re-verifies the binding on the **host** via `std::net::lookup_host` — container-side DNS poisoning cannot influence the host's resolver, so a forged DNS response in the strace trace is rejected. An attacker would need to compromise the host's DNS resolver to bypass both layers.
    - **Circular compression pointer protection:** `decode_dns_name` limits compression pointer hops to 5. RFC 1035 names are bounded at 255 wire-format bytes; each pointer consumes 2 bytes and saves at least 1 byte versus the literal label. A 5-hop ceiling therefore accommodates every legitimate name — the worst-case nested subdomain (e.g. `a.b.c.d.e.f.g.pypi.org`) typically needs only 1–2 hops to compress a shared suffix. The limit prevents a maliciously crafted self-referencing pointer (e.g. `\xc0\x00` at offset 0 targeting offset 0) from hanging the scanner indefinitely (DoS). When exceeded, the parser returns `None`, and the diff falls back to plain IP membership (fail-closed).
   - The `ip_allowlist` and `domain_allowlist` support a mixed **global / per-package** syntax: bare entries (`- "1.2.3.4"`) apply to all packages; map entries (`- pkg: ["1.2.3.4"]`) scope the entry to one package. The effective allowlist for a scan is global ∪ per-package; per-package entries never reduce global protection. The `ip_allowlist` matcher compares on the IPv4-mapped-collapsed canonical form (`::ffff:1.2.3.4` → `1.2.3.4`), so equivalent IPv6 and IPv4 forms match interchangeably.
@@ -61,7 +61,7 @@ gyrseek is a command-wrapper CLI that evaluates dependency installation network 
 For each scanned package:
 0. If the package is in `internal_package_exemptions`, skip it entirely (no fetch/probe/diff) and allow it through at the requested version.
 1. Determine current target version (explicit, or `latest` resolved via semantic ordering).
-2. Baseline candidates are fetched from the registry and filtered by a configurable age gate (`min_baseline_age_hours`, default 72). Any per-package value below the hard floor of 24 hours (`HARD_MINIMUM_AGE_HOURS`) is silently clamped. Baseline overrides let the operator pin specific versions; overrides younger than 24h are rejected with a warning in the production path (enforced by `check_override_ages` at `src/scanning.rs`).
+2. Baseline candidates are fetched from the registry and filtered by a configurable age gate (`min_baseline_age_hours`, default 72). Any per-package value below the hard floor of 24 hours (`HARD_MINIMUM_AGE_HOURS`) is clamped with a warning. Baseline overrides let the operator pin specific versions; overrides younger than 24h are rejected with a warning in the production path (enforced by `check_override_ages` at `src/scanning.rs`).
 3. Collect behavior signals for current and baseline installs (network endpoints, install-time git clone signatures, and process-execution signatures). Network endpoints are normalized and have sandbox-local addresses (loopback/link-local/private, except the cloud metadata IP) filtered at capture time.
 4. Compute set differences current minus baseline for each signal type.
 5. Apply allowlists (`ip_allowlist`, `domain_allowlist`, `git_clone_allowlist`, `process_exec_allowlist`, `artifact_allowlist`, `sensitive_file_access_allowlist`). Each allowlist computes an effective set of global ∪ per-package entries for the scanned package.
@@ -72,7 +72,7 @@ gyrseek fails closed in the following situations:
 - Unrecognized manager: the first argument is not one of `pip`, `pip3`, `uv`, `poetry`, `npm`, `pnpm`. Any other value (e.g. `ls`, `curl`, `sh`) exits 1 with a diagnostic. Previously, unrecognized managers were silently forwarded unscanned, which violated the tool's "I scanned this before forwarding it" contract.
 - Package detection is expected for a supported install or sync flow but no package entries are detected.
 - Trace is empty or missing (strace produced no output — e.g. ptrace blocked).
-- Sandbox initialization fails.
+- Sandbox initialization fails, including the Docker preflight (`docker_preflight`): a missing `docker` CLI, a stopped daemon, or no permission on the Docker socket each exit 1 with a cause-specific message before any registry lookup.
 
 ## Docker Sandbox Security
 
@@ -89,7 +89,7 @@ See [`docs/DOCKER_SECURITY.md`](DOCKER_SECURITY.md) for the full reference. In b
 - Direct runtime interception for standalone `git clone ...` commands is not enabled yet.
 - Docker mode assumes Docker CLI availability; host mode assumes strace availability and provides no isolation (packages run directly on the host; gyrseek can only detect, not contain, and the trace has no integrity protection); run it only in very isolated, disposable, secret-free environments. The unprivileged-payload (`strace -u`) trace-integrity protection applies to the Docker backend. Docker mode requires `CAP_SYS_PTRACE` (added via `--cap-add`) for cross-UID tracing; environments that strip it (some K8s/seccomp setups) will fail closed rather than pass silently.
 - Trace extraction still assumes current strace output patterns.
-- Behavioral signals (network, git clone, process execution) are only captured for what executes during the sandbox install. Payloads that fire outside the install window (e.g. the PyPI `*-setup.pth` startup-execution variant) may not detonate during the scan. Post-install artifact scan (file inventory, classifier for binary/suspicious/.pth/unexpected runtime/large files) partially mitigates this gap.
+- Behavioral signals (network, git clone, process execution) are only captured for what executes during the sandbox install. Payloads that fire outside the install window (e.g. the PyPI `*-setup.pth` startup-execution variant) may not detonate during the scan. The post-install artifact scan runs in Docker mode only; host mode (`--no-sandbox`) performs no artifact scan. Post-install artifact scan (file inventory, classifier for binary/suspicious/.pth/unexpected runtime/large files) partially mitigates this gap.
 - Process-execution detection captures all executables by default (least-privilege). Sandbox-internal commands (install probes, interpreter discovery) are automatically excluded via `is_harness_command` to keep the diff clean. `process_exec_allowlist` is the user-facing escape hatch for expected new behavior.
 - Environment variable reads (`getenv`) are invisible to `strace` as they do not trigger syscalls. However, `gyrseek` traces `open` and `openat` syscalls to detect attempts to read highly sensitive credential or configuration files (e.g., `~/.aws/credentials`, `~/.npmrc`, `.env`). Exfiltrating an environment variable is only detected if it surfaces as a new public network endpoint or a newly executed program (e.g., `curl`) that the baselines did not show. It is not detected when the package sends the value from its own process to a loopback, link-local or private address (these are filtered out as sandbox-local, except the cloud metadata address `169.254.169.254`), or to an endpoint that already appears in the baseline traffic.
 - Egress is currently unrestricted for package manager registry access in Docker mode; future phases will add optional egress allowlists/proxy controls.
@@ -99,14 +99,18 @@ See [`docs/DOCKER_SECURITY.md`](DOCKER_SECURITY.md) for the full reference. In b
 - src/lib.rs: routing and enforcement orchestration (including the `--version`/`-V` short-circuit); inline tests for GyrSeek::parse_package_details, parse_global_options edge cases, and config parsing (new_package_exemptions, internal_package_exemptions)
 - src/parsing.rs: command, lockfile, and requirements parsing; inline tests for all parsers, rewrite_args_with_pinned_versions (including the `latest`-pin guard for skipped internal packages), PEP 508 extras, local-source exclusions, npm non-registry filtering, uv lock upgrade arg parsing
 - src/scanning.rs: registry history lookup and behavior scanning; inline tests for version ordering, trace extraction (sandbox-local IP filtering, `::ffff:` collapse, metadata-IP preserved), anomaly detection, git-clone and watched-process diffing, FCrDNS, allowlist matching (including IPv4-mapped/bare equivalence), internal-package-exemption skip, missing-baseline fail-closed
-- src/sandbox.rs: sandbox backend abstraction and mode selection; inline seccomp profile (embedded JSON, materialized at runtime); inline tests for docker args, strace flags, SYS_PTRACE, seccomp toggle, strace-stderr capture, network isolation, sandbox constraints enforcement
+- src/sandbox.rs: sandbox backends (`DockerRunner`, `HostRunner`), `build_runner_from_env` mode selection (host mode only via `--no-sandbox`), `docker_preflight`, matrix/single probe scripts and scanner image config; inline seccomp profile (embedded JSON, materialized at runtime); inline tests for docker args, strace flags, SYS_PTRACE, seccomp toggle, strace-stderr capture, seccomp syscall enforcement
 - tests/cli_burst_exit_tests.rs: release burst and minimum release age CLI exit-code tests (spawn binary)
 - tests/forward_fail_closed_tests.rs: fail-closed forwarding and host exit-status propagation (spawn binary; uses a fake `uv venv` passthrough vehicle)
 - tests/lock_routing_tests.rs: routing checks that bare `poetry lock` and `uv lock` reach the lockfile-scan branch, and that `uv venv` stays an unscanned passthrough (spawn binary)
+- tests/pnpm_routing_tests.rs: `pnpm add` and `pnpm install` package.json fallback reach the package-scan branch without Docker or network (spawn binary)
+- tests/sandbox_startup_exit_tests.rs: sandbox startup failures (Docker missing or daemon down, an unscanned passthrough never initializing the sandbox, the retired `GYRSEEK_SANDBOX` variable being ignored) exit 1 with a cause-specific message (spawn binary with a fake `docker`)
 - tests/version_flag_tests.rs: `--version`/`-V` prints the crate version and exits 0, and a forwarded command's own `--version` is not intercepted (spawn binary)
 
 ## CI/CD Pipeline Architecture
 The CI pipeline (`ci.yml`) runs on `pull_request` and push events with workflow-level `contents: read` permissions (with a scoped job-level `checks: write` grant restricted strictly to the `cargo-audit` job). It executes formatting, static analysis (yamllint, hadolint, shellcheck, clippy), unit/integration test suites, dependency advisory audits (`cargo-audit`), and containerized runtime test matrices. Automated AI code reviews are handled externally via CodeRabbit (`.coderabbit.yaml`).
+
+**Rule:** Never add write permissions (like `pull-requests: write` or `contents: write`) to `ci.yml`. Any future automation requiring write access must be placed in a separate `workflow_run` triggered YAML file to prevent token exfiltration.
 
 ## Threat Model & Accepted Risks
 Based on our static analysis and architectural reviews, the following risks are explicitly accepted by design:
@@ -123,3 +127,70 @@ AI code reviews are delegated to CodeRabbit (`.coderabbit.yaml`). Review feedbac
 
 ### 4. DNS Exfiltration Boundaries
 - **DNS Query Exfiltration:** The DNS interceptor parses DNS *responses* (from the strace `recvfrom`), not DNS queries. An attacker encoding secrets into DNS query names sent to an allowed domain bypasses the network diff. This is explicitly accepted as out-of-scope for the install-time behavioral detection.
+
+## Development
+
+### Local Setup
+1. Install Rust toolchain.
+2. Install just.
+3. Ensure required package managers are available for your target flows: uv, pip or pip3, poetry, npm, pnpm.
+4. Ensure Docker is installed and running (the only sandbox; see the README prerequisites).
+5. If using host mode (`--no-sandbox`), ensure strace is available in PATH.
+
+### Agent Portability Symlinks
+
+The repo uses symlinks so multiple AI coding tools share the same skills and instructions without duplication:
+
+| Symlink | Target | Purpose |
+|---|---|---|
+| `.claude/skills` | `../.agents/skills` | Claude Code skill discovery |
+| `.github/skills` | `../.agents/skills` | GitHub Copilot skill discovery |
+| `CLAUDE.md` | `AGENTS.md` | Claude Code instruction alias (looks for `CLAUDE.md`, not `AGENTS.md`) |
+
+New skills added under `.agents/skills/` are automatically picked up by all tools. Because `CLAUDE.md` → `AGENTS.md`, any instruction changes in `AGENTS.md` are instantly reflected for Claude Code with no extra step. If you add support for another agent (Cursor, Windsurf, etc.), create a similar symlink here instead of copying files.
+
+### Build and Test
+- Build debug: cargo build
+- Build release: just build
+- Install locally: just install
+- Uninstall locally: just uninstall
+- Run tests: just test (or cargo test directly)
+- Run lint checks: just lint (cargo check + clippy + format check)
+- Format code: just fmt
+- Run inline tests for one module: cargo test --lib sandbox / cargo test --lib scanning / cargo test --lib parsing / cargo test --lib
+  - `cargo test --lib sandbox` includes docker arg construction, seccomp/apparmor profile toggle, profile content, and strace setup tests
+- Run CLI integration tests (spawn binary): cargo test --test cli_burst_exit_tests / cargo test --test forward_fail_closed_tests / cargo test --test lock_routing_tests / cargo test --test pnpm_routing_tests / cargo test --test version_flag_tests / cargo test --test sandbox_startup_exit_tests
+
+### Adding a New Supported Command
+1. Add command detection in run routing logic.
+2. Decide if command is single-target or bulk-target.
+3. Reuse or extend parser helpers.
+4. Reuse scan_package_versions (single) or scan_packages_versions (bulk) for resolved targets; both take a single &PolicyConfig and return a ScanReport per target (allowed + resolved_version).
+5. For explicit unpinned install targets, forward via forward_pinned_command(&pins) using the resolved_version values so the host installs exactly what was scanned; lockfile/manifest-driven flows forward verbatim with forward_original_command.
+6. Enforce fail-closed when detection is expected but unresolved.
+7. Add parser tests and behavior tests.
+
+### Test Locations
+- Follow Rust convention: unit tests for private/internal functions live inline in the module's `#[cfg(test)] mod tests` (they can see private items); integration tests that exercise the public API or need a real subprocess live under tests/.
+- Pure-function unit tests live inline in their src/ module (version ordering, trace extraction including sandbox-local IP filtering / `::ffff:` collapse / metadata-IP preservation, FCrDNS, bracketed-argv parsing, docker arg construction, SYS_PTRACE, PEP 508 extras stripping, poetry/uv local-source exclusion, npm/pnpm non-registry filtering, git-clone allowlist matching, IP allowlist IPv4-mapped/bare equivalence, internal-package-exemption skip, missing-baseline fail-closed, uv lock upgrade arg edge cases, harness-command filtering via `is_harness_command`); keep these alongside the code they cover.
+- Anything that can only be observed from outside the process belongs in tests/ — e.g. host exit-status propagation (`std::process::exit`) in tests/forward_fail_closed_tests.rs, command routing (bare `poetry lock`/`uv lock` and pnpm scan routing) in tests/lock_routing_tests.rs and tests/pnpm_routing_tests.rs, and the `--version` short-circuit in tests/version_flag_tests.rs, because these are only visible to a spawning parent.
+
+### Required Change Hygiene
+After every repository change:
+1. Update AGENTS.md (repository memory).
+2. Update README.md (user-facing docs).
+3. Update docs/ files (ARCHITECTURE.md, ROADMAP.md, OPEN_FINDINGS.md, FIXED_FINDINGS.md, WONT_FIX_FINDINGS.md, DOCKER_SECURITY.md) if architecture or workflow changed.
+4. Run `graphify update .` to refresh graph artifacts (or `graphify update . --force` if guard warns).
+5. Run `just test` before finishing.
+6. Run `just lint` — cargo check, formatting, and clippy.
+
+### Practical Review Checklist
+- Command path is correctly recognized.
+- Package extraction is deterministic.
+- Unknown or ambiguous input does not silently bypass protections.
+- Bulk operations scan all intended package targets.
+- Non-target commands still passthrough when appropriate.
+- Tests cover positive and negative parse cases.
+- Sandbox hardening (seccomp, SYS_PTRACE) does not break trace capture or registry access.
+- Empty/whitespace traces fail closed (not silently passed).
+- strace capability failures are reported in captured stderr logs.

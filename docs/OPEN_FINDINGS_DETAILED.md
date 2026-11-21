@@ -752,18 +752,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 23 — Medium | `sandbox.rs:191` | ⚠️ Open
-
-**Summary:** Host mode selected silently — no stderr warning that sandbox protection is disabled.
-
-**Root cause:** When `GYRSEEK_SANDBOX=host`, the sandbox mode is selected without any visible warning to the operator. A misconfiguration or accidental environment variable inheritance can leave users unprotected without knowing it.
-
-**Failure scenario:** A developer running gyrseek in host mode (e.g. via a CI environment that sets `GYRSEEK_SANDBOX=host`) has no indication that the sandbox is disabled and that a malicious package can execute on the host.
-
-**Fix direction:** Emit a prominent stderr warning when host mode is selected, ideally printing to stderr before any scan begins.
-
----
-
 ### Finding 256 — Low | `scanning.rs:511` | ⚠️ Open
 
 **Summary:** UDP DNS regex only matches `recvfrom`; `recvmsg()` used by glibc ≥2.40, musl, and async Rust resolvers produces no domain→IP mapping.
@@ -1027,18 +1015,6 @@ if next.starts_with('-') {
 **Failure scenario:** Running `cargo test` in an offline CI environment (no internet access) causes `fetch_history_with_baselines` to hang or fail with a connection error rather than a 404, causing the test to panic with an unexpected error rather than the expected `insufficient_baselines` outcome.
 
 **Fix direction:** Intercept the registry fetch using the existing test env var mechanism (`GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS=""` or similar) to simulate an empty response without a real network call, or add `GYRSEEK_TEST_EMPTY_REGISTRY` to `active_test_env_vars()` and handle it in `fetch_history_with_baselines`.
-
----
-
-### Finding 291 — Low | `AGENTS.md:186` | ⚠️ Open
-
-**Summary:** AGENTS.md instructs agents to "keep the summary tables synced across both the main and detailed files" but the detailed files no longer have summary tables.
-
-**Root cause:** The AGENTS.md post-change policy at line 186 says: "Remember to keep the summary tables synced across both the main and detailed files." The summary tables in FIXED_FINDINGS_DETAILED.md and OPEN_FINDINGS_DETAILED.md were removed in a prior PR. The instruction now refers to tables that do not exist, potentially causing agents to attempt to maintain phantom tables or misunderstand the document structure.
-
-**Failure scenario:** An agent following AGENTS.md instructions adds a summary table row to OPEN_FINDINGS_DETAILED.md (which has no such table), creating an inconsistency in the detailed file format.
-
-**Fix direction:** Update AGENTS.md line 186 to remove the reference to summary tables in detailed files, clarifying that only the main `*_FINDINGS.md` files have summary tables.
 
 ---
 

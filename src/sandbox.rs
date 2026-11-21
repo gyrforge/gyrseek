@@ -189,34 +189,24 @@ pub(crate) trait SandboxRunner {
 
 pub(crate) fn build_runner_from_env(
     danger_disable_seccomp: bool,
+    no_sandbox: bool,
 ) -> Result<Box<dyn SandboxRunner>, String> {
-    let mode = std::env::var("GYRSEEK_SANDBOX").unwrap_or_else(|_| "docker".to_string());
-
-    let runner: Result<Box<dyn SandboxRunner>, String> = match mode.as_str() {
-        "docker" => {
-            docker_preflight("docker", std::env::consts::OS)?;
-            Ok(Box::new(DockerRunner {
-                danger_disable_seccomp,
-            }))
+    let runner: Result<Box<dyn SandboxRunner>, String> = if no_sandbox {
+        eprintln!(
+            "⚠️ [gyrseek] CRITICAL WARNING: Running in HOST mode (--no-sandbox). Container isolation is completely INACTIVE: packages (including the version being vetted) execute directly on your machine with your credentials and environment, and gyrseek can only detect, not prevent!"
+        );
+        if danger_disable_seccomp {
+            eprintln!("⚠️ [gyrseek] Warning: --danger-disable-seccomp has no effect in host mode.");
         }
-        "host" => {
-            eprintln!(
-                "⚠️ [gyrseek] CRITICAL WARNING: Running in HOST mode (GYRSEEK_SANDBOX=host). Container isolation is completely INACTIVE: packages (including the version being vetted) execute directly on your machine with your credentials and environment, and gyrseek can only detect, not prevent!"
-            );
-            if danger_disable_seccomp {
-                eprintln!(
-                    "⚠️ [gyrseek] Warning: --danger-disable-seccomp has no effect in host mode."
-                );
-            }
-            Ok(Box::new(HostRunner))
-        }
-        _ => Err(format!(
-            "Unsupported GYRSEEK_SANDBOX mode '{}'. Supported values: docker, host",
-            mode
-        )),
+        Ok(Box::new(HostRunner))
+    } else {
+        docker_preflight("docker", std::env::consts::OS)?;
+        Ok(Box::new(DockerRunner {
+            danger_disable_seccomp,
+        }))
     };
 
-    if runner.is_ok() && mode != "host" {
+    if runner.is_ok() && !no_sandbox {
         announce_seccomp_status(danger_disable_seccomp);
         announce_apparmor_status();
     }
@@ -844,7 +834,7 @@ fn docker_preflight(program: &str, os: &str) -> Result<(), String> {
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(format!(
-                "Docker is not installed: `{program}` was not found on PATH. Install Docker (https://docs.docker.com/get-docker/) or pick another sandbox with GYRSEEK_SANDBOX"
+                "Docker is not installed: `{program}` was not found on PATH. Install Docker (https://docs.docker.com/get-docker/)"
             ));
         }
         Err(e) => return Err(format!("failed to run `{program}`: {e}")),
@@ -1578,7 +1568,7 @@ Stderr: {}",
         let err =
             super::docker_preflight("gyrseek-no-such-docker-binary", "macos").expect_err("missing");
         assert!(err.contains("not installed"), "{err}");
-        assert!(err.contains("GYRSEEK_SANDBOX"), "{err}");
+        assert!(err.contains("Install Docker"), "{err}");
     }
 
     #[test]
@@ -1599,13 +1589,7 @@ Stderr: {}",
     }
 
     #[test]
-    fn unsupported_sandbox_mode_lists_supported_modes() {
-        let _env_mode = SandboxEnvVarGuard::set("GYRSEEK_SANDBOX", "not-a-sandbox");
-
-        let err = build_runner_from_env(false).err().expect("should fail");
-        assert!(
-            err.contains("Supported values: docker, host"),
-            "error should list the supported modes: {err}"
-        );
+    fn no_sandbox_builds_the_host_runner_without_docker() {
+        assert!(build_runner_from_env(false, true).is_ok());
     }
 }
