@@ -34,3 +34,4 @@ graphify-out/*
 !graphify-out/graph.html
 
 __pycache__/
+.venv/

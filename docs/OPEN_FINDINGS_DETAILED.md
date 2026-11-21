@@ -4,7 +4,6 @@
 
 ## Detailed Findings
 
-
 ### Finding 14 — Low | `parsing.rs:880` | ⚠️ Open
 
 **Summary:** A test writes a temp requirements file but only removes it on the success path — assertion failures leave the file on disk.
@@ -16,7 +15,6 @@
 **Fix direction:** Use `tempfile::NamedTempFile` (already a project dependency), which removes the file automatically on drop.
 
 ---
-
 
 ### Finding 22 — Medium | `scanning.rs:188` | ⚠️ Open
 
@@ -40,7 +38,6 @@ v6.is_loopback() || is_link_local || is_ula
 ```
 
 ---
-
 
 ### Finding 24 — Medium | `sandbox.rs:555` | ⚠️ Open
 
@@ -156,8 +153,6 @@ if next.starts_with('-') {
 
 ---
 
-
-
 ### Finding 35 — High | `scanning.rs` | ⚠️ Open
 
 **Summary:** `close` and `execve` omitted from strace and `fd_table`.
@@ -269,7 +264,6 @@ if next.starts_with('-') {
 5. **Ledger LLM output re-injection loop**: The ledger accumulates raw LLM output (`consolidated_gyrseek_review.md`) which is re-injected as `<previous_review>` in the next run. A one-time compromise propagates to all subsequent PRs on the same branch.
 6. **Fallback-path poisoning**: When the consolidation LLM exits non-zero, raw untrusted reviewer inputs are concatenated directly into the ledger — bypassing LLM-mediated sanitization.
 7. **`WONT_FIX_FINDINGS.md` injected as accepted attack surface**: When injected unsanitized, the LLM is effectively told "these attacks are accepted — do not flag them."
-
 
 **Failure scenario:** 
 1. A PR author adds their vulnerability to `OPEN_FINDINGS.md`, and the consolidation LLM removes it from the report due to the deduplication instruction ("If an incoming finding is already documented… you MUST remove it entirely").
@@ -447,7 +441,6 @@ if next.starts_with('-') {
 
 ---
 
-
 ### Finding 61 — Medium | `sandbox.rs` | ⚠️ Open
 
 **Summary:** Performance regression from expanded strace trace set.
@@ -544,8 +537,6 @@ if next.starts_with('-') {
 
 ---
 
-
-
 ---
 
 ---
@@ -561,8 +552,6 @@ if next.starts_with('-') {
 **Fix direction:** Use `github.head_ref` which GitHub pre-validates, or sanitize the ref before passing to `gh`.
 
 ---
-
-
 
 ### Finding 78 — High | `.github/workflows/ci.yml:449` | ⚠️ Open
 
@@ -602,7 +591,6 @@ if next.starts_with('-') {
 
 ---
 
-
 ### Finding 84 — High | `scanning.rs` | ⚠️ Open
 
 **Summary:** Async cache race in baseline counting during concurrent `scan_with_cache` calls.
@@ -639,7 +627,6 @@ if next.starts_with('-') {
 
 ---
 
-
 ### Finding 29 — High | `scanning.rs` | ⚠️ Open
 
 **Summary:** `/proc/self/fd/N` evasion and regex anchor bypass via relative paths.
@@ -650,9 +637,7 @@ if next.starts_with('-') {
 
 **Fix direction:** Make `proc_fd_re` accept leading `../` components, or re-lex the path before checking.
 
-
 ---
-
 
 ---
 
@@ -741,12 +726,6 @@ if next.starts_with('-') {
 **Failure scenario:** Security auditors and developers reading the threat model are unaware of the highest-severity known bypass in the sandbox architecture.
 **Fix direction:** Add a dedicated accepted risk entry for the import-time execution gap in ARCHITECTURE.md.
 
-
-
-
-
-
-
 ---
 
 ### Finding 177 — Low | `*_DETAILED.md` | ⚠️ Open
@@ -758,7 +737,6 @@ if next.starts_with('-') {
 **Failure scenario:** Agents often fail to update the detailed file's summary table, causing checklist drift and contradictory documentation states.
 
 **Fix direction:** Consider a future consolidation where the detailed file omits the summary table entirely, leaving the main file as the single source of truth for the index.
-
 
 ---
 
@@ -1138,57 +1116,57 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 402 — Medium | `src/sandbox.rs` | ⚠️ Open
+### Finding 411 — High | `src/sandbox.rs`, `docs/DOCKER_SECURITY.md` | ⚠️ Open
 
-**Summary:** The nono `install_script` signal (see #398) reads each `node_modules/**/package.json` after the install command has finished. A lifecycle hook that runs during the install can rewrite or delete the `scripts` entry of its own installed manifest before the host-side scan reads it, so the hook never appears in the candidate's artifact set. nono has no exec events to fall back on.
+**Summary:** The Docker backend's trace-integrity design is that strace runs as root, writes `gyrseek_trace_N.log` into the bind-mounted `/out`, and the payload runs as an unprivileged user (`strace -u gyrseek`), so it cannot modify or delete the trace. On Docker Desktop for macOS that does not hold.
 
-**Failure scenario:** `node_modules/evil/package.json` declares `postinstall: node setup.js`; `setup.js` removes the hook from its own manifest. The scan sees a hook-free manifest and the diff passes. The same post-install-state limit applies to every artifact finding (a payload can delete itself); Docker is less exposed because its strace trace records the exec itself.
+**Evidence:** Using the flags `build_docker_run_args` builds (bridge network, `no-new-privileges`, `SYS_PTRACE`, limits, `--user root`, `noexec` tmpfs for `/tmp` and `/work`, `-v <dir>:/out`) and the pinned Python scanner image, a root-owned `0600` file on `/out` showed as `root:root 600` inside the container, yet the payload (uid 1000, `CapEff` 0) appended to it and deleted it; the file was gone on the host. This comes from the macOS file-sharing layer, not from Docker's configuration. Not tested on native Linux, where bind mounts enforce Unix permissions.
 
-**Fix direction (heavy):** Read the manifest from an immutable source: the tarball or packument in the probe's npm cache (`NPM_CONFIG_CACHE`), or a metadata fetch made before any script runs. This needs a second fetch path per manager and a tarball reader.
+**Failure scenario:** a malicious package truncates or rewrites its trace after its own early actions (the download, the credential read). strace keeps writing at its previous offset, so later events survive and earlier ones are lost or zeroed; deleting the file fails closed through the empty-trace check, but partial erasure does not.
 
----
-
-### Finding 399 — Medium | `src/sandbox.rs` | ⚠️ Open
-
-**Summary:** Under nono on macOS, accesses blocked by the Seatbelt sandbox are not reported. In a test, reads of the real `~/.ssh` and `~/.aws` and listing `/Users` and `~/Documents` were blocked (`Operation not permitted`) while the session diagnostics showed `"denials": []` and `"violations": []`. `parse_nono_diagnostics_denials` therefore has nothing to synthesize.
-
-**Correction after the Docker comparison:** the same probe under Docker recorded `openat("/root/.ssh/id_rsa") = -1 EACCES`, but gyrseek ignores failed reads by design (FIXED #60) and the Docker matrix script provisions no credential decoys, so a credential probe of a non-existent path is equally undetected there. Severity lowered from High: nono's `$HOME`-relative canaries detect this better than Docker does. The nono-only gaps are (a) successful reads of allowed sensitive paths such as `/etc/passwd`, which Docker's `openat` trace records and nono does not, and (b) hardcoded absolute credential paths.
-
-**Root cause:** gyrseek's file-access detection under nono depends on (a) canary FIFOs at four bait paths inside the redirected `HOME`/work dir, and (b) nono diagnostics/audit events. Real host credential paths are blocked by nono's policy but emit no event on this platform/version.
-
-**Failure scenario:** A compromised package version reads `/Users/<user>/.ssh/id_rsa` by absolute path during `postinstall`. In the probe the read is denied and unlogged, so the version diffs as clean. gyrseek then forwards the real install, where the same script runs without the sandbox and reads the key.
-
-**Fix direction:** Do not treat sandbox prevention as evidence of benign behavior. Add detection for blocked access (canaries or bait files at real credential locations are unsafe; prefer nono audit events or a platform tracing facility if available), and document the limitation in the README coverage section until fixed. Verified on nono 0.81.0 / macOS only; Linux Landlock behavior was not tested.
-
-**Mitigation applied:** five more home-relative canaries (`CANARY_EXTRA_RELATIVE_PATHS`) so `$HOME`/`os.homedir()`/`Path.home()` probing of common credential stores is detected (`.netrc` deliberately excluded: pip/uv read it). **Experiment (macOS):** the kernel does log denials to the unified log, e.g. `Sandbox: ls(29375) deny(1) file-read-data /Users/<user>/.ssh`, but only with process name and PID (no link to the probe), via `/usr/bin/log show` (adds seconds of latency, other apps' denials share the stream). A possible follow-up is to read it for a probe's time window and filter to `is_sensitive_file_read` paths; attribution and flake risk need a design decision. Hardcoded absolute credential paths remain undetected. Test: `test_canary_trap_covers_extra_credential_stores`.
+**Fix direction:** write traces to container-local, root-only storage (a directory on the container filesystem, mode 700) and copy them to `/out` as root after the payload exits. A test in a Linux VM confirmed the payload cannot read, write or delete such a directory. Add a test for this, and qualify the "root-owned trace" claims in the README, `AGENTS.md` and the docs until it is fixed.
 
 ---
 
-### Finding 398 — High | `src/sandbox.rs`, `README.md` | ⚠️ Open
+### Finding 412 — Medium | `src/sandbox.rs`, `docs/DOCKER_SECURITY.md` | ⚠️ Open
 
-**Summary:** nono's audit log (`audit-events.ndjson`) contains only `session_started` (with the top-level command), `network`, and `session_ended` events. It has no events for child processes. Under nono, process-execution detection depends entirely on the PATH shims for `git`, `bun`, `deno`, `curl`, and `wget`.
+**Summary:** The 2nd stage of a supply-chain package (for example the Shai-Hulud pattern of downloading Bun and running an obfuscated stealer) runs inside the sandbox in every backend. Docker probes have open egress: the payload can download and run a 2nd stage and send data to any host.
 
-**Root cause:** `parse_nono_audit_log` accepts several guessed event shapes (`command_policy`, `exec`, `process`, `argv`, `command`), but the nono version tested never emits child-exec events. The shims cover five names and are bypassed by absolute-path invocation.
+**Why not simply close egress:** installs legitimately fetch native binaries, prebuilt wheels and `postinstall` downloads, and the tool is meant to support many registries, so a strict allow-list produces false positives. Detection does not depend on blocking: the diff flags the new endpoint or exec either way. Blocking only limits damage during the probe and hides the 2nd stage's behaviour.
 
-**Evidence (nono 0.81.0, macOS):** `npm install lodash@4.17.23` produced 4 audit lines (2 network). `npm install esbuild`, which runs a `postinstall`, produced 1 `session_started`, 7 `network`, 1 `session_ended` and no exec events. `sh -c "/usr/bin/curl --version"` produced no exec events and bypassed the shim. **Docker comparison:** the same `esbuild` install under `strace -f -e execve,openat,connect` in the pinned node image (run as the unprivileged `gyrseek` user, as the Docker backend does) recorded 16 execve lines, including `sh -c "node install.js"` (the postinstall) and its `node` child; a separate `sh -c` probe recorded `execve("/usr/bin/id")` by absolute path and `openat("/etc/passwd") = 3`. Gap confirmed.
+**Unmeasured:** whether the Docker bridge can reach private addresses (LAN, `host.docker.internal` on Docker Desktop).
 
-**Failure scenario:** An install script runs `node setup.js`, `python3 -c ...`, or `/usr/bin/curl ...` without a new network endpoint (offline loader, or an endpoint already in the baseline). No new execve signature is recorded, so the process-exec diff passes. The README's ✅ verdicts for Axios, CanisterWorm, Mastra and Namastex-style attacks rely on `process exec` signals that exist under Docker but not under nono.
-
-**Fix direction:** The Docker comparison was run (see Evidence) and the reduced exec coverage is documented; remaining: explore an exec-tracing mechanism for nono (an untested idea is `strace` inside the Landlock sandbox on Linux; there is no root-free equivalent on macOS) or restrict exec-dependent guarantees to Docker.
-
-**Mitigation applied:** the nono host-side artifact scan now emits an extra inventory line for each readable, parseable `node_modules/**/package.json` that declares `preinstall`/`install`/`postinstall` (npm/pnpm probes only), which `classify_inventory_lines` turns into `install_script|path|hooks` and the existing baseline diff / `artifact_allowlist` handle. This catches the common npm entry point (a newly added hook) without exec visibility. **Limits:** manifests over 1 MiB are reported as `uninspected` instead of skipped, unreadable or unparseable manifests are still skipped, hook text is percent-encoded so distinct commands stay distinct, and the manifest is read after the install ran, so a hook can rewrite it first (#402). **Still open:** Docker deliberately does not emit it (its strace trace already records the install-script exec); PyPI `setup.py`/build-backend hooks and execs spawned by an already-present hook are not covered; the README ✅ verdicts for exec-only attacks remain Docker-specific. Tests: `classify_inventory_install_script`, `classify_inventory_plain_manifest_is_not_install_script`, `scan_target_artifacts_emits_npm_install_hooks`.
+**Fix direction:** an optional egress proxy that logs full URLs so path-level differences are visible regardless of registry, with allow or block selectable by policy; test private-range reachability and block it if reachable. See the roadmap item "Optional egress mediation/proxy mode".
 
 ---
 
-### Finding 397 — Medium | `src/sandbox.rs`, `src/lib.rs` | ⚠️ Open
+### Finding 413 — Medium | `src/sandbox.rs` | ⚠️ Open
 
-**Summary:** The sandbox probe and the forwarded host install run under different environments. The `nono` backend calls `env_clear()` and sets only `PATH`, `HOME`, and `XDG_STATE_HOME` on the nono process (the inner package manager then gets `HOME`, `TMPDIR`, `XDG_*`, and cache dirs redirected into the temp work dir). The Docker backend forwards no host environment (`build_docker_run_args` has no `-e`/`--env-file`). The forwarded install (`forward_args`) uses a bare `Command::new(manager)` and inherits the user's full environment. Only the host runner inherits the user's environment during the scan.
+**Summary:** Probes have no wall-clock limit. The Docker backend runs each probe session as `docker run --rm`, and the container (with every process in it) is removed when its main process exits, so a payload cannot outlive the probe. But nothing bounds how long the probe may take: `src/sandbox.rs` contains no timeout or kill path for Docker or host probes.
 
-**Root cause:** Probe isolation intentionally keeps host secrets out of the sandbox, but no mechanism carries package-manager configuration (as opposed to secrets) across. `discover_registry_domains_from_env` reads `NPM_CONFIG_REGISTRY`, `PIP_INDEX_URL`, `PIP_EXTRA_INDEX_URL`, `UV_INDEX_URL`, `POETRY_REPOSITORIES_DEFAULT_URL`, and `GYRSEEK_ALLOWED_DOMAINS` solely to build the nono domain allowlist; the values and any credentials never reach the probe.
+**Impact:** a package whose install hangs or loops stalls the scan indefinitely (denial of service), and any CPU or network abuse it started continues for as long as it hangs. Memory is capped by `GYRSEEK_MEM_LIMIT`, CPU time is not.
 
-**Failure scenario:** A user sets `NPM_CONFIG_REGISTRY=https://nexus.example/repository/npm/` and `NPM_TOKEN` in their shell. gyrseek's probe resolves the package against the public registry (or fails to authenticate to the private one), while the forwarded install resolves from the private registry. The scanned artifact is then not necessarily the artifact installed (dependency confusion between registries, differing resolved versions, or a spurious scan failure). Other env-driven settings (`UV_*`, `POETRY_*`, `PIP_*`, build flags) can likewise change install-time behavior between scan and install.
+**Fix direction:** a configurable probe timeout that kills the container and fails closed (treat as a block, not a clear scan). Choose a default long enough for heavy native builds.
 
-**Fix direction:** Document the divergence in the README. Optionally forward an explicit allowlist of non-secret package-manager variables into the probe (never the full environment), and/or emit a startup warning when env-based registry/index variables are set and the probe will not honor their credentials. Separately consider `internal_package_exemptions` as the supported path for private-index packages.
+---
+
+### Finding 415 — Low | `Cargo.toml` | ⚠️ Open
+
+**Summary:** `cargo audit` reports `chrono` 0.4.45 as unmaintained (RUSTSEC-2026-0543, dated 2026-09-14). It is a direct dependency (`features = ["clock"]`) used for release-age and burst-window calculations.
+
+**Impact:** no known vulnerability; the risk is that future defects or security issues in `chrono` will not be fixed. CI reports it as an allowed warning and does not fail.
+
+**Fix direction:** migrate to a maintained crate (`jiff` or `time`), keeping the `i64` hour comparisons (`HARD_MINIMUM_AGE_HOURS`, `DEFAULT_MIN_BASELINE_AGE_HOURS`) and the tests for age gates and burst filtering.
+
+---
+
+### Finding 416 — Low | `Cargo.toml` | ⚠️ Open
+
+**Summary:** `serde_yaml` 0.9.34 (a direct dependency, published as `+deprecated`) depends on `unsafe-libyaml` 0.2.11, which `cargo audit` reports as unmaintained (RUSTSEC-2024-0449). It parses the `gyrseek.yaml` policy config.
+
+**Impact:** no known vulnerability. The config is operator-controlled, not package-controlled, which limits exposure; the risk is a long-term lack of fixes. CI reports it as an allowed warning.
+
+**Fix direction:** move to a maintained YAML crate and re-run the config tests (allowlist validation, `new_package_exemptions` deserializer, per-package versus global entries).
 
 ---
 
@@ -1312,3 +1290,14 @@ if next.starts_with('-') {
 
 ---
 
+---
+
+### Finding 418 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** `trace_install_docker_matrix` prefers each probe's matrix trace (`gyrseek_trace_{idx}.log`). If it is missing or blank, it reruns the probe in isolation with `trace_install_docker_single` and uses that stderr as the trace. It then appends `gyrseek_artifacts_{idx}.log` from the matrix run's `/out` directory regardless of which attempt supplied the trace. The single-probe script mounts no `/out` and has no artifact step.
+
+**Impact:** the trace and the artifact inventory can describe different container runs. A suspicious file present only in the retry's install is not scanned, and one present only in the matrix install is attributed to the retry's trace. It needs the matrix trace to be unusable while the install and artifact step still ran, so it is unlikely, and it is present on `main`.
+
+**Fix direction:** fail closed. When the matrix trace is missing or blank, report a probe error instead of mixing attempts, consistent with the rule that an empty trace is a hard error. The alternative is a single-probe artifact inventory with its own output channel, which is more work. Keep reading the matrix inventory whenever the matrix trace is used.
+
+---

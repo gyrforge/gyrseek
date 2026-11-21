@@ -1,7 +1,6 @@
 root := justfile_directory()
 bin := root / "target/release/gyrseek"
 pip_venv_bin := root / "tests/pip/.venv/bin"
-nono_version := "0.81.0"
 
 default:
     @just --list
@@ -62,64 +61,12 @@ test-uv +args='': build
     "{{bin}}" {{args}} uv sync
     "{{bin}}" {{args}} uv lock
 
-# End-to-end tests for npm with nono
-[working-directory: 'tests/npm']
-test-nono-npm +args='': build install-nono
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} npm install lodash
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} npm update
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} npm i
-
-# End-to-end tests for pnpm with nono
-[working-directory: 'tests/pnpm']
-test-nono-pnpm +args='': build install-nono
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} pnpm add lodash
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} pnpm update
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} pnpm i
-
-# End-to-end tests for pip with nono
-[working-directory: 'tests/pip']
-test-nono-pip +args='': build install-nono
-    python3 -m venv .venv
-    PATH="{{pip_venv_bin}}:$PATH" GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} pip3 install black
-    PATH="{{pip_venv_bin}}:$PATH" GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} pip3 install -r ./requirements.txt
-    PATH="{{pip_venv_bin}}:$PATH" GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} pip3 install --upgrade pip
-
-# End-to-end tests for poetry with nono
-[working-directory: 'tests/poetry']
-test-nono-poetry +args='': build install-nono
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} poetry add black
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} poetry install --no-root
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} poetry update
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} poetry lock
-
-# End-to-end tests for uv with nono
-[working-directory: 'tests/uv']
-test-nono-uv +args='': build install-nono
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} uv add black
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} uv pip install -r ./pyproject.toml
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} uv sync
-    GYRSEEK_SANDBOX=nono "{{bin}}" {{args}} uv lock
-
 # Run all Docker end-to-end tests
 test-docker: test-npm test-pnpm test-pip test-poetry test-uv
 
-# Run all nono end-to-end tests
-test-nono: test-nono-npm test-nono-pnpm test-nono-pip test-nono-poetry test-nono-uv
-
 # Install to local machine
-install: install-nono
+install:
     cargo install --path . --locked
-
-# Install or update nono-cli sandbox backend
-install-nono:
-    @if [ -n "${GYRSEEK_NONO_PATH:-}" ]; then exit 0; fi; \
-    nono_bin="${CARGO_HOME:-$HOME/.cargo}/bin/nono"; \
-    [ -x "$nono_bin" ] || nono_bin="$(command -v nono || true)"; \
-    have="$("${nono_bin:-nono}" --version 2>/dev/null | awk '{print $NF}')"; \
-    if [ "$have" != "{{nono_version}}" ]; then \
-        echo "📦 nono ${have:-not found}; installing nono-cli {{nono_version}}..."; \
-        cargo install nono-cli --version {{nono_version}} --locked --force || echo "⚠️ Warning: Failed to install nono-cli. Docker sandbox remains available."; \
-    fi
 
 # Uninstall from local machine
 uninstall:

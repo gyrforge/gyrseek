@@ -118,8 +118,6 @@
 
 **Reason for Not Fixing:** This is a false positive based on semantic interpretation. This is a threat modeling caveat rather than a direct code defect. The docs correctly state the theoretical coverage, but bypasses are acknowledged architectural risks. We will not change the docs because they accurately reflect the feature intent, not an infallible guarantee. Additionally, the Threat Model review clarifies that DNS tunneling exfiltration is invisible not just because DNS queries go to a sandbox-local resolver, but because `extract_dns_map` parses DNS *responses*, not queries. An attacker encoding secrets in DNS query names to a domain they control exfiltrates data without ever calling `connect()` to a new IP. Finally, there is an endpoint baseline poisoning angle: an attacker could seed their C2 domain in the baseline via benign telemetry in v1.0.0. Both are fundamental behavioral-diffing limitations that are explicitly accepted as out-of-scope.
 
-
-
 ### Finding 201 — `false-positive` | `AGENTS.md` | 🚫 Won't Fix
 
 **Summary:** Graphify skill referenced but skill file does not exist.
@@ -127,7 +125,6 @@
 **Suggested Fix:** Either install the missing skill file or remove the reference from `AGENTS.md`.
 
 **Reason for Not Fixing:** This is a false positive. Graphify is not an agent skill, but a Python package tool that is invoked directly via the CLI (`graphify update .`). The reference in `AGENTS.md` is correct in instructing the agent to invoke the tool, but the static analysis misunderstood it as a missing `.agents/skills` folder entry.
-
 
 ### Finding 202 — `false-positive` | `docs/common_prompts.md` | 🚫 Won't Fix
 
@@ -1018,14 +1015,6 @@ PyPI is case-insensitive but does NOT normalize package names before they reach 
 **Summary:** The `"*"` key convention for the global ip_allowlist/domain_allowlist bucket is not explained in user-facing documentation (README).
 
 **Reason for Not Fixing:** The semantics are fully documented in AGENTS.md. A full config-reference page (covering all six allowlists, their keys, value formats, and effective-set semantics) is tracked as a ROADMAP item. Adding a partial note in the README before the full reference exists would create documentation fragmentation. The existing AGENTS.md entry is the authoritative source for contributors; end-users requiring a config reference will be directed to the forthcoming dedicated doc.
-
----
-
-### Finding 401 — `false-positive` | `src/sandbox.rs`, `README.md` | 🚫 Won't Fix
-
-**Claim:** On macOS, an `XDG_STATE_HOME` under `/tmp` or `/private/tmp` fails with an opaque `empty audit log` error.
-
-**Rationale:** nono does refuse a state root that overlaps `/private` (granted by its `system_read_macos` group), but gyrseek's error already includes nono's stderr verbatim (observed on nono 0.81.0, macOS): `empty audit log for '<pkg>@<ver>': nono produced no audit output. Exit code: Some(1), Stderr: nono: Sandbox initialization failed: Refusing to grant '/private' ... overlaps protected nono state root '<path>'`. The cause is therefore visible. A preflight path check would duplicate that message and encode nono's policy in gyrseek. Resolved by documenting the constraint in the README nono section.
 
 ---
 

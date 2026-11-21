@@ -406,7 +406,6 @@ A file named `payload.bin|0|ASCII text` produces `parts = ["payload.bin", "0", "
 
 ---
 
-
 ### Finding 73 — Low | `docs/common_prompts.md` | ✅ Fixed
 
 **Summary:** Missing trailing newline.
@@ -1029,7 +1028,6 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 ---
 
-
 ---
 
 ### Finding 169 — High | `.githooks/pre-commit` | ✅ Fixed
@@ -1062,7 +1060,6 @@ Consider adding a process- or file-system marker that persists across the sessio
 
 **✅ Fix status — FIXED.** The PR rewrote the hook to a fail-closed check-and-exit pattern with zero automatic installation. The referenced vulnerable code no longer exists.
 
-
 ---
 
 ### Finding 168 — Medium | `ARCHITECTURE.md:116` | ✅ Fixed
@@ -1076,7 +1073,6 @@ Consider adding a process- or file-system marker that persists across the sessio
 **Fix direction:** Update the accepted risk to explicitly acknowledge that the AI reviewer will not detect stealth deletions of findings, and that human reviewers must manually verify findings-set completeness.
 
 **✅ Fix status — FIXED.** Updated ARCHITECTURE.md to explicitly accept the AI blind spot.
-
 
 ---
 
@@ -1093,7 +1089,6 @@ Consider adding a process- or file-system marker that persists across the sessio
 **Summary:** `process_vm_writev` claim overstates memory protection.
 
 **✅ Fix status — FIXED.** Clarified that `/proc/pid/mem` and other vectors remain open.
-
 
 ---
 
@@ -1621,25 +1616,67 @@ The following chains document how independent bugs created compounded attack sur
 - **Root Cause**: OPEN #79 described three attack-surface concerns for `parse_list_map`: colon-injection in values, comma-injection in package names, and empty-value-collapsing. FIXED #340 resolved the whitespace-collision gap (a different concern) and noted it "also resolves OPEN #79" without explaining why the three original concerns were not applicable. A future reviewer reading the closure could not determine whether they were fixed, inapplicable, or overlooked.
 - **Fix**: Added an "OPEN #79 resolution note" to Finding 340's detailed entry explaining: (1) `parse_list_map` accepts `HashMap<String, Vec<String>>` — serde_yaml has already parsed and validated structure, so colon/comma are never treated as delimiters; (2) `parse_list` at `src/lib.rs:168` calls `.filter(|e| !e.is_empty())`, so empty strings are dropped before reaching allowlist sets.
 
-### Finding 403: nono canary hits were not classified as sensitive reads (and the GitHub CLI decoy missed XDG)
-- **Root Cause**: A canary read is injected as a synthetic `openat("<label>") = 3` trace event and only becomes a finding if `is_sensitive_file_read` recognises the label. The classifier lacked `/.config/gh/hosts.yml` and `/.pypirc`, and cannot know user-configured `nono_canary_secrets_paths` names, so those decoys never produced a finding. Separately, the probe sets `XDG_CONFIG_HOME=<work>/config`, so GitHub CLI reads `config/gh/hosts.yml`, not `.config/gh/hosts.yml`.
-- **Fix**: Added both paths to the classifier; configured canaries use the `/gyrseek-canary/` label prefix, which the classifier recognises; every `.config/<x>` decoy also gets a `config/<x>` twin. Regression test `every_nono_canary_label_is_classified_sensitive` asserts that every built-in label and the custom prefix classify as sensitive.
+### Finding 410: Platform matrix claimed `host` mode works on macOS
+
+**Summary:** The "Platform support matrix" in `docs/DOCKER_SECURITY.md` listed `host` mode as
+"Supported (requires local `strace`)" for macOS. `HostRunner::trace_install` invokes
+`Command::new("strace")`, and `strace` has no macOS build — the nearest equivalent, `dtruss`, is a
+different tool with different output, and SIP blocks it against system binaries. The documented
+configuration could never produce a scan.
+
+**Root cause:** The matrix row was written to describe `host` mode's freedom from a Docker dependency,
+and the `strace` requirement was recorded as a parenthetical caveat rather than as a platform
+constraint that rules macOS out entirely.
+
+**Failure scenario:** A macOS operator who cannot run Docker (restricted laptop, licensing) reads the
+matrix, sets `GYRSEEK_SANDBOX=host`, and gets `failed to execute host strace: No such file or
+directory` on the first probe. With no working scan they may disable gyrseek altogether, when the
+correct guidance is that `host` mode is Linux-only.
+
+**Fix:** The matrix now has explicit Linux / macOS / Windows (WSL2) / Windows (native) columns.
+`host` mode on macOS reads **Not supported (`strace` is Linux-only)**, with a note
+explaining why `dtruss` is not a substitute. Native Windows is marked unsupported in every mode.
+
+---
+
+### Finding 408: AppArmor claimed without scoping it to Linux at the point of claim
+
+**Summary:** Docker container hardening was presented as "seccomp + AppArmor profiles" in the README
+and in the `docs/DOCKER_SECURITY.md` overview, without noting where the claim was made that the
+path-based layer is Linux-only. On macOS Docker Desktop seccomp does apply — the container kernel is
+the LinuxKit VM — but AppArmor does not: `announce_apparmor_status` returns early under
+`!cfg!(target_os = "linux")` and the container falls back to Docker's default profile.
+
+**Root cause:** The macOS caveat lived in a "Platform note" near the end of the AppArmor section and in
+one line under the platform matrix. A reader scanning the overview or the README sandbox section saw
+both layers named together and could reasonably conclude both were active on their platform.
+
+**Failure scenario:** A macOS operator enables `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`, sees the
+fallback warning, assumes it is a transient setup problem rather than a permanent platform limitation,
+and records the container as having path-based confinement in a threat model or control attestation
+that it does not have.
+
+**Fix:** Both claim sites now scope AppArmor to native Linux hosts and state plainly that macOS is a
+permanent limitation rather than a setup problem (no `apparmor_parser` on the host; Docker Desktop's
+LinuxKit kernel does not carry the AppArmor LSM). A new section, "Is seccomp enough, or is AppArmor
+required?", explains the division of labour: seccomp carries **trace integrity** (the `io_uring` block
+keeps install I/O visible to `strace`, something AppArmor's path-based MAC cannot express), while
+AppArmor only adds path confinement inside an already-ephemeral container. It also states that for
+supply-chain malware the dominant risks — execution outside the install window (Finding 25, waves
+T26/T32) and open probe-time egress in Docker mode — are addressed by neither profile, so AppArmor's
+absence on macOS is not a coverage gap. A per-platform hardening-availability table and WSL2
+verification commands (`docker info`, `/sys/module/apparmor/parameters/enabled`) were added, and WSL2
+is documented as a Linux target where AppArmor is present in the kernel but not reliably an active LSM.
+
+**Note:** Not fixable in code — a macOS host cannot load a custom AppArmor profile into Docker
+Desktop's VM, and the VM boundary already supplies the isolation AppArmor would harden. Documentation
+only.
+
+---
 
 ### Finding 406: unscanned passthrough commands initialized the sandbox
-- **Root Cause**: `run()` called `build_runner_from_env` immediately after the manager check and before it decided whether the command needed a scan. `gyrseek uv venv` (and any other forwarded command) therefore ran the Docker daemon check or the nono self-test first. Earlier builds only required the Docker CLI to exist; after the startup hardening a stopped daemon exited 1 before the command was forwarded.
+- **Root Cause**: `run()` called `build_runner_from_env` immediately after the manager check and before it decided whether the command needed a scan. `gyrseek uv venv` (and any other forwarded command) therefore ran the Docker daemon check first. Earlier builds only required the Docker CLI to exist; after the startup hardening a stopped daemon exited 1 before the command was forwarded.
 - **Fix**: `LazyRunner` builds the runner on first `get()`, which only scan branches call. Initialization failure still prints the error and exits 1 there. Covered by `unscanned_passthrough_does_not_initialize_the_sandbox`, which fails if initialization is made eager again.
-
-### Finding 405: nono probes that never started looked like clear scans on Linux hosts without a cgroup session
-- **Root Cause**: gyrseek passes `--memory 2g --max-processes 256` to nono on Linux. nono applies those through a delegated cgroup v2 user session (`user@<uid>.service`); on a GitHub runner or in a minimal container there is none, so nono fails with `Sandbox initialization failed: resource: no delegated cgroup v2 subtree …` and exits 1 before running the install. It had already written `session_started` to its audit log, and gyrseek never looked at whether nono had started: the trace built from that single event was non-empty, so the empty-trace check passed and the scan reported clear. The Linux nono CI jobs were therefore passing without ever running an install. Adding `nono audit verify` made it visible, because an unsealed session has no `session.json` ("Session not found: Failed to read session metadata … session.json"). Reproduced in a Linux VM: with the resource flags nono exits 1, the child never runs and the audit directory holds only `audit-events.ndjson`; without them the run and `verify` succeed.
-- **Fix**: `nono_resource_limits_supported` probes once at startup whether nono accepts the limits; if not, `NonoRunner.resource_limits` is false, the probes run without them, and a warning says so. A probe whose nono stderr contains `Sandbox initialization failed` now fails with nono's own message (`nono_start_failure`) instead of being scanned. Covered by unit tests for both helpers and an integration test that runs the binary against a fake nono that fails to start.
-
-### Finding 404: `install_script` signal could be evaded or mis-scoped
-- **Root Cause**: `npm_install_hooks` silently skipped manifests over 1 MiB (a padded `package.json` hid its hooks), replaced `|` with a space (`a | b` and `a   b` compared equal), and `scan_target_artifacts` ran it for Python probes too.
-- **Fix**: Oversized manifests become an explicit `uninspected: manifest exceeds 1 MiB` finding; hooks are serialized as a JSON array of `[hook, command]` pairs (a naive `hook=cmd; hook=cmd` join let `{"preinstall":"true #; postinstall=node evil.js"}` look identical to a real separate `postinstall`) and then percent-encoded by `escape_inventory_field`; hook emission is limited to npm/pnpm via the new `manager` argument and to dependency-root manifests (`node_modules/<pkg>` or `node_modules/@scope/<pkg>`), so a nested `examples/package.json` is not treated as an installed dependency. Remaining limit (hooks that rewrite their own manifest) is tracked as open Finding 402.
-
-### Finding 400: nono state-dir creation failure was swallowed and surfaced as an unrelated error
-- **Root Cause**: `std::fs::create_dir_all(&state_root)` in `trace_install_with_domains` was `let _ = ...`. When the state root (`$XDG_STATE_HOME` or `~/.local/state`, then `gyrseek_nono`) could not be created, the next call (`tempfile::Builder::tempdir_in`) failed with a generic filesystem error (observed: `No such file or directory`) that did not name the real problem. Observed on a macOS machine where `~/.local/state` was owned by `root`, which made nono mode unusable out of the box.
-- **Fix**: The error is propagated with the path and a hint: `failed to create nono state dir <path>: <err> (set XDG_STATE_HOME to a writable directory)`. Covered by `nono_state_dir_creation_failure_names_the_path` (points `XDG_STATE_HOME` at a regular file so creation fails).
 
 ### Finding 370: `validate_allowlist_pkg_key` `"*"` rejection message lacked additive-semantics guidance
 - **Root Cause**: The message `"use a bare global entry instead"` correctly redirected the operator but didn't explain *why*: per-package entries are additive to global entries, so global entries already apply to all packages and there's no need to also add `"*"` as a per-package key. An operator unfamiliar with this model might add `"*"` to every per-package block assuming it was needed for cross-package scoping.
