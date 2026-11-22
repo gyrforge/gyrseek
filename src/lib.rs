@@ -13,11 +13,12 @@ use std::process::Command;
 use serde::{Deserialize, Deserializer};
 
 use parsing::{
-    RangeRequest, check_ranges_against_scanned, has_only_non_registry_npm_specs,
-    is_lockfile_only_command, parse_npm_install_targets, parse_poetry_lock_packages_from_content,
-    parse_pylock_packages_from_content, parse_python_install_targets,
-    parse_requirements_packages_from_content, parse_uv_lock_packages_from_content,
-    parse_uv_lock_upgrade_packages_from_args, rewrite_args_at,
+    RangeRequest, changed_inputs, check_ranges_against_scanned, freeze_lockfile_install,
+    has_only_non_registry_npm_specs, is_lockfile_only_command, parse_npm_install_targets_with,
+    parse_poetry_lock_packages_from_content, parse_pylock_packages_from_content,
+    parse_python_install_targets, parse_requirements_packages_from_content,
+    parse_uv_lock_packages_from_content, parse_uv_lock_upgrade_packages_from_args, read_input,
+    rewrite_args_at,
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
 use runtime_image::{
@@ -25,7 +26,8 @@ use runtime_image::{
 };
 use sandbox::{DEFAULT_PROBE_TIMEOUT_SECS, SandboxRunner, build_runner_from_env};
 use scanning::{
-    HARD_MINIMUM_AGE_HOURS, PolicyConfig, ScanReport, scan_package_versions, scan_packages_versions,
+    HARD_MINIMUM_AGE_HOURS, PolicyConfig, ScanReport, normalize_git_clone_entry,
+    scan_package_versions, scan_packages_versions,
 };
 
 const DEFAULT_CONFIG_PATH: &str = "gyrseek.yaml";
@@ -535,7 +537,18 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
             true
         }
     });
-    let git_clone_allowlist = parse_list_map(cfg.git_clone_allowlist, true, "git_clone_allowlist");
+    // Only the repository part is lowercased: option values such as paths keep their case.
+    let git_clone_allowlist: HashMap<String, HashSet<String>> =
+        parse_list_map(cfg.git_clone_allowlist, false, "git_clone_allowlist")
+            .into_iter()
+            .map(|(pkg, entries)| {
+                let entries = entries
+                    .iter()
+                    .map(|e| normalize_git_clone_entry(e))
+                    .collect();
+                (pkg, entries)
+            })
+            .collect();
 
     Ok(PolicyConfig {
         ip_allowlist,
@@ -1699,6 +1712,8 @@ pub struct GyrSeek {
     /// Positions of the package arguments found when the command was parsed; the forwarded
     /// command is rewritten at these positions only. `None` for commands that were not parsed.
     package_args: std::cell::RefCell<Option<Vec<usize>>>,
+    /// The packages were scanned from a lockfile, so the forwarded install is frozen to it.
+    from_lockfile: std::cell::Cell<bool>,
 }
 
 /// Builds the sandbox runner on first use, so commands that are forwarded without a scan
@@ -1751,6 +1766,7 @@ impl GyrSeek {
             manager,
             ranges: std::cell::RefCell::new(Vec::new()),
             package_args: std::cell::RefCell::new(None),
+            from_lockfile: std::cell::Cell::new(false),
         }
     }
 
@@ -1775,19 +1791,39 @@ impl GyrSeek {
             Ok(notices) => notices.iter().for_each(|n| println!("ℹ️ [gyrseek] {n}")),
             Err(e) => exit_with(&e),
         }
-        let pinned = rewrite_args_at(
+        let mut pinned = rewrite_args_at(
             &self.manager,
             &self.passthrough_args,
             pins,
             &ranges,
             self.package_args.borrow().as_deref(),
         );
+        if self.from_lockfile.get() {
+            pinned =
+                freeze_lockfile_install(&self.manager, &pinned).unwrap_or_else(|e| exit_with(&e));
+            if pinned != self.passthrough_args {
+                println!(
+                    "ℹ️ [gyrseek] Installing exactly what was scanned: forwarding `{}` so the package manager cannot re-resolve anything the scan did not see.",
+                    pinned.join(" ")
+                );
+            }
+        }
         self.forward_args(&pinned);
     }
 
     fn forward_args(&self, args: &[String]) {
         if args.is_empty() {
             return;
+        }
+
+        // The scan read these files some time ago. If one changed since, it no longer
+        // describes what the command would install.
+        let changed = changed_inputs();
+        if !changed.is_empty() {
+            exit_with(&format!(
+                "{} changed while gyrseek was scanning, so the scan no longer describes what would be installed. Run the command again. Failing closed.",
+                changed.join(", ")
+            ));
         }
 
         match Command::new(&self.manager).args(&args[1..]).spawn() {
@@ -1821,7 +1857,7 @@ impl GyrSeek {
     }
 
     fn parse_uv_lock_packages(&self) -> Vec<(String, String)> {
-        let lock_content = match fs::read_to_string("uv.lock") {
+        let lock_content = match read_input("uv.lock") {
             Ok(content) => content,
             Err(_) => return Vec::new(),
         };
@@ -1830,7 +1866,7 @@ impl GyrSeek {
     }
 
     fn parse_poetry_lock_packages(&self) -> Vec<(String, String)> {
-        let lock_content = match fs::read_to_string("poetry.lock") {
+        let lock_content = match read_input("poetry.lock") {
             Ok(content) => content,
             Err(_) => return Vec::new(),
         };
@@ -1849,7 +1885,7 @@ impl GyrSeek {
                 continue;
             }
 
-            if let Ok(content) = fs::read_to_string(arg) {
+            if let Ok(content) = read_input(arg) {
                 if arg.ends_with("pylock.toml") {
                     packages.extend(parse_pylock_packages_from_content(&content));
                 } else {
@@ -1869,9 +1905,13 @@ impl GyrSeek {
         targets.packages
     }
 
-    fn parse_npm_install_packages(&self) -> Vec<(String, Option<String>)> {
-        let targets =
-            parse_npm_install_targets(&self.passthrough_args).unwrap_or_else(|e| exit_with(&e));
+    fn parse_npm_install_packages(
+        &self,
+        exempt: &HashSet<String>,
+    ) -> Vec<(String, Option<String>)> {
+        let targets = parse_npm_install_targets_with(&self.passthrough_args, exempt)
+            .unwrap_or_else(|e| exit_with(&e));
+        self.from_lockfile.set(targets.from_lockfile);
         *self.ranges.borrow_mut() = targets.ranges;
         *self.package_args.borrow_mut() = Some(targets.package_args);
         targets.packages
@@ -2430,7 +2470,7 @@ pub async fn run(args: Vec<String>) {
             .unwrap_or("install")
             .to_string();
         bulk_scan!(
-            eye.parse_npm_install_packages(),
+            eye.parse_npm_install_packages(&policy.internal_package_exemptions),
             Pinned,
             eye.manager.as_str(),
             &format!(

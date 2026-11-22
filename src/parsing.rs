@@ -449,6 +449,81 @@ fn is_plain_version(v: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '!' | '_' | '-'))
 }
 
+/// Contents of the files whose packages were scanned, as they were read. The command is
+/// forwarded some time after the scan, so before it is, every file is read again: a lockfile or
+/// requirements file edited in between would make the scan describe something else.
+static INPUTS: std::sync::Mutex<Vec<(String, Option<String>)>> = std::sync::Mutex::new(Vec::new());
+
+/// Reads an input file and remembers what it contained. A file that does not exist is
+/// remembered as absent, so one that appears before forwarding (an `npm-shrinkwrap.json` beside
+/// the scanned `package-lock.json`, which npm prefers) is caught too.
+pub(crate) fn read_input(path: &str) -> std::io::Result<String> {
+    let read = fs::read_to_string(path);
+    if let Ok(mut inputs) = INPUTS.lock() {
+        inputs.retain(|(p, _)| p != path);
+        match &read {
+            Ok(content) => inputs.push((path.to_string(), Some(content.clone()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                inputs.push((path.to_string(), None))
+            }
+            Err(_) => {}
+        }
+    }
+    read
+}
+
+/// Input files that differ from when they were read, can no longer be read, or were absent and
+/// now exist.
+pub(crate) fn changed_inputs() -> Vec<String> {
+    let Ok(inputs) = INPUTS.lock() else {
+        return vec!["(input tracking is unavailable)".to_string()];
+    };
+    inputs
+        .iter()
+        .filter(|(path, before)| fs::read_to_string(path).ok() != *before)
+        .map(|(path, _)| path.clone())
+        .collect()
+}
+
+/// How the forwarded form of a no-argument `npm install` / `pnpm install` is frozen to the lockfile
+/// that was scanned. A plain install re-resolves any dependency whose locked version no longer
+/// satisfies `package.json` (and `--no-package-lock` ignores the lockfile altogether), which would
+/// install versions the scan never saw. `npm ci` and `pnpm install --frozen-lockfile` fail
+/// instead of re-resolving. A flag that turns the lockfile off is an error.
+pub(crate) fn freeze_lockfile_install(
+    manager: &str,
+    args: &[String],
+) -> Result<Vec<String>, String> {
+    let has = |flags: &[&str]| args.iter().any(|a| flags.contains(&a.as_str()));
+    let mut out = args.to_vec();
+    if manager == "pnpm" {
+        if has(&[
+            "--no-frozen-lockfile",
+            "--frozen-lockfile=false",
+            "--prefer-frozen-lockfile",
+            "--no-lockfile",
+            "--lockfile=false",
+        ]) {
+            return Err("gyrseek installs from the lockfile it scanned, so the pnpm flag that lets pnpm update or ignore the lockfile cannot be used. Remove it, or update the lockfile first with `pnpm install --lockfile-only`. Failing closed.".to_string());
+        }
+        if !has(&["--frozen-lockfile"]) && out.len() >= 2 {
+            out.insert(2, "--frozen-lockfile".to_string());
+        }
+    } else {
+        if has(&[
+            "--no-package-lock",
+            "--package-lock=false",
+            "--no-package-lock=false",
+        ]) {
+            return Err("gyrseek installs from the lockfile it scanned, so the npm flag that makes npm ignore the lockfile cannot be used. Remove it. Failing closed.".to_string());
+        }
+        if out.get(1).map(String::as_str) != Some("ci") && out.len() >= 2 {
+            out[1] = "ci".to_string();
+        }
+    }
+    Ok(out)
+}
+
 /// A version range typed on the command line (`pytest>=9`, `lodash@^4`). gyrseek scans the
 /// latest version for it, checks that the latest version satisfies the range, and pins the
 /// forwarded command to the version that was scanned.
@@ -477,6 +552,9 @@ pub(crate) struct ParsedTargets {
     /// Positions of the package arguments on the command line (not of `-r` files or flag
     /// values). The forwarded command is rewritten at these positions only.
     pub package_args: Vec<usize>,
+    /// The packages came from the lockfile (nothing was named on the command line), so the
+    /// forwarded install must be frozen to that lockfile.
+    pub from_lockfile: bool,
 }
 
 enum Requirement {
@@ -683,7 +761,7 @@ fn read_requirements_file_at(
     if !seen.insert(fs::canonicalize(path).map_err(unreadable)?) {
         return Ok(Vec::new());
     }
-    let content = fs::read_to_string(path).map_err(unreadable)?;
+    let content = read_input(&path.to_string_lossy()).map_err(unreadable)?;
     let content = content.trim_start_matches('\u{feff}'); // a BOM from a Windows editor
     let dir = path.parent().unwrap_or_else(|| std::path::Path::new(""));
 
@@ -997,7 +1075,15 @@ pub(crate) fn parse_npm_install_packages_from_args(
 
 /// Like `parse_npm_install_packages_from_args`, and also the version ranges typed on the
 /// command line (they are scanned at the latest version).
+#[cfg(test)]
 pub(crate) fn parse_npm_install_targets(args: &[String]) -> Result<ParsedTargets, String> {
+    parse_npm_install_targets_with(args, &Default::default())
+}
+
+pub(crate) fn parse_npm_install_targets_with(
+    args: &[String],
+    exempt: &std::collections::HashSet<String>,
+) -> Result<ParsedTargets, String> {
     let manager = args.first().map(String::as_str).unwrap_or_default();
     let command = args.get(1).map(String::as_str);
     if !is_npm_family_manager(manager) || !is_npm_family_package_command(manager, command) {
@@ -1046,7 +1132,7 @@ pub(crate) fn parse_npm_install_targets(args: &[String]) -> Result<ParsedTargets
     };
     let Some((file, content)) = lockfiles
         .iter()
-        .find_map(|f| fs::read_to_string(f).ok().map(|c| (*f, c)))
+        .find_map(|f| read_input(f).ok().map(|c| (*f, c)))
     else {
         let make_one = if manager == "pnpm" {
             "pnpm install --lockfile-only"
@@ -1060,10 +1146,11 @@ pub(crate) fn parse_npm_install_targets(args: &[String]) -> Result<ParsedTargets
         ));
     };
     let packages = if manager == "pnpm" {
-        parse_pnpm_lock_packages_from_content(&content)
+        parse_pnpm_lock(&content, exempt)
     } else {
-        parse_npm_lock_packages_from_content(&content)
-    };
+        parse_npm_lock(&content, exempt)
+    }
+    .map_err(|e| format!("{file}: {e}. Failing closed."))?;
     if packages.is_empty() {
         return Err(format!(
             "{file} lists no registry packages to scan. Failing closed."
@@ -1071,31 +1158,117 @@ pub(crate) fn parse_npm_install_targets(args: &[String]) -> Result<ParsedTargets
     }
     Ok(ParsedTargets {
         packages,
-        ranges: Vec::new(),
-        package_args: Vec::new(),
+        from_lockfile: true,
+        ..ParsedTargets::default()
     })
 }
 
+/// Hosts a lockfile entry may be downloaded from for gyrseek's scan to describe it: the public
+/// registry, whose package of the same name and version is what the sandbox installs.
+const NPM_REGISTRY_HOSTS: &[&str] = &["registry.npmjs.org"];
+
+/// Where a lockfile entry's artifact comes from.
+enum LockSource {
+    /// The public registry (or a bare entry the package manager fetches from it).
+    Registry,
+    /// A path on disk: the user's own code, not scanned.
+    Local,
+    /// Anything else: another host, a git repository, a tarball URL. The scan would examine the
+    /// public package of the same name while the install fetches this, so it cannot vouch for it.
+    Remote(String),
+}
+
+fn lock_url_source(url: &str) -> LockSource {
+    let url = url.trim();
+    if let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    {
+        let authority = rest.split('/').next().unwrap_or("");
+        let host = authority
+            .rsplit('@')
+            .next()
+            .unwrap_or(authority)
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        return if NPM_REGISTRY_HOSTS.contains(&host.as_str()) {
+            LockSource::Registry
+        } else {
+            LockSource::Remote(host)
+        };
+    }
+    if url.starts_with("file:") || !url.contains(':') {
+        return LockSource::Local; // `file:../x` and workspace paths such as `packages/mine`
+    }
+    // `git+ssh://…`, `git://…`, `github:user/repo`, `ssh://…`
+    LockSource::Remote(url.split(['/', '#']).next().unwrap_or(url).to_string())
+}
+
+fn remote_lock_error(remote: &[String]) -> String {
+    let shown = remote
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = remote.len().saturating_sub(5);
+    format!(
+        "{shown}{} do not come from the npm registry ({}). gyrseek scans the public registry package of the same name and version, which would not describe what the lockfile installs. If these are your own private packages add them to internal_package_exemptions; otherwise fix the lockfile",
+        if more > 0 {
+            format!(" and {more} more")
+        } else {
+            String::new()
+        },
+        NPM_REGISTRY_HOSTS.join(", ")
+    )
+}
+
 /// Exact registry packages from `package-lock.json` / `npm-shrinkwrap.json`: lockfile v2/v3
-/// (`packages`, keyed by `node_modules/` path) or v1 (nested `dependencies`). Workspace
-/// links, bundled dependencies and git/file sources are not registry downloads and are left
-/// out.
-pub(crate) fn parse_npm_lock_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
+/// (`packages`, keyed by `node_modules/` path) or v1 (nested `dependencies`). Workspace links,
+/// bundled dependencies and local paths are left out. An entry that is downloaded from
+/// anywhere but the npm registry (another host, git, a tarball) is an error, because a scan of
+/// the public package of that name would not describe it; packages named in `exempt`
+/// (`internal_package_exemptions`) are passed on and skipped by the scanner as usual.
+pub(crate) fn parse_npm_lock(
+    content: &str,
+    exempt: &std::collections::HashSet<String>,
+) -> Result<Vec<(String, Option<String>)>, String> {
     let Ok(lock) = serde_json::from_str::<serde_json::Value>(content) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut found = std::collections::BTreeSet::new();
+    let mut remote: Vec<String> = Vec::new();
     let mut add = |name: &str, entry: &serde_json::Value| {
+        let flag = |k: &str| entry.get(k).and_then(|v| v.as_bool()) == Some(true);
+        let (Some(version), false, false) = (
+            entry.get("version").and_then(|v| v.as_str()),
+            flag("link"),
+            flag("inBundle"),
+        ) else {
+            return;
+        };
         let resolved = entry.get("resolved").and_then(|v| v.as_str()).unwrap_or("");
-        let from_registry = resolved.is_empty() || resolved.starts_with("http");
-        let skipped = entry.get("link").and_then(|v| v.as_bool()) == Some(true)
-            || entry.get("inBundle").and_then(|v| v.as_bool()) == Some(true)
-            || !from_registry;
-        if let Some(version) = entry.get("version").and_then(|v| v.as_str())
-            && !skipped
-            && semver::Version::parse(version).is_ok()
-        {
-            found.insert((name.to_string(), version.to_string()));
+        let source = if resolved.is_empty() && semver::Version::parse(version).is_err() {
+            // v1 git and URL dependencies carry no `resolved`, only a non-semver `version`.
+            LockSource::Remote(version.to_string())
+        } else if resolved.is_empty() {
+            // npm fetches an entry with no `resolved` from the registry, so scan it.
+            LockSource::Registry
+        } else {
+            lock_url_source(resolved)
+        };
+        match source {
+            LockSource::Local => {}
+            LockSource::Registry if semver::Version::parse(version).is_ok() => {
+                found.insert((name.to_string(), version.to_string()));
+            }
+            LockSource::Registry => remote.push(format!("{name}@{version}")),
+            LockSource::Remote(_) if exempt.contains(name) => {
+                found.insert((name.to_string(), version.to_string()));
+            }
+            LockSource::Remote(from) => remote.push(format!("{name}@{version} (from {from})")),
         }
     };
 
@@ -1127,33 +1300,32 @@ pub(crate) fn parse_npm_lock_packages_from_content(content: &str) -> Vec<(String
             walk(deps, &mut add);
         }
     }
-    found.into_iter().map(|(n, v)| (n, Some(v))).collect()
+    if !remote.is_empty() {
+        return Err(remote_lock_error(&remote));
+    }
+    Ok(found.into_iter().map(|(n, v)| (n, Some(v))).collect())
 }
 
-/// Exact registry packages from `pnpm-lock.yaml`. The `packages` keys are `/name/1.2.3`
-/// (v5), `/name@1.2.3(peer@1)` (v6) or `name@1.2.3` (v9); tarball and git sources are left
-/// out.
-pub(crate) fn parse_pnpm_lock_packages_from_content(
+/// Exact registry packages from `pnpm-lock.yaml`. The `packages` keys are `/name/1.2.3` (v5),
+/// `/name@1.2.3(peer@1)` (v6) or `name@1.2.3` (v9). As for npm, an entry whose resolution is a
+/// tarball on another host, a git repository or a commit is an error unless the package is
+/// exempt; a directory resolution is the user's own code and is left out.
+pub(crate) fn parse_pnpm_lock(
     content: &str,
-) -> Vec<(String, Option<String>)> {
+    exempt: &std::collections::HashSet<String>,
+) -> Result<Vec<(String, Option<String>)>, String> {
     let Ok(lock) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let Some(packages) = lock.get("packages").and_then(|v| v.as_mapping()) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let mut found = std::collections::BTreeSet::new();
+    let mut remote: Vec<String> = Vec::new();
     for (key, entry) in packages {
         let Some(key) = key.as_str() else { continue };
         let resolution = entry.get("resolution");
-        let not_registry = resolution.is_some_and(|r| {
-            ["tarball", "type", "repo", "commit"]
-                .iter()
-                .any(|k| r.get(*k).is_some())
-        });
-        if not_registry {
-            continue;
-        }
+        let has = |k: &str| resolution.is_some_and(|r| r.get(k).is_some());
         let key = key.trim_start_matches('/');
         let key = key.split('(').next().unwrap_or(key);
         // v5 first (`name/1.2.3`, `name/1.2.3_peer@1`: a peer suffix contains `@`), then
@@ -1164,16 +1336,54 @@ pub(crate) fn parse_pnpm_lock_packages_from_content(
                 .ok()
                 .map(|_| (name, version))
         });
-        let Some((name, version)) =
-            v5.or_else(|| key.rsplit_once('@').filter(|(n, _)| !n.is_empty()))
-        else {
-            continue;
+        let parsed = v5.or_else(|| key.rsplit_once('@').filter(|(n, _)| !n.is_empty()));
+
+        if has("directory") {
+            continue; // the user's own code
+        }
+        let tarball = resolution
+            .and_then(|r| r.get("tarball"))
+            .and_then(|t| t.as_str());
+        let source = match tarball {
+            Some(url) => lock_url_source(url),
+            None if has("type") || has("repo") || has("commit") => {
+                LockSource::Remote("a git repository".to_string())
+            }
+            None => LockSource::Registry,
         };
-        if semver::Version::parse(version).is_ok() && is_valid_npm_name(name) {
-            found.insert((name.to_string(), version.to_string()));
+        let name_version =
+            parsed.filter(|(n, v)| semver::Version::parse(v).is_ok() && is_valid_npm_name(n));
+        match (source, name_version) {
+            (LockSource::Local, _) => {}
+            (LockSource::Registry, Some((n, v))) => {
+                found.insert((n.to_string(), v.to_string()));
+            }
+            (LockSource::Registry, None) => {}
+            (LockSource::Remote(_), Some((n, v))) if exempt.contains(n) => {
+                found.insert((n.to_string(), v.to_string()));
+            }
+            (LockSource::Remote(from), Some((n, v))) => {
+                remote.push(format!("{n}@{v} (from {from})"))
+            }
+            (LockSource::Remote(from), None) => remote.push(format!("{key} (from {from})")),
         }
     }
-    found.into_iter().map(|(n, v)| (n, Some(v))).collect()
+    if !remote.is_empty() {
+        return Err(remote_lock_error(&remote));
+    }
+    Ok(found.into_iter().map(|(n, v)| (n, Some(v))).collect())
+}
+
+#[cfg(test)]
+pub(crate) fn parse_npm_lock_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
+    parse_npm_lock(content, &Default::default()).unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(crate) fn parse_pnpm_lock_packages_from_content(
+    content: &str,
+) -> Vec<(String, Option<String>)> {
+    parse_pnpm_lock(content, &Default::default()).unwrap_or_default()
 }
 
 pub(crate) fn parse_uv_lock_upgrade_packages_from_args(args: &[String]) -> Vec<String> {
@@ -2346,30 +2556,6 @@ version = "2.31.0"
     }
 
     #[test]
-    fn lockfile_entries_with_missing_or_odd_fields_are_handled() {
-        let lock = r#"{"lockfileVersion":3,"packages":{
-            "node_modules/noversion":{"resolved":"https://registry.npmjs.org/n/-/n-1.0.0.tgz"},
-            "node_modules/badversion":{"version":"latest","resolved":"https://registry.npmjs.org/b/-/b.tgz"},
-            "node_modules/numeric":{"version":5},
-            "node_modules/empty-resolved":{"version":"1.0.0","resolved":""},
-            "node_modules/no-resolved":{"version":"2.0.0"},
-            "node_modules/@s/scoped":{"version":"3.0.0","resolved":"https://registry.npmjs.org/@s/scoped/-/scoped-3.0.0.tgz"},
-            "node_modules/dup":{"version":"1.0.0","resolved":"https://registry.npmjs.org/dup/-/dup-1.0.0.tgz"},
-            "node_modules/x/node_modules/dup":{"version":"1.0.0","resolved":"https://registry.npmjs.org/dup/-/dup-1.0.0.tgz"},
-            "node_modules/prerelease":{"version":"1.0.0-rc.1","resolved":"https://registry.npmjs.org/p/-/p.tgz"}}}"#;
-        assert_eq!(
-            pkgs(parse_npm_lock_packages_from_content(lock)),
-            [
-                "@s/scoped@3.0.0",
-                "dup@1.0.0",
-                "empty-resolved@1.0.0",
-                "no-resolved@2.0.0",
-                "prerelease@1.0.0-rc.1"
-            ]
-        );
-    }
-
-    #[test]
     fn lockfile_only_flag_value_edge_cases_always_err_towards_scanning() {
         let on = |a: &[&str]| is_lockfile_only_command(&strings(a));
         // Values npm might read as false or garbage count as "not lockfile-only": scan.
@@ -3265,6 +3451,14 @@ version = "2.31.0"
             .collect()
     }
 
+    fn exempt(names: &[&str]) -> std::collections::HashSet<String> {
+        names.iter().map(|n| n.to_string()).collect()
+    }
+
+    fn npm_lock(lock: &str) -> Vec<String> {
+        pkgs(parse_npm_lock(lock, &exempt(&[])).expect("registry-only lockfile"))
+    }
+
     #[test]
     fn package_lock_v3_lists_every_installed_registry_version() {
         let lock = r#"{"name":"app","lockfileVersion":3,"packages":{
@@ -3274,12 +3468,11 @@ version = "2.31.0"
             "node_modules/a/node_modules/lodash":{"version":"3.10.1","resolved":"https://registry.npmjs.org/lodash/-/lodash-3.10.1.tgz"},
             "node_modules/mine":{"resolved":"packages/mine","link":true},
             "packages/mine":{"name":"mine","version":"1.0.0"},
-            "node_modules/gitdep":{"version":"1.0.0","resolved":"git+ssh://git@github.com/x/y.git#abc"},
             "node_modules/filedep":{"version":"1.0.0","resolved":"file:../filedep"},
             "node_modules/bundled":{"version":"1.0.0","inBundle":true},
             "node_modules/alias":{"name":"real-name","version":"2.0.0","resolved":"https://registry.npmjs.org/real-name/-/real-name-2.0.0.tgz"}}}"#;
         assert_eq!(
-            pkgs(parse_npm_lock_packages_from_content(lock)),
+            npm_lock(lock),
             [
                 "@types/node@20.1.0",
                 "lodash@3.10.1",
@@ -3294,33 +3487,277 @@ version = "2.31.0"
         let lock = r#"{"lockfileVersion":1,"dependencies":{
             "lodash":{"version":"4.17.21","resolved":"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"},
             "a":{"version":"1.0.0","resolved":"https://registry.npmjs.org/a/-/a-1.0.0.tgz","dependencies":{
-                "b":{"version":"2.0.0","resolved":"https://registry.npmjs.org/b/-/b-2.0.0.tgz"}}},
-            "gitdep":{"version":"github:x/y#abc"}}}"#;
-        assert_eq!(
-            pkgs(parse_npm_lock_packages_from_content(lock)),
-            ["a@1.0.0", "b@2.0.0", "lodash@4.17.21"]
-        );
+                "b":{"version":"2.0.0","resolved":"https://registry.npmjs.org/b/-/b-2.0.0.tgz"}}}}}"#;
+        assert_eq!(npm_lock(lock), ["a@1.0.0", "b@2.0.0", "lodash@4.17.21"]);
         assert!(parse_npm_lock_packages_from_content("not json").is_empty());
     }
 
     #[test]
+    fn lockfile_entries_with_missing_or_odd_fields_are_handled() {
+        let lock = r#"{"lockfileVersion":3,"packages":{
+            "node_modules/noversion":{"resolved":"https://registry.npmjs.org/n/-/n-1.0.0.tgz"},
+            "node_modules/numeric":{"version":5},
+            "node_modules/empty-resolved":{"version":"1.0.0","resolved":""},
+            "node_modules/no-resolved":{"version":"2.0.0"},
+            "node_modules/@s/scoped":{"version":"3.0.0","resolved":"https://registry.npmjs.org/@s/scoped/-/scoped-3.0.0.tgz"},
+            "node_modules/dup":{"version":"1.0.0","resolved":"https://registry.npmjs.org/dup/-/dup-1.0.0.tgz"},
+            "node_modules/x/node_modules/dup":{"version":"1.0.0","resolved":"https://registry.npmjs.org/dup/-/dup-1.0.0.tgz"},
+            "node_modules/prerelease":{"version":"1.0.0-rc.1","resolved":"https://registry.npmjs.org/p/-/p.tgz"}}}"#;
+        assert_eq!(
+            npm_lock(lock),
+            [
+                "@s/scoped@3.0.0",
+                "dup@1.0.0",
+                "empty-resolved@1.0.0",
+                "no-resolved@2.0.0",
+                "prerelease@1.0.0-rc.1"
+            ]
+        );
+        // A registry entry whose version is not a version is not trusted either.
+        let bad = r#"{"packages":{"node_modules/b":{"version":"latest","resolved":"https://registry.npmjs.org/b/-/b.tgz"}}}"#;
+        assert!(
+            parse_npm_lock(bad, &exempt(&[]))
+                .unwrap_err()
+                .contains("b@latest")
+        );
+    }
+
+    #[test]
+    fn lockfile_entries_from_anywhere_but_the_npm_registry_fail_closed() {
+        let entry = |resolved: &str| {
+            format!(
+                r#"{{"packages":{{"node_modules/pkg":{{"version":"1.0.0","resolved":"{resolved}"}}}}}}"#
+            )
+        };
+        // Other hosts, look-alike hosts, userinfo tricks, git and ssh sources, tarball URLs.
+        for resolved in [
+            "https://evil.example/pkg/-/pkg-1.0.0.tgz",
+            "http://attacker.example/x.tgz",
+            "https://registry.npmjs.org.evil.example/pkg.tgz",
+            "https://registry.npmjs.org@evil.example/pkg.tgz",
+            "https://evilregistry.npmjs.org/pkg.tgz",
+            "https://registry.npmjs.com/pkg.tgz",
+            "git+ssh://git@github.com/x/y.git#abc",
+            "git+https://github.com/x/y.git#abc",
+            "git://github.com/x/y.git",
+            "github:x/y#abc",
+            "ssh://git@host/x.git",
+        ] {
+            let err = parse_npm_lock(&entry(resolved), &exempt(&[])).expect_err(resolved);
+            assert!(
+                err.contains("pkg@1.0.0") && err.contains("do not come from the npm registry"),
+                "{resolved}: {err}"
+            );
+            assert!(
+                err.contains("internal_package_exemptions"),
+                "{resolved}: {err}"
+            );
+        }
+        // The real registry (any case, with a port or credentials) and local paths are fine.
+        for resolved in [
+            "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz",
+            "https://REGISTRY.NPMJS.ORG/pkg/-/pkg-1.0.0.tgz",
+            "https://registry.npmjs.org:443/pkg/-/pkg-1.0.0.tgz",
+            "http://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz",
+            "https://user:pw@registry.npmjs.org/pkg/-/pkg-1.0.0.tgz",
+        ] {
+            assert_eq!(npm_lock(&entry(resolved)), ["pkg@1.0.0"], "{resolved}");
+        }
+        for resolved in ["file:../pkg", "packages/pkg"] {
+            assert!(
+                npm_lock(&entry(resolved)).is_empty(),
+                "{resolved}: local code is not scanned"
+            );
+        }
+        // v1: a git or URL dependency has no `resolved`, only a non-version `version`.
+        let v1 = r#"{"lockfileVersion":1,"dependencies":{"gitdep":{"version":"github:x/y#abc"}}}"#;
+        assert!(
+            parse_npm_lock(v1, &exempt(&[]))
+                .unwrap_err()
+                .contains("gitdep@github:x/y#abc")
+        );
+        // Every offender is named (and many are summarised), not just the first.
+        let many: String = (0..8)
+            .map(|i| format!(r#""node_modules/p{i}":{{"version":"1.0.0","resolved":"https://evil.example/p{i}.tgz"}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let err =
+            parse_npm_lock(&format!(r#"{{"packages":{{{many}}}}}"#), &exempt(&[])).unwrap_err();
+        assert!(
+            err.contains("p0@1.0.0") && err.contains("and 3 more"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn internal_package_exemptions_let_a_private_registry_package_through() {
+        let lock = r#"{"packages":{
+            "node_modules/corp-ui":{"version":"2.1.0","resolved":"https://npm.corp.example/corp-ui/-/corp-ui-2.1.0.tgz"},
+            "node_modules/lodash":{"version":"4.17.21","resolved":"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"}}}"#;
+        assert!(parse_npm_lock(lock, &exempt(&[])).is_err());
+        // Exempt packages are passed on (the scanner skips them); an unrelated name does not help.
+        assert_eq!(
+            pkgs(parse_npm_lock(lock, &exempt(&["corp-ui"])).unwrap()),
+            ["corp-ui@2.1.0", "lodash@4.17.21"]
+        );
+        assert!(parse_npm_lock(lock, &exempt(&["lodash"])).is_err());
+    }
+
+    #[test]
     fn pnpm_lock_keys_are_read_in_v5_v6_and_v9_forms() {
-        let v9 = "lockfileVersion: '9.0'\npackages:\n  lodash@4.17.21:\n    resolution: {integrity: sha512-a}\n  '@types/node@20.1.0':\n    resolution: {integrity: sha512-b}\n  gitdep@https://codeload.github.com/x/y/tar.gz/abc:\n    resolution: {tarball: https://codeload.github.com/x/y/tar.gz/abc}\n    version: 1.0.0\nsnapshots: {}\n";
-        assert_eq!(
-            pkgs(parse_pnpm_lock_packages_from_content(v9)),
-            ["@types/node@20.1.0", "lodash@4.17.21"]
-        );
+        let ok =
+            |lock: &str| pkgs(parse_pnpm_lock(lock, &exempt(&[])).expect("registry-only lockfile"));
+        let v9 = "lockfileVersion: '9.0'\npackages:\n  lodash@4.17.21:\n    resolution: {integrity: sha512-a}\n  '@types/node@20.1.0':\n    resolution: {integrity: sha512-b}\nsnapshots: {}\n";
+        assert_eq!(ok(v9), ["@types/node@20.1.0", "lodash@4.17.21"]);
         let v6 = "lockfileVersion: '6.0'\npackages:\n  /lodash@4.17.21:\n    resolution: {integrity: sha512-a}\n  /@types/react@18.2.0(react@18.2.0):\n    resolution: {integrity: sha512-b}\n";
+        assert_eq!(ok(v6), ["@types/react@18.2.0", "lodash@4.17.21"]);
+        let v5 = "lockfileVersion: 5.4\npackages:\n  /lodash/4.17.21:\n    resolution: {integrity: sha512-a}\n  /@types/node/20.1.0:\n    resolution: {integrity: sha512-b}\n  /foo/1.0.0_react@17.0.0:\n    resolution: {integrity: sha512-c}\n";
         assert_eq!(
-            pkgs(parse_pnpm_lock_packages_from_content(v6)),
-            ["@types/react@18.2.0", "lodash@4.17.21"]
-        );
-        let v5 = "lockfileVersion: 5.4\npackages:\n  /lodash/4.17.21:\n    resolution: {integrity: sha512-a}\n  /@types/node/20.1.0:\n    resolution: {integrity: sha512-b}\n  /foo/1.0.0_react@17.0.0:\n    resolution: {integrity: sha512-c}\n  github.com/x/y/abc:\n    resolution: {tarball: https://codeload.github.com/x/y/tar.gz/abc}\n";
-        assert_eq!(
-            pkgs(parse_pnpm_lock_packages_from_content(v5)),
+            ok(v5),
             ["@types/node@20.1.0", "foo@1.0.0", "lodash@4.17.21"]
         );
         assert!(parse_pnpm_lock_packages_from_content("::: not yaml :::").is_empty());
+    }
+
+    #[test]
+    fn pnpm_lock_tarballs_git_sources_and_exemptions() {
+        let lock =
+            |entry: &str| format!("lockfileVersion: '9.0'\npackages:\n{entry}snapshots: {{}}\n");
+        // A tarball on another host, a git repository and a commit are not registry downloads.
+        for entry in [
+            "  pkg@1.0.0:\n    resolution: {tarball: 'https://evil.example/pkg.tgz'}\n",
+            "  pkg@1.0.0:\n    resolution: {tarball: 'https://registry.npmjs.org.evil.example/pkg.tgz'}\n",
+            "  pkg@1.0.0:\n    resolution: {type: git, repo: 'https://github.com/x/y.git', commit: abc}\n",
+            "  pkg@1.0.0:\n    resolution: {repo: 'git@github.com:x/y.git', commit: abc}\n",
+        ] {
+            let err = parse_pnpm_lock(&lock(entry), &exempt(&[])).expect_err(entry);
+            assert!(
+                err.contains("pkg@1.0.0") && err.contains("do not come from the npm registry"),
+                "{entry}: {err}"
+            );
+        }
+        // The registry's own tarball URL and a local directory are fine.
+        let ok = parse_pnpm_lock(
+            &lock("  pkg@1.0.0:\n    resolution: {tarball: 'https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz', integrity: sha512-a}\n  local@1.0.0:\n    resolution: {directory: ../local, type: directory}\n"),
+            &exempt(&[]),
+        )
+        .unwrap();
+        assert_eq!(pkgs(ok), ["pkg@1.0.0"]);
+        // An exempt package from another source passes; an entry without a readable name cannot.
+        let private =
+            lock("  corp@2.0.0:\n    resolution: {tarball: 'https://npm.corp.example/corp.tgz'}\n");
+        assert_eq!(
+            pkgs(parse_pnpm_lock(&private, &exempt(&["corp"])).unwrap()),
+            ["corp@2.0.0"]
+        );
+        let unnamed = "lockfileVersion: 5.4\npackages:\n  github.com/x/y/abc:\n    resolution: {tarball: 'https://codeload.github.com/x/y/tar.gz/abc'}\n";
+        assert!(parse_pnpm_lock(unnamed, &exempt(&["y"])).is_err());
+    }
+
+    #[test]
+    fn a_no_argument_install_is_frozen_to_the_scanned_lockfile() {
+        let frozen = |a: &[&str]| freeze_lockfile_install(a[0], &strings(a));
+        // npm install and npm i become npm ci (keeping the other flags); npm ci stays.
+        assert_eq!(
+            frozen(&["npm", "install"]).unwrap(),
+            strings(&["npm", "ci"])
+        );
+        assert_eq!(
+            frozen(&["npm", "i", "--omit=dev", "--ignore-scripts"]).unwrap(),
+            strings(&["npm", "ci", "--omit=dev", "--ignore-scripts"])
+        );
+        assert_eq!(frozen(&["npm", "ci"]).unwrap(), strings(&["npm", "ci"]));
+        // pnpm gets --frozen-lockfile unless it is already there.
+        assert_eq!(
+            frozen(&["pnpm", "install"]).unwrap(),
+            strings(&["pnpm", "install", "--frozen-lockfile"])
+        );
+        assert_eq!(
+            frozen(&["pnpm", "i", "--prod"]).unwrap(),
+            strings(&["pnpm", "i", "--frozen-lockfile", "--prod"])
+        );
+        assert_eq!(
+            frozen(&["pnpm", "install", "--frozen-lockfile"]).unwrap(),
+            strings(&["pnpm", "install", "--frozen-lockfile"])
+        );
+        // A flag that makes the package manager ignore or update the lockfile defeats the scan.
+        for args in [
+            &["npm", "install", "--no-package-lock"][..],
+            &["npm", "install", "--package-lock=false"],
+            &["pnpm", "install", "--no-frozen-lockfile"],
+            &["pnpm", "install", "--frozen-lockfile=false"],
+            &["pnpm", "install", "--prefer-frozen-lockfile"],
+            &["pnpm", "install", "--no-lockfile"],
+            &["pnpm", "install", "--lockfile=false"],
+        ] {
+            let err =
+                freeze_lockfile_install(args[0], &strings(args)).expect_err(&format!("{args:?}"));
+            assert!(
+                err.contains("Failing closed") && err.contains("lockfile it scanned"),
+                "{args:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lockfile_edited_after_it_was_read_is_detected_before_forwarding() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir
+            .path()
+            .join("package-lock.json")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&lock, "{\"lockfileVersion\":3}").unwrap();
+        let read = read_input(&lock).unwrap();
+        assert_eq!(read, "{\"lockfileVersion\":3}");
+        let changed = |path: &str| changed_inputs().iter().any(|p| p == path);
+        assert!(!changed(&lock), "unchanged since it was read");
+        std::fs::write(&lock, "{\"lockfileVersion\":3,\"packages\":{}}").unwrap();
+        assert!(changed(&lock), "edited after the scan");
+        // Reading again records the new content, so the scan of the new file is what counts.
+        read_input(&lock).unwrap();
+        assert!(!changed(&lock));
+        // Deleting it counts as a change too.
+        std::fs::remove_file(&lock).unwrap();
+        assert!(changed(&lock));
+        // A file that cannot be read is never recorded.
+        let missing = dir.path().join("nope.txt").to_string_lossy().to_string();
+        assert!(read_input(&missing).is_err());
+        assert!(!changed(&missing));
+    }
+
+    #[test]
+    fn a_file_that_appears_after_the_scan_is_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let shrinkwrap = dir
+            .path()
+            .join("npm-shrinkwrap.json")
+            .to_string_lossy()
+            .to_string();
+        // npm prefers a shrinkwrap over package-lock.json, so its absence is part of what was scanned.
+        assert!(read_input(&shrinkwrap).is_err());
+        let changed = |path: &str| changed_inputs().iter().any(|p| p == path);
+        assert!(!changed(&shrinkwrap), "still absent");
+        std::fs::write(&shrinkwrap, "{}").unwrap();
+        assert!(changed(&shrinkwrap), "created during the scan");
+    }
+
+    #[test]
+    fn every_file_the_scan_reads_is_tracked() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let base = write(d, "base.txt", "six==1.16.0\n");
+        let top = write(d, "top.txt", "attrs==24.2.0\n-r base.txt\n");
+        scan_r(&top).unwrap();
+        let tracked = changed_inputs(); // nothing changed yet; edit one and see it reported
+        assert!(!tracked.contains(&top) && !tracked.contains(&base));
+        write(d, "base.txt", "six==1.17.0\n");
+        let after = changed_inputs();
+        assert!(
+            after.contains(&base),
+            "an included file is tracked: {after:?}"
+        );
+        assert!(!after.contains(&top));
     }
 
     #[test]
