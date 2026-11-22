@@ -449,28 +449,63 @@ fn is_plain_version(v: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '!' | '_' | '-'))
 }
 
-/// Parses one requirement the way the Python install paths need it: it must name exactly one
-/// registry version (`name`, `name[extra]` or `name==1.2.3`, with spaces and a `; marker` or
-/// ` --hash` tail tolerated). gyrseek scans specific versions and pins the forwarded command
-/// to them, so a range (`>=2`, `~=1.4`, `==1.*`) cannot be vouched for, and a direct
-/// reference (`name @ https://…`, a bare URL) installs something the registry scan never
-/// saw. Both are errors. Blank lines, comments, option lines and local paths are `Ok(None)`.
-/// With `poetry`, `name@2.31.0` means `name==2.31.0` and `name@latest` means `name`.
-fn parse_exact_requirement(
-    spec: &str,
-    poetry: bool,
-) -> Result<Option<(String, Option<String>)>, String> {
+/// A version range typed on the command line (`pytest>=9`, `lodash@^4`). gyrseek scans the
+/// latest version for it, checks that the latest version satisfies the range, and pins the
+/// forwarded command to the version that was scanned.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RangeRequest {
+    /// The argument exactly as typed; the forwarded command replaces it.
+    pub arg: String,
+    /// Its position in the command line, so only that argument is rewritten (an identical
+    /// string used as a flag value, such as `--target`, is left alone).
+    pub index: usize,
+    /// Registry name, without extras.
+    pub name: String,
+    /// Name with extras as written (`requests[security]`), for the replacement spec.
+    pub base: String,
+    /// The constraint (`>=2,<3`, `^4`), without the name.
+    pub range: String,
+    /// A `; marker` tail to keep on the replacement (Python only).
+    pub tail: String,
+}
+
+/// What a command line asks to install.
+#[derive(Debug, Default)]
+pub(crate) struct ParsedTargets {
+    pub packages: Vec<(String, Option<String>)>,
+    pub ranges: Vec<RangeRequest>,
+    /// Positions of the package arguments on the command line (not of `-r` files or flag
+    /// values). The forwarded command is rewritten at these positions only.
+    pub package_args: Vec<usize>,
+}
+
+enum Requirement {
+    Exact(String, Option<String>),
+    Range(RangeRequest),
+}
+
+/// Parses one Python requirement. It must name one registry package: `name`, `name[extra]`,
+/// `name==1.2.3`, or a range (`>=2`, `~=1.4`, `==1.*`, Poetry's `^2` and `name@^2`), with
+/// spaces and a `; marker` or ` --hash` tail tolerated. A direct reference (`name @ https://…`,
+/// a bare URL) installs something the registry scan never saw and is an error. Blank lines,
+/// comments, option lines and local paths are `Ok(None)`. With `poetry`, `name@2.31.0` means
+/// `name==2.31.0` and `name@latest` means `name`. The caller fills in `RangeRequest::arg`.
+fn classify_requirement(spec: &str, poetry: bool) -> Result<Option<Requirement>, String> {
     let line = spec.split(" #").next().unwrap_or(spec).trim();
     if line.is_empty() || line.starts_with(['#', '-', '.', '/', '~']) {
         return Ok(None);
     }
-    let not_exact = |why: &str| {
+    let bad = |why: &str| {
         Err(format!(
-            "'{line}' {why}. gyrseek scans exact versions and pins the install to them, so it cannot vouch for it. Use an exact version (name==1.2.3), a bare name (gyrseek then scans the latest version and pins it), or a lockfile command (uv sync, uv lock, poetry install). Failing closed."
+            "'{line}' {why}. gyrseek scans specific registry versions and pins the install to them, so it cannot vouch for it. Use `name`, `name==1.2.3` or a version range, or a lockfile command (uv sync, uv lock, poetry install). Failing closed."
         ))
     };
 
     // Drop a `; marker` or ` --option` tail and a trailing line continuation, then spaces.
+    let tail = line
+        .find(';')
+        .map(|i| line[i..].trim().to_string())
+        .unwrap_or_default();
     let head = line.split(';').next().unwrap_or(line);
     let head = head.split(" --").next().unwrap_or(head);
     // Spaces are fine around operators, brackets and commas (`name [a, b] == 1.0`) but not
@@ -493,49 +528,101 @@ fn parse_exact_requirement(
             && !glue(prev)
             && !glue(*next)
         {
-            return not_exact("has a space inside the requirement");
+            return bad("has a space inside the requirement");
         }
         i = j;
     }
     if compact.contains("://") || compact.starts_with("git+") {
-        return not_exact("installs from a URL, not from the registry");
+        return bad("installs from a URL, not from the registry");
     }
 
-    // Extras may contain commas (`name[a,b]`), so remove them before looking at operators.
-    let plain = match (compact.find('['), compact.find(']')) {
-        (Some(open), Some(close)) if open < close => {
-            format!("{}{}", &compact[..open], &compact[close + 1..])
-        }
-        _ => compact.clone(),
+    // The name (with its extras) ends at the first operator outside the brackets.
+    let mut depth = 0usize;
+    let split_at = compact
+        .char_indices()
+        .find(|(_, c)| {
+            match c {
+                '[' => depth += 1,
+                ']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            depth == 0 && matches!(c, '<' | '>' | '!' | '~' | '=' | '@' | ',' | '*')
+        })
+        .map(|(i, _)| i);
+    let (base, constraint) = match split_at {
+        Some(i) => (&compact[..i], &compact[i..]),
+        None => (compact.as_str(), ""),
     };
-
-    let (name, version) = if poetry && let Some((name, ver)) = plain.split_once('@') {
-        match ver {
-            "" | "latest" => (name, None),
-            v if is_plain_version(v) => (name, Some(v)),
-            _ => return not_exact("is a version range"),
-        }
-    } else if plain.contains('@') {
-        return not_exact("installs from a URL or path, not from the registry");
-    } else if let Some((name, ver)) = plain.split_once("==") {
-        if !is_plain_version(ver) {
-            return not_exact("is a version range");
-        }
-        (name, Some(ver))
-    } else if plain.contains(['<', '>', '!', '~', '=', ',', '*']) {
-        return not_exact("is a version range");
-    } else {
-        (plain.as_str(), None)
-    };
-
+    let name = strip_pep508_extras(base);
     if name.is_empty()
         || !name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     {
-        return not_exact("is not a package name gyrseek can look up");
+        return bad("is not a package name gyrseek can look up");
     }
-    Ok(Some((name.to_string(), version.map(str::to_string))))
+    let range = |range: &str| {
+        Ok(Some(Requirement::Range(RangeRequest {
+            arg: String::new(),
+            index: 0,
+            name: name.to_string(),
+            base: base.to_string(),
+            range: range.to_string(),
+            tail: tail.clone(),
+        })))
+    };
+    let exact = |version: Option<&str>| {
+        Ok(Some(Requirement::Exact(
+            name.to_string(),
+            version.map(str::to_string),
+        )))
+    };
+
+    if constraint.is_empty() {
+        return exact(None);
+    }
+    if let Some(version) = constraint.strip_prefix('@') {
+        if !poetry {
+            return bad("installs from a URL or path, not from the registry");
+        }
+        return match version {
+            "" | "latest" => exact(None),
+            v if is_plain_version(v) => exact(Some(v)),
+            v => range(v),
+        };
+    }
+    match constraint.strip_prefix("==") {
+        Some(version) if is_plain_version(version) => exact(Some(version)),
+        // pip and uv accept PEP 440 only (`~=`, not Poetry's `~` or `^`), so anything else
+        // would make the real command fail; do not turn it into a successful install.
+        _ if !poetry
+            && <pep440_rs::VersionSpecifiers as std::str::FromStr>::from_str(constraint)
+                .is_err() =>
+        {
+            bad(
+                "is not a valid version constraint for pip or uv (PEP 440 uses ==, !=, <, <=, >, >=, ~=)",
+            )
+        }
+        _ => range(constraint),
+    }
+}
+
+/// Like `classify_requirement`, but a range is an error: used where the forwarded command
+/// cannot be pinned (the lines of a `-r` file).
+fn parse_exact_requirement(
+    spec: &str,
+    poetry: bool,
+) -> Result<Option<(String, Option<String>)>, String> {
+    match classify_requirement(spec, poetry)? {
+        None => Ok(None),
+        Some(Requirement::Exact(name, version)) => Ok(Some((name, version))),
+        Some(Requirement::Range(_)) => {
+            let line = spec.split(" #").next().unwrap_or(spec).trim();
+            Err(format!(
+                "'{line}' is a version range. A range inside a file cannot be pinned by gyrseek, so the install could pick a version it did not scan. Write the exact version (name==1.2.3) in the file, or give the package on the command line. Failing closed."
+            ))
+        }
+    }
 }
 
 /// How deep `-r` includes may nest inside requirements files.
@@ -627,15 +714,22 @@ fn read_requirements_file_at(
 /// Every package named on a Python install command line, including those read from
 /// `-r`/`--requirement(s)` files: `pip install a b`, `uv pip install a b`, `uv add a b`,
 /// `poetry add a b`. Scanning only the first would forward the rest unscanned.
+#[cfg(test)]
 pub(crate) fn parse_python_install_packages_from_args(
     args: &[String],
 ) -> Result<Vec<(String, Option<String>)>, String> {
+    parse_python_install_targets(args).map(|t| t.packages)
+}
+
+/// Like `parse_python_install_packages_from_args`, and also the version ranges that were
+/// typed on the command line (they are scanned at the latest version).
+pub(crate) fn parse_python_install_targets(args: &[String]) -> Result<ParsedTargets, String> {
     let Some((start, value_flags)) = python_install_layout(args) else {
-        return Ok(Vec::new());
+        return Ok(ParsedTargets::default());
     };
     let poetry = args.first().map(String::as_str) == Some("poetry");
 
-    let mut packages = Vec::new();
+    let mut targets = ParsedTargets::default();
     let mut idx = start;
 
     while idx < args.len() {
@@ -643,7 +737,7 @@ pub(crate) fn parse_python_install_packages_from_args(
 
         if matches!(arg.as_str(), "-r" | "--requirement" | "--requirements") {
             if let Some(path) = args.get(idx + 1) {
-                packages.extend(read_requirements_file(path)?);
+                targets.packages.extend(read_requirements_file(path)?);
             }
             idx += 2;
             continue;
@@ -653,7 +747,7 @@ pub(crate) fn parse_python_install_packages_from_args(
             .strip_prefix("--requirements=")
             .or_else(|| arg.strip_prefix("--requirement="))
         {
-            packages.extend(read_requirements_file(path)?);
+            targets.packages.extend(read_requirements_file(path)?);
             idx += 1;
             continue;
         }
@@ -663,7 +757,7 @@ pub(crate) fn parse_python_install_packages_from_args(
             .strip_prefix("-r")
             .filter(|p| !p.is_empty() && !p.starts_with('-'))
         {
-            packages.extend(read_requirements_file(path)?);
+            targets.packages.extend(read_requirements_file(path)?);
             idx += 1;
             continue;
         }
@@ -677,11 +771,24 @@ pub(crate) fn parse_python_install_packages_from_args(
             continue;
         }
 
-        packages.extend(parse_exact_requirement(arg, poetry)?);
+        match classify_requirement(arg, poetry)? {
+            None => {}
+            Some(Requirement::Exact(name, version)) => {
+                targets.packages.push((name, version));
+                targets.package_args.push(idx);
+            }
+            Some(Requirement::Range(mut range)) => {
+                range.arg = arg.clone();
+                range.index = idx;
+                targets.packages.push((range.name.clone(), None));
+                targets.package_args.push(idx);
+                targets.ranges.push(range);
+            }
+        }
         idx += 1;
     }
 
-    Ok(packages)
+    Ok(targets)
 }
 
 fn parse_npm_spec(arg: &str) -> (String, Option<String>) {
@@ -783,6 +890,14 @@ pub(crate) fn is_lockfile_only_command(args: &[String]) -> bool {
 /// The non-flag arguments after the command, without the `true`/`false` that may follow a
 /// lockfile-only flag.
 fn npm_positional_args(args: &[String]) -> Vec<&str> {
+    npm_positional_indexed(args)
+        .into_iter()
+        .map(|(_, arg)| arg)
+        .collect()
+}
+
+/// Like `npm_positional_args`, with each argument's position on the command line.
+fn npm_positional_indexed(args: &[String]) -> Vec<(usize, &str)> {
     args.iter()
         .enumerate()
         .skip(2)
@@ -792,7 +907,7 @@ fn npm_positional_args(args: &[String]) -> Vec<&str> {
                 .is_some_and(|prev| LOCKFILE_ONLY_FLAGS.contains(&prev.as_str()));
             !arg.starts_with('-') && !(after_flag && matches!(arg.as_str(), "true" | "false"))
         })
-        .map(|(_, arg)| arg.as_str())
+        .map(|(i, arg)| (i, arg.as_str()))
         .collect()
 }
 
@@ -831,24 +946,39 @@ fn is_valid_npm_name(name: &str) -> bool {
     }
 }
 
-/// One npm/pnpm spec from the command line must name exactly one registry version:
-/// `name`, `name@latest` or `name@1.2.3`. gyrseek scans specific versions and pins the
-/// install to them, so a range (`^4`, `>=2`, `4.x`), a dist-tag (`@next`) or an alias
-/// (`npm:other@1`) cannot be vouched for.
-fn parse_exact_npm_spec(arg: &str) -> Result<(String, Option<String>), String> {
+enum NpmSpec {
+    Exact(String, Option<String>),
+    Range(RangeRequest),
+}
+
+/// One npm/pnpm spec from the command line: `name`, `name@latest`, `name@1.2.3`, or a range
+/// (`name@^4`, `name@>=2 <3`, `name@4.x`). A range is scanned at the latest version (see
+/// `RangeRequest`). A dist-tag (`@next`) or an alias (`npm:other@1`) is neither: the tag
+/// points at a version gyrseek has no way to know, so it cannot be vouched for.
+fn classify_npm_spec(arg: &str) -> Result<NpmSpec, String> {
     let (name, version) = parse_npm_spec(arg);
-    let not_exact = |why: &str| {
+    let not_ok = |why: &str| {
         Err(format!(
-            "'{arg}' {why}. gyrseek scans exact versions and pins the install to them, so it cannot vouch for it. Use an exact version (name@1.2.3), a bare name (gyrseek then scans the latest version and pins it), or install from a lockfile (npm ci, npm install, pnpm install). Failing closed."
+            "'{arg}' {why}. gyrseek scans specific registry versions and pins the install to them, so it cannot vouch for it. Use a version (name@1.2.3), a version range, a bare name (gyrseek then scans the latest version and pins it), or install from a lockfile (npm ci, npm install, pnpm install). Failing closed."
         ))
     };
     if !is_valid_npm_name(&name) {
-        return not_exact("is an alias or not a package name gyrseek can look up");
+        return not_ok("is an alias or not a package name gyrseek can look up");
     }
     match version.as_deref() {
-        None | Some("latest") => Ok((name, None)),
-        Some(v) if semver::Version::parse(v).is_ok() => Ok((name, version)),
-        Some(_) => not_exact("is a version range or a dist-tag"),
+        None | Some("latest") => Ok(NpmSpec::Exact(name, None)),
+        Some(v) if semver::Version::parse(v).is_ok() => Ok(NpmSpec::Exact(name, version)),
+        Some(v) if crate::runtime_image::npm_range_contains(v, "0.0.0").is_some() => {
+            Ok(NpmSpec::Range(RangeRequest {
+                arg: arg.to_string(),
+                index: 0,
+                base: name.clone(),
+                name,
+                range: v.to_string(),
+                tail: String::new(),
+            }))
+        }
+        Some(_) => not_ok("is a dist-tag or an alias, not a version or a version range"),
     }
 }
 
@@ -858,23 +988,44 @@ fn parse_exact_npm_spec(arg: &str) -> Result<(String, Option<String>), String> {
 /// `pnpm install` actually install. `package.json` is not used: its dependencies are
 /// ranges, so scanning them would scan versions other than the ones installed. `update`
 /// picks new versions when it runs, so it has nothing to scan in advance.
+#[cfg(test)]
 pub(crate) fn parse_npm_install_packages_from_args(
     args: &[String],
 ) -> Result<Vec<(String, Option<String>)>, String> {
+    parse_npm_install_targets(args).map(|t| t.packages)
+}
+
+/// Like `parse_npm_install_packages_from_args`, and also the version ranges typed on the
+/// command line (they are scanned at the latest version).
+pub(crate) fn parse_npm_install_targets(args: &[String]) -> Result<ParsedTargets, String> {
     let manager = args.first().map(String::as_str).unwrap_or_default();
     let command = args.get(1).map(String::as_str);
     if !is_npm_family_manager(manager) || !is_npm_family_package_command(manager, command) {
-        return Ok(Vec::new());
+        return Ok(ParsedTargets::default());
     }
 
-    let positional_args = npm_positional_args(args);
+    let positional_args = npm_positional_indexed(args);
 
     if !positional_args.is_empty() {
-        return positional_args
+        let mut targets = ParsedTargets::default();
+        for (idx, arg) in positional_args
             .into_iter()
-            .filter(|arg| !is_non_registry_npm_spec(arg))
-            .map(parse_exact_npm_spec)
-            .collect();
+            .filter(|(_, arg)| !is_non_registry_npm_spec(arg))
+        {
+            match classify_npm_spec(arg)? {
+                NpmSpec::Exact(name, version) => {
+                    targets.packages.push((name, version));
+                    targets.package_args.push(idx);
+                }
+                NpmSpec::Range(mut range) => {
+                    range.index = idx;
+                    targets.packages.push((range.name.clone(), None));
+                    targets.package_args.push(idx);
+                    targets.ranges.push(range);
+                }
+            }
+        }
+        return Ok(targets);
     }
 
     if command == Some("update") {
@@ -918,7 +1069,11 @@ pub(crate) fn parse_npm_install_packages_from_args(
             "{file} lists no registry packages to scan. Failing closed."
         ));
     }
-    Ok(packages)
+    Ok(ParsedTargets {
+        packages,
+        ranges: Vec::new(),
+        package_args: Vec::new(),
+    })
 }
 
 /// Exact registry packages from `package-lock.json` / `npm-shrinkwrap.json`: lockfile v2/v3
@@ -1065,10 +1220,77 @@ pub(crate) fn parse_uv_lock_upgrade_packages_from_args(args: &[String]) -> Vec<S
 /// and non-registry specs (paths/URLs/git) are left untouched. This is what lets
 /// gyrseek guarantee the host installs the *same* version it examined, even when
 /// the user asked for an unpinned (`latest`) install.
+#[cfg(test)]
 pub(crate) fn rewrite_args_with_pinned_versions(
     manager: &str,
     args: &[String],
     pins: &HashMap<String, String>,
+) -> Vec<String> {
+    rewrite_args_with_pinned_versions_and_ranges(manager, args, pins, &[])
+}
+
+/// Does the version gyrseek scanned for each range typed on the command line satisfy that
+/// range? A range is scanned at the latest version, so one that excludes it (`lodash@^3` when
+/// 4.x is out) would install a version that was never scanned. Returns one notice per range
+/// that was replaced by the scanned version. Packages without a resolved version (skipped by
+/// `internal_package_exemptions`) are left as typed.
+pub(crate) fn check_ranges_against_scanned(
+    manager: &str,
+    ranges: &[RangeRequest],
+    pins: &HashMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let mut notices = Vec::new();
+    for r in ranges {
+        let Some(version) = pins.get(&r.name).filter(|v| *v != "latest") else {
+            continue;
+        };
+        let allowed = if is_npm_family_manager(manager) {
+            crate::runtime_image::npm_range_contains(&r.range, version)
+        } else {
+            crate::runtime_image::python_range_contains(&r.range, version)
+        };
+        match allowed {
+            Some(true) => notices.push(format!(
+                "'{}' is a version range: gyrseek scanned the latest version ({version}) and pinned the install to it.",
+                r.arg
+            )),
+            Some(false) => {
+                return Err(format!(
+                    "'{}' asks for a version range that excludes the latest version ({version}). For a range gyrseek scans only the latest version, so it cannot vouch for what this range would install. Use an exact version, or widen the range to include {version}. Failing closed.",
+                    r.arg
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "gyrseek could not check '{}' against the scanned version ({version}), so it cannot vouch for it. Use an exact version. Failing closed.",
+                    r.arg
+                ));
+            }
+        }
+    }
+    Ok(notices)
+}
+
+#[cfg(test)]
+pub(crate) fn rewrite_args_with_pinned_versions_and_ranges(
+    manager: &str,
+    args: &[String],
+    pins: &HashMap<String, String>,
+    ranges: &[RangeRequest],
+) -> Vec<String> {
+    rewrite_args_at(manager, args, pins, ranges, None)
+}
+
+/// Pins the package arguments of an install command to the versions that were scanned.
+/// With `package_args` (the positions the parser found), only those arguments are rewritten,
+/// so a flag value that happens to look like a package (`--target six`) is left alone;
+/// without it every non-flag argument after the command is considered.
+pub(crate) fn rewrite_args_at(
+    manager: &str,
+    args: &[String],
+    pins: &HashMap<String, String>,
+    ranges: &[RangeRequest],
+    package_args: Option<&[usize]>,
 ) -> Vec<String> {
     if pins.is_empty() {
         return args.to_vec();
@@ -1093,8 +1315,27 @@ pub(crate) fn rewrite_args_with_pinned_versions(
 
     let mut out: Vec<String> = Vec::with_capacity(args.len());
     for (idx, arg) in args.iter().enumerate() {
-        if idx < skip || arg.starts_with('-') {
+        if idx < skip
+            || arg.starts_with('-')
+            || package_args.is_some_and(|positions| !positions.contains(&idx))
+        {
             out.push(arg.clone());
+            continue;
+        }
+
+        // A range typed on the command line becomes the exact version that was scanned.
+        if let Some(r) = ranges
+            .iter()
+            .find(|r| r.arg == *arg && (package_args.is_none() || r.index == idx))
+            && let Some(version) = pins.get(&r.name).filter(|v| *v != "latest")
+        {
+            out.push(if is_npm_family {
+                format!("{}@{}", r.name, version)
+            } else if r.tail.is_empty() {
+                format!("{}=={}", r.base, version)
+            } else {
+                format!("{}=={} {}", r.base, version, r.tail)
+            });
             continue;
         }
 
@@ -1738,30 +1979,6 @@ version = "2.31.0"
     }
 
     #[test]
-    fn version_ranges_are_rejected_with_a_clear_message() {
-        for spec in [
-            "requests>=2",
-            "requests>2",
-            "requests<=2",
-            "requests<3",
-            "requests!=2.0",
-            "requests~=2.1",
-            "requests==2.*",
-            "requests===2.0",
-            "requests>=2,<3",
-            "requests >= 2",
-            "requests=2.0",
-            "requests[security]>=2",
-        ] {
-            let err = parse_exact_requirement(spec, false).expect_err(spec);
-            assert!(err.contains("version range"), "{spec}: {err}");
-            assert!(err.contains("uv sync"), "{spec}: {err}");
-        }
-        let err = parse_exact_requirement("requests@^2.0", true).expect_err("poetry caret");
-        assert!(err.contains("version range"), "{err}");
-    }
-
-    #[test]
     fn direct_references_and_urls_are_rejected() {
         for spec in [
             "requests @ https://evil.example/r.whl",
@@ -1775,22 +1992,6 @@ version = "2.31.0"
             assert!(err.contains("not from the registry"), "{spec}: {err}");
         }
         assert!(parse_exact_requirement("requests@https://evil.example/r.whl", true).is_err());
-    }
-
-    #[test]
-    fn install_commands_reject_ranges_and_direct_references_for_every_manager() {
-        for args in [
-            &["uv", "add", "pytest>=9.0.3"][..],
-            &["uv", "add", "pytest", "ruff~=0.5"],
-            &["uv", "pip", "install", "requests", "six==1.*"],
-            &["pip", "install", "requests @ https://evil.example/r.whl"],
-            &["pip", "install", "requests", "https://evil.example/x.whl"],
-            &["poetry", "add", "requests@^2.0"],
-        ] {
-            let err = parse_python_install_packages_from_args(&strings(args))
-                .expect_err(&format!("{args:?}"));
-            assert!(err.contains("Failing closed"), "{args:?}: {err}");
-        }
     }
 
     #[test]
@@ -2071,48 +2272,6 @@ version = "2.31.0"
     // ---- edge cases: npm / pnpm -----------------------------------------------------
 
     #[test]
-    fn npm_names_and_specs_edge_cases() {
-        for ok in [
-            "lodash",
-            "Lodash",
-            "lodash.merge",
-            "lodash_x",
-            "a",
-            "@a/b",
-            "@types/node",
-            "left-pad~",
-        ] {
-            assert!(is_valid_npm_name(ok), "{ok}");
-        }
-        for bad in [
-            "", "@", "@scope", "@scope/", "@/name", "a/b", "@a/b/c", "a b", "naïve", "../x", "a@b",
-        ] {
-            assert!(!is_valid_npm_name(bad), "{bad}");
-        }
-        // Empty version after `@`, a v-prefix and a build tag are not exact semver here.
-        for bad in [
-            "lodash@",
-            "lodash@v4.17.21",
-            "lodash@4.17",
-            "lodash@4.17.21.1",
-            "lodash@ 4.17.21",
-        ] {
-            assert!(parse_exact_npm_spec(bad).is_err(), "{bad}");
-        }
-        for (spec, name, ver) in [
-            ("lodash@4.17.21+build.5", "lodash", Some("4.17.21+build.5")),
-            ("lodash@4.17.21-beta.1", "lodash", Some("4.17.21-beta.1")),
-            ("@scope/pkg@1.0.0", "@scope/pkg", Some("1.0.0")),
-        ] {
-            assert_eq!(
-                parse_exact_npm_spec(spec).unwrap(),
-                (name.to_string(), ver.map(str::to_string)),
-                "{spec}"
-            );
-        }
-    }
-
-    #[test]
     fn npm_flags_are_not_packages_and_the_command_decides_what_is_scanned() {
         let parse = |a: &[&str]| parse_npm_install_packages_from_args(&strings(a)).unwrap();
         let pkg = |n: &str| (n.to_string(), None);
@@ -2237,6 +2396,541 @@ version = "2.31.0"
             "--package-lock-only",
             "false"
         ]));
+    }
+
+    // ---- ranges on the command line: scan the latest version, pin to it -------------
+
+    fn targets(args: &[&str]) -> ParsedTargets {
+        parse_python_install_targets(&strings(args)).expect("should parse")
+    }
+
+    fn pin_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn python_ranges_on_the_command_line_are_scanned_at_the_latest_version() {
+        let t = targets(&["uv", "add", "pytest>=9", "ruff==0.5.0", "attrs"]);
+        // The range's package is scanned as "latest" (no version), next to the others.
+        assert_eq!(
+            t.packages,
+            [
+                ("pytest".to_string(), None),
+                ("ruff".to_string(), Some("0.5.0".to_string())),
+                ("attrs".to_string(), None)
+            ]
+        );
+        assert_eq!(t.ranges.len(), 1);
+        let r = &t.ranges[0];
+        assert_eq!(
+            (
+                r.arg.as_str(),
+                r.name.as_str(),
+                r.base.as_str(),
+                r.range.as_str()
+            ),
+            ("pytest>=9", "pytest", "pytest", ">=9")
+        );
+        // Every range operator, extras, spaces, markers and Poetry's forms are recognised.
+        for (args, name, range) in [
+            (
+                &["pip", "install", "requests>=2,<3"][..],
+                "requests",
+                ">=2,<3",
+            ),
+            (&["pip", "install", "requests ~= 2.1"], "requests", "~=2.1"),
+            (&["pip", "install", "requests==2.*"], "requests", "==2.*"),
+            (&["pip", "install", "requests!=2.0"], "requests", "!=2.0"),
+            (&["pip", "install", "requests<3"], "requests", "<3"),
+            (
+                &["pip", "install", "requests[security]>=2"],
+                "requests",
+                ">=2",
+            ),
+            (&["poetry", "add", "requests@^2.0"], "requests", "^2.0"),
+            (&["poetry", "add", "requests@>=2,<3"], "requests", ">=2,<3"),
+        ] {
+            let t = targets(args);
+            assert_eq!(t.ranges.len(), 1, "{args:?}");
+            assert_eq!(
+                (t.ranges[0].name.as_str(), t.ranges[0].range.as_str()),
+                (name, range),
+                "{args:?}"
+            );
+        }
+        assert_eq!(
+            targets(&["pip", "install", "requests[security]>=2"]).ranges[0].base,
+            "requests[security]"
+        );
+        // A marker is kept so the replacement still carries it.
+        let t = targets(&["pip", "install", "uvloop>=0.19 ; sys_platform == 'linux'"]);
+        assert_eq!(t.ranges[0].tail, "; sys_platform == 'linux'");
+        // Exact pins and bare names are not ranges.
+        assert!(
+            targets(&["pip", "install", "a==1.0", "b"])
+                .ranges
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn direct_references_and_malformed_specs_are_still_rejected_on_the_command_line() {
+        for args in [
+            &["pip", "install", "requests @ https://evil.example/r.whl"][..],
+            &["pip", "install", "requests", "https://evil.example/x.whl"],
+            &["uv", "add", "git+https://github.com/x/y.git"],
+            &["pip", "install", "re quests>=2"],
+            &["pip", "install", ">=2"],
+            &["pip", "install", "requests>=2 @ https://x.example/r.whl"],
+        ] {
+            let err = parse_python_install_targets(&strings(args)).expect_err(&format!("{args:?}"));
+            assert!(err.contains("Failing closed"), "{args:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_range_inside_a_requirements_file_is_rejected_because_it_cannot_be_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = write(dir.path(), "r.txt", "six==1.16.0\npytest>=9\n");
+        let err = scan_r(&file).unwrap_err();
+        assert!(
+            err.contains("version range") && err.contains("inside a file"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_latest_version_must_satisfy_the_range_that_was_typed() {
+        let range = |arg: &str, name: &str, spec: &str| RangeRequest {
+            arg: arg.to_string(),
+            index: 0,
+            name: name.to_string(),
+            base: name.to_string(),
+            range: spec.to_string(),
+            tail: String::new(),
+        };
+        let py = [
+            range("pytest>=9", "pytest", ">=9"),
+            range("six<2", "six", "<2"),
+        ];
+        // Latest inside the range: a notice per range, nothing else.
+        let notices = check_ranges_against_scanned(
+            "uv",
+            &py,
+            &pin_map(&[("pytest", "9.0.3"), ("six", "1.16.0")]),
+        )
+        .unwrap();
+        assert_eq!(notices.len(), 2);
+        assert!(
+            notices[0].contains("'pytest>=9'") && notices[0].contains("9.0.3"),
+            "{notices:?}"
+        );
+        // Latest outside the range: fail closed and say which one.
+        let err = check_ranges_against_scanned(
+            "uv",
+            &py,
+            &pin_map(&[("pytest", "9.0.3"), ("six", "2.3.0")]),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("'six<2'") && err.contains("excludes the latest version (2.3.0)"),
+            "{err}"
+        );
+        assert!(err.contains("Failing closed"), "{err}");
+        // Not resolved (an internal package that was skipped): left alone, no notice.
+        assert!(
+            check_ranges_against_scanned("uv", &py, &pin_map(&[("pytest", "latest")]))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            check_ranges_against_scanned("uv", &py, &HashMap::new())
+                .unwrap()
+                .is_empty()
+        );
+        // A range gyrseek cannot evaluate is never waved through.
+        let odd = [range("x@???", "x", "???")];
+        assert!(check_ranges_against_scanned("poetry", &odd, &pin_map(&[("x", "1.0.0")])).is_err());
+        // Poetry and npm syntax.
+        let poetry = [range("requests@^2.0", "requests", "^2.0")];
+        assert!(
+            check_ranges_against_scanned("poetry", &poetry, &pin_map(&[("requests", "2.31.0")]))
+                .is_ok()
+        );
+        assert!(
+            check_ranges_against_scanned("poetry", &poetry, &pin_map(&[("requests", "3.0.0")]))
+                .is_err()
+        );
+        let npm = [range("lodash@^3.0.0", "lodash", "^3.0.0")];
+        assert!(
+            check_ranges_against_scanned("npm", &npm, &pin_map(&[("lodash", "3.10.1")])).is_ok()
+        );
+        let err = check_ranges_against_scanned("pnpm", &npm, &pin_map(&[("lodash", "4.18.1")]))
+            .unwrap_err();
+        assert!(
+            err.contains("'lodash@^3.0.0'") && err.contains("4.18.1"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_range_argument_is_replaced_by_the_scanned_version_on_forward() {
+        let pins = pin_map(&[
+            ("pytest", "9.0.3"),
+            ("requests", "2.31.0"),
+            ("uvloop", "0.19.0"),
+        ]);
+        let t = targets(&[
+            "uv",
+            "add",
+            "pytest>=9",
+            "--dev",
+            "requests[security]~=2.0",
+            "uvloop>=0.19 ; sys_platform == 'linux'",
+            "attrs",
+        ]);
+        let args = strings(&[
+            "uv",
+            "add",
+            "pytest>=9",
+            "--dev",
+            "requests[security]~=2.0",
+            "uvloop>=0.19 ; sys_platform == 'linux'",
+            "attrs",
+        ]);
+        let out = rewrite_args_with_pinned_versions_and_ranges("uv", &args, &pins, &t.ranges);
+        assert_eq!(
+            out,
+            strings(&[
+                "uv",
+                "add",
+                "pytest==9.0.3",
+                "--dev",
+                "requests[security]==2.31.0",
+                "uvloop==0.19.0 ; sys_platform == 'linux'",
+                "attrs"
+            ])
+        );
+        // Without a resolved version the argument is left exactly as typed.
+        let out = rewrite_args_with_pinned_versions_and_ranges(
+            "uv",
+            &args,
+            &pin_map(&[("pytest", "latest")]),
+            &t.ranges,
+        );
+        assert_eq!(out, args);
+        // npm: the range becomes `name@version`; scoped names too.
+        let n = parse_npm_install_targets(&strings(&[
+            "npm",
+            "install",
+            "lodash@^3.0.0",
+            "@types/node@>=20 <22",
+            "left-pad",
+        ]))
+        .unwrap();
+        assert_eq!(n.ranges.len(), 2);
+        let args = strings(&[
+            "npm",
+            "install",
+            "lodash@^3.0.0",
+            "@types/node@>=20 <22",
+            "left-pad",
+        ]);
+        let out = rewrite_args_with_pinned_versions_and_ranges(
+            "npm",
+            &args,
+            &pin_map(&[
+                ("lodash", "3.10.1"),
+                ("@types/node", "21.0.0"),
+                ("left-pad", "1.3.0"),
+            ]),
+            &n.ranges,
+        );
+        assert_eq!(
+            out,
+            strings(&[
+                "npm",
+                "install",
+                "lodash@3.10.1",
+                "@types/node@21.0.0",
+                "left-pad@1.3.0"
+            ])
+        );
+        // Poetry `@latest` is still pinned (not a range).
+        let out = rewrite_args_with_pinned_versions_and_ranges(
+            "poetry",
+            &strings(&["poetry", "add", "requests@^2"]),
+            &pin_map(&[("requests", "2.31.0")]),
+            &targets(&["poetry", "add", "requests@^2"]).ranges,
+        );
+        assert_eq!(out, strings(&["poetry", "add", "requests==2.31.0"]));
+    }
+
+    #[test]
+    fn npm_cli_specs_exact_ranges_tags_and_names() {
+        let class = |spec: &str| classify_npm_spec(spec);
+        // Exact versions and bare names.
+        for (spec, name, ver) in [
+            ("lodash", "lodash", None),
+            ("lodash@latest", "lodash", None),
+            ("lodash@4.17.21", "lodash", Some("4.17.21")),
+            ("@types/node", "@types/node", None),
+            (
+                "@types/node@20.1.0-rc.1",
+                "@types/node",
+                Some("20.1.0-rc.1"),
+            ),
+            ("lodash@4.17.21+build.5", "lodash", Some("4.17.21+build.5")),
+        ] {
+            match class(spec).unwrap() {
+                NpmSpec::Exact(n, v) => {
+                    assert_eq!((n.as_str(), v.as_deref()), (name, ver), "{spec}")
+                }
+                NpmSpec::Range(_) => panic!("{spec} is exact"),
+            }
+        }
+        // Ranges, including the partial forms npm reads as x-ranges.
+        for spec in [
+            "lodash@^4.17.0",
+            "lodash@~4",
+            "lodash@>=4 <5",
+            "lodash@4.x",
+            "lodash@*",
+            "lodash@4",
+            "lodash@4.17",
+            "lodash@>=2",
+            "@scope/pkg@^1",
+            "lodash@4.x || 5.x",
+            "lodash@v4.17.21",
+        ] {
+            assert!(matches!(class(spec).unwrap(), NpmSpec::Range(_)), "{spec}");
+        }
+        // A dist-tag, an alias or a malformed name is neither.
+        for bad in [
+            "lodash@next",
+            "lodash@beta",
+            "lodash@npm:other@1.0.0",
+            "Bad Name",
+            "lo$dash",
+            "lodash@",
+            "lodash@4.17.21.1",
+            "@scope",
+            "a/b",
+        ] {
+            let err = class(bad)
+                .err()
+                .unwrap_or_else(|| panic!("{bad} must be rejected"));
+            assert!(err.contains("Failing closed"), "{bad}: {err}");
+        }
+        assert!(
+            is_valid_npm_name("@a/b") && !is_valid_npm_name("@a/") && !is_valid_npm_name("a b")
+        );
+    }
+
+    #[test]
+    fn npm_install_commands_scan_latest_for_ranges_and_reject_tags() {
+        let t = parse_npm_install_targets(&strings(&[
+            "npm",
+            "install",
+            "lodash@^3.0.0",
+            "express",
+            "left-pad@1.3.0",
+        ]))
+        .unwrap();
+        assert_eq!(
+            t.packages,
+            [
+                ("lodash".to_string(), None),
+                ("express".to_string(), None),
+                ("left-pad".to_string(), Some("1.3.0".to_string()))
+            ]
+        );
+        assert_eq!(
+            (t.ranges[0].arg.as_str(), t.ranges[0].range.as_str()),
+            ("lodash@^3.0.0", "^3.0.0")
+        );
+        for args in [
+            &["pnpm", "add", "react@next"][..],
+            &["npm", "install", "express", "lodash@beta"],
+        ] {
+            assert!(
+                parse_npm_install_targets(&strings(args)).is_err(),
+                "{args:?}"
+            );
+        }
+        // `npm update lodash@^3` names a package, so it is scanned like an install.
+        assert_eq!(
+            parse_npm_install_targets(&strings(&["npm", "update", "lodash@^3"]))
+                .unwrap()
+                .ranges
+                .len(),
+            1
+        );
+    }
+
+    // ---- review fixes: PEP 440 only for pip/uv, positional rewrite, npm `v` prefix ----
+
+    #[test]
+    fn pip_and_uv_accept_pep_440_constraints_only_while_poetry_keeps_its_own_syntax() {
+        // Poetry's `~` and `^` and a bare `*` are not valid for pip or uv: the real command would
+        // fail, so gyrseek must not turn them into a successful install.
+        for args in [
+            &["pip", "install", "six~1.17"][..],
+            &["pip3", "install", "six*"],
+            &["uv", "add", "six~1.17"],
+            &["pip", "install", "six>=1,,<2"],
+            &["pip", "install", "six>=x"],
+        ] {
+            let err = parse_python_install_targets(&strings(args)).expect_err(&format!("{args:?}"));
+            assert!(
+                err.contains("not a valid version constraint") && err.contains("PEP 440"),
+                "{args:?}: {err}"
+            );
+        }
+        // A caret is not an operator of either syntax without Poetry's `@`: still refused.
+        assert!(parse_python_install_targets(&strings(&["pip", "install", "six^2"])).is_err());
+        assert!(
+            parse_python_install_targets(&strings(&["uv", "pip", "install", "six^1.0"])).is_err()
+        );
+        assert!(parse_python_install_targets(&strings(&["poetry", "add", "six^2"])).is_err());
+        // Valid PEP 440 stays a range, with and without spaces and wildcards.
+        for spec in [
+            "six~=1.17",
+            "six>=1,<2",
+            "six >= 1",
+            "six==1.*",
+            "six!=1.0",
+            "six<2",
+        ] {
+            assert_eq!(targets(&["pip", "install", spec]).ranges.len(), 1, "{spec}");
+        }
+        // Poetry keeps `^`, `~` and its `name@range` form.
+        for spec in ["six~1.17", "six@^2", "six@~1.17", "six>=1,<2"] {
+            assert_eq!(targets(&["poetry", "add", spec]).ranges.len(), 1, "{spec}");
+        }
+    }
+
+    #[test]
+    fn only_package_arguments_are_rewritten_not_flag_values_that_look_like_them() {
+        let pins = pin_map(&[("six", "1.17.0")]);
+        let rewrite = |args: &[&str]| {
+            let args = strings(args);
+            let t = parse_python_install_targets(&args).unwrap();
+            rewrite_args_at("pip", &args, &pins, &t.ranges, Some(&t.package_args))
+        };
+        // A range, and a directory named exactly like it.
+        assert_eq!(
+            rewrite(&["pip", "install", "--target", "six>=1.10", "six>=1.10"]),
+            strings(&["pip", "install", "--target", "six>=1.10", "six==1.17.0"])
+        );
+        // A bare name, and a directory named like the package.
+        assert_eq!(
+            rewrite(&["pip", "install", "--target", "six", "six"]),
+            strings(&["pip", "install", "--target", "six", "six==1.17.0"])
+        );
+        // Value flags of other kinds, a `-c` file and several packages.
+        assert_eq!(
+            rewrite(&[
+                "pip",
+                "install",
+                "-c",
+                "six",
+                "six",
+                "--index-url",
+                "six",
+                "six>=1"
+            ]),
+            strings(&[
+                "pip",
+                "install",
+                "-c",
+                "six",
+                "six==1.17.0",
+                "--index-url",
+                "six",
+                "six==1.17.0"
+            ])
+        );
+        // Without the parsed positions the older behaviour (every non-flag argument) remains.
+        let args = strings(&["pip", "install", "--target", "six", "six"]);
+        let legacy = rewrite_args_at("pip", &args, &pins, &[], None);
+        assert_eq!(
+            legacy,
+            strings(&["pip", "install", "--target", "six==1.17.0", "six==1.17.0"])
+        );
+        // Recorded positions: the package arguments only, in order.
+        let t = targets(
+            &[
+                "uv", "pip", "install", "--python", "3.12", "a>=1", "-r", "x.txt",
+            ]
+            .map(|a| a)[..6],
+        );
+        assert_eq!(t.package_args, [5]);
+        assert_eq!(t.ranges[0].index, 5);
+    }
+
+    #[test]
+    fn npm_positions_are_recorded_and_used_for_the_rewrite() {
+        let args = strings(&[
+            "npm",
+            "install",
+            "-D",
+            "lodash@^4",
+            "left-pad",
+            "--save-exact",
+        ]);
+        let t = parse_npm_install_targets(&args).unwrap();
+        assert_eq!(t.package_args, [3, 4]);
+        assert_eq!(t.ranges[0].index, 3);
+        let pins = pin_map(&[("lodash", "4.18.1"), ("left-pad", "1.3.0")]);
+        assert_eq!(
+            rewrite_args_at("npm", &args, &pins, &t.ranges, Some(&t.package_args)),
+            strings(&[
+                "npm",
+                "install",
+                "-D",
+                "lodash@4.18.1",
+                "left-pad@1.3.0",
+                "--save-exact"
+            ])
+        );
+        // Non-registry specs are skipped by the parser and so never rewritten.
+        let args = strings(&["npm", "install", "./local", "left-pad"]);
+        let t = parse_npm_install_targets(&args).unwrap();
+        assert_eq!(t.package_args, [3]);
+    }
+
+    #[test]
+    fn npm_v_prefixes_are_versions_but_a_lone_v_is_a_dist_tag() {
+        // A bare `v` or any tag is rejected, not read as "any version".
+        for bad in [
+            "lodash@v",
+            "lodash@V",
+            "lodash@vv",
+            "lodash@vnext",
+            "lodash@dev",
+            "lodash@devel",
+        ] {
+            let err = classify_npm_spec(bad)
+                .err()
+                .unwrap_or_else(|| panic!("{bad} must be rejected"));
+            assert!(err.contains("dist-tag"), "{bad}: {err}");
+        }
+        // `v` before a number is valid npm syntax and stays supported.
+        for ok in [
+            "lodash@v4",
+            "lodash@^v4",
+            "lodash@>=v4.1.0 <v5",
+            "lodash@v4.17.21",
+        ] {
+            assert!(
+                matches!(classify_npm_spec(ok).unwrap(), NpmSpec::Range(_)),
+                "{ok}"
+            );
+        }
     }
 
     #[test]
@@ -2531,52 +3225,6 @@ version = "2.31.0"
                 ("typescript".to_string(), None)
             ]
         );
-    }
-
-    #[test]
-    fn npm_cli_specs_must_name_one_exact_registry_version() {
-        let ok = |spec: &str| parse_exact_npm_spec(spec).expect(spec);
-        assert_eq!(ok("lodash"), ("lodash".to_string(), None));
-        assert_eq!(ok("lodash@latest"), ("lodash".to_string(), None));
-        assert_eq!(
-            ok("lodash@4.17.21"),
-            ("lodash".to_string(), Some("4.17.21".to_string()))
-        );
-        assert_eq!(ok("@types/node"), ("@types/node".to_string(), None));
-        assert_eq!(
-            ok("@types/node@20.1.0-rc.1"),
-            ("@types/node".to_string(), Some("20.1.0-rc.1".to_string()))
-        );
-        for bad in [
-            "lodash@^4.17.0",
-            "lodash@~4",
-            "lodash@>=4 <5",
-            "lodash@4.x",
-            "lodash@*",
-            "lodash@4",
-            "lodash@next",
-            "lodash@npm:other@1.0.0",
-            "@types/node@^20",
-            "Bad Name",
-            "lo$dash",
-        ] {
-            let err = parse_exact_npm_spec(bad).expect_err(bad);
-            assert!(err.contains("exact versions"), "{bad}: {err}");
-        }
-    }
-
-    #[test]
-    fn npm_install_commands_reject_ranges_on_the_command_line() {
-        for args in [
-            &["npm", "install", "lodash@^3.0.0"][..],
-            &["npm", "install", "express", "lodash@~4"],
-            &["pnpm", "add", "react@next"],
-            &["npm", "update", "lodash@^3"],
-        ] {
-            let err = parse_npm_install_packages_from_args(&strings(args))
-                .expect_err(&format!("{args:?}"));
-            assert!(err.contains("Failing closed"), "{args:?}: {err}");
-        }
     }
 
     #[test]

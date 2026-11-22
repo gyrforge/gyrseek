@@ -235,22 +235,106 @@ fn poetry_group_to_pep440(group: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(","))
 }
 
+/// A Poetry or PEP 440 constraint as one specifier set per `||` alternative.
+fn python_specifier_sets(spec: &str) -> Option<Vec<pep440_rs::VersionSpecifiers>> {
+    spec.split("||")
+        .map(|group| pep440_rs::VersionSpecifiers::from_str(&poetry_group_to_pep440(group)?).ok())
+        .collect()
+}
+
+/// Does the Poetry/PEP 440 constraint `spec` allow this exact version? `None` when either
+/// cannot be understood.
+pub(crate) fn python_range_contains(spec: &str, version: &str) -> Option<bool> {
+    let version = pep440_rs::Version::from_str(version).ok()?;
+    Some(
+        python_specifier_sets(spec)?
+            .iter()
+            .any(|set| set.contains(&version)),
+    )
+}
+
 fn python_range_allows(spec: &str, key: &str) -> Option<bool> {
     let (_, minor) = key.split_once('.')?;
     // Patch releases of one minor line run 0..~20; sample them all.
     let reps: Vec<pep440_rs::Version> = (0..=30)
         .map(|p| pep440_rs::Version::from_str(&format!("3.{minor}.{p}")).ok())
         .collect::<Option<_>>()?;
-    let mut any = false;
-    for group in spec.split("||") {
-        let specifiers =
-            pep440_rs::VersionSpecifiers::from_str(&poetry_group_to_pep440(group)?).ok()?;
-        any |= reps.iter().any(|v| specifiers.contains(v));
-    }
-    Some(any)
+    Some(
+        python_specifier_sets(spec)?
+            .iter()
+            .any(|set| reps.iter().any(|v| set.contains(v))),
+    )
 }
 
 // ---- npm semver ranges (Node) ----
+
+/// npm allows a leading `v` on a version (`v22`, `>=v1.2.3`, `^v4`). Only that `v` is removed:
+/// a lone `v` is a dist-tag, and a `v` inside a prerelease name (`1.0.0-dev.1`) is part of it.
+fn strip_version_v(token: &str) -> String {
+    let split = token
+        .find(|c: char| !matches!(c, '<' | '>' | '=' | '^' | '~'))
+        .unwrap_or(token.len());
+    let (operator, rest) = token.split_at(split);
+    match rest.strip_prefix(['v', 'V']) {
+        Some(version) if version.starts_with(|c: char| c.is_ascii_digit()) => {
+            format!("{operator}{version}")
+        }
+        _ => token.to_string(),
+    }
+}
+
+/// npm reads a bare `4` or `4.17` as `4.*` / `4.17.*` and a bare `4.17.21` as exactly that
+/// version, while the `semver` crate would read all of them as a caret range.
+fn npm_bare_version(token: &str) -> String {
+    if !token.starts_with(|c: char| c.is_ascii_digit()) {
+        return token.to_string();
+    }
+    match token.matches('.').count() {
+        0 | 1 if !token.contains(['x', 'X', '*']) => format!("{token}.*"),
+        2 if semver::Version::parse(token).is_ok() => format!("={token}"),
+        _ => token.to_string(),
+    }
+}
+
+/// An npm semver range as one requirement per `||` alternative. Hyphen ranges are not
+/// supported.
+fn npm_requirement_sets(spec: &str) -> Option<Vec<semver::VersionReq>> {
+    spec.split("||")
+        .map(|group| {
+            let mut g = group.trim().to_string();
+            if g.contains(" - ") {
+                return None;
+            }
+            for op in [">=", "<=", ">", "<", "=", "^", "~"] {
+                while g.contains(&format!("{op} ")) {
+                    g = g.replace(&format!("{op} "), op);
+                }
+            }
+            let comparators: Vec<String> = g
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|t| !t.is_empty())
+                .map(|t| npm_bare_version(&strip_version_v(t)))
+                .collect();
+            semver::VersionReq::parse(&if comparators.is_empty() {
+                "*".to_string()
+            } else {
+                comparators.join(", ")
+            })
+            .ok()
+        })
+        .collect()
+}
+
+/// Does the npm range `spec` allow this exact version? `None` when either cannot be
+/// understood (a dist-tag such as `next` is not a range).
+pub(crate) fn npm_range_contains(spec: &str, version: &str) -> Option<bool> {
+    let version = semver::Version::parse(version).ok()?;
+    Some(
+        npm_requirement_sets(spec)?
+            .iter()
+            .any(|r| r.matches(&version)),
+    )
+}
 
 fn node_range_allows(spec: &str, key: &str) -> Option<bool> {
     let major: u64 = key.parse().ok()?;
@@ -262,31 +346,11 @@ fn node_range_allows(spec: &str, key: &str) -> Option<bool> {
                 .map(move |patch| semver::Version::new(major, minor, patch))
         })
         .collect();
-    let mut any = false;
-    for group in spec.split("||") {
-        let mut g = group.trim().to_string();
-        if g.contains(" - ") {
-            return None; // hyphen ranges are not supported
-        }
-        for op in [">=", "<=", ">", "<", "=", "^", "~"] {
-            while g.contains(&format!("{op} ")) {
-                g = g.replace(&format!("{op} "), op);
-            }
-        }
-        let g = g.replace('v', "");
-        let comparators: Vec<&str> = g
-            .split(|c: char| c == ',' || c.is_whitespace())
-            .filter(|t| !t.is_empty())
-            .collect();
-        let req = semver::VersionReq::parse(&if comparators.is_empty() {
-            "*".to_string()
-        } else {
-            comparators.join(", ")
-        })
-        .ok()?;
-        any |= reps.iter().any(|v| req.matches(v));
-    }
-    Some(any)
+    Some(
+        npm_requirement_sets(spec)?
+            .iter()
+            .any(|req| reps.iter().any(|v| req.matches(v))),
+    )
 }
 
 // ---- project files ----
@@ -938,6 +1002,39 @@ mod tests {
         // Unsupported-only ranges and unparseable ranges are told apart.
         assert_eq!(pick_from_range(Runtime::Python, "<3.9"), Ok(None));
         assert_eq!(pick_from_range(Runtime::Python, "banana"), Err(()));
+    }
+
+    #[test]
+    fn a_v_inside_a_prerelease_name_is_kept_and_only_a_leading_v_is_removed() {
+        for (token, expected) in [
+            ("v22", "22"),
+            ("V22", "22"),
+            (">=v1.2.3", ">=1.2.3"),
+            ("^v4", "^4"),
+            ("<=v2", "<=2"),
+            ("v", "v"),
+            ("dev", "dev"),
+            ("vnext", "vnext"),
+            ("1.0.0-dev.1", "1.0.0-dev.1"),
+            (">=1.0.0-dev.1", ">=1.0.0-dev.1"),
+            ("^1.0.0-vv.1", "^1.0.0-vv.1"),
+            ("", ""),
+        ] {
+            assert_eq!(strip_version_v(token), expected, "{token:?}");
+        }
+        // The prerelease name survives into the requirement, so the comparison is honest.
+        assert_eq!(
+            npm_range_contains(">=1.0.0-dev.1", "1.0.0-dev.2"),
+            Some(true)
+        );
+        assert_eq!(
+            npm_range_contains(">=1.0.0-dev.1", "1.0.0-de.9"),
+            Some(false)
+        );
+        // A lone `v` is not a range at all.
+        assert_eq!(npm_range_contains("v", "1.0.0"), None);
+        assert_eq!(npm_range_contains("v22", "22.1.0"), Some(true));
+        assert_eq!(npm_range_contains(">=v18 <v23", "22.1.0"), Some(true));
     }
 
     #[test]

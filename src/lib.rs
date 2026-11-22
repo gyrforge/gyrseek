@@ -13,11 +13,11 @@ use std::process::Command;
 use serde::{Deserialize, Deserializer};
 
 use parsing::{
-    has_only_non_registry_npm_specs, is_lockfile_only_command,
-    parse_npm_install_packages_from_args, parse_poetry_lock_packages_from_content,
-    parse_pylock_packages_from_content, parse_python_install_packages_from_args,
+    RangeRequest, check_ranges_against_scanned, has_only_non_registry_npm_specs,
+    is_lockfile_only_command, parse_npm_install_targets, parse_poetry_lock_packages_from_content,
+    parse_pylock_packages_from_content, parse_python_install_targets,
     parse_requirements_packages_from_content, parse_uv_lock_packages_from_content,
-    parse_uv_lock_upgrade_packages_from_args, rewrite_args_with_pinned_versions,
+    parse_uv_lock_upgrade_packages_from_args, rewrite_args_at,
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
 use runtime_image::{
@@ -1693,6 +1693,12 @@ mod config_tests {
 pub struct GyrSeek {
     passthrough_args: Vec<String>,
     manager: String,
+    /// Version ranges typed on the command line, recorded when the command is parsed and
+    /// used when the forwarded command is pinned to the versions that were scanned.
+    ranges: std::cell::RefCell<Vec<RangeRequest>>,
+    /// Positions of the package arguments found when the command was parsed; the forwarded
+    /// command is rewritten at these positions only. `None` for commands that were not parsed.
+    package_args: std::cell::RefCell<Option<Vec<usize>>>,
 }
 
 /// Builds the sandbox runner on first use, so commands that are forwarded without a scan
@@ -1743,6 +1749,8 @@ impl GyrSeek {
         Self {
             passthrough_args: args,
             manager,
+            ranges: std::cell::RefCell::new(Vec::new()),
+            package_args: std::cell::RefCell::new(None),
         }
     }
 
@@ -1760,7 +1768,20 @@ impl GyrSeek {
     /// This closes the gap where an unpinned `install foo` is scanned at one
     /// version while the host manager would otherwise resolve a different one.
     pub(crate) fn forward_pinned_command(&self, pins: &HashMap<String, String>) {
-        let pinned = rewrite_args_with_pinned_versions(&self.manager, &self.passthrough_args, pins);
+        let ranges = self.ranges.borrow();
+        // A range is scanned at the latest version; refuse to forward if the range would
+        // install something else, and say when it was replaced by the scanned version.
+        match check_ranges_against_scanned(&self.manager, &ranges, pins) {
+            Ok(notices) => notices.iter().for_each(|n| println!("ℹ️ [gyrseek] {n}")),
+            Err(e) => exit_with(&e),
+        }
+        let pinned = rewrite_args_at(
+            &self.manager,
+            &self.passthrough_args,
+            pins,
+            &ranges,
+            self.package_args.borrow().as_deref(),
+        );
         self.forward_args(&pinned);
     }
 
@@ -1841,13 +1862,19 @@ impl GyrSeek {
     }
 
     fn parse_python_install_packages(&self) -> Vec<(String, Option<String>)> {
-        parse_python_install_packages_from_args(&self.passthrough_args)
-            .unwrap_or_else(|e| exit_with(&e))
+        let targets =
+            parse_python_install_targets(&self.passthrough_args).unwrap_or_else(|e| exit_with(&e));
+        *self.ranges.borrow_mut() = targets.ranges;
+        *self.package_args.borrow_mut() = Some(targets.package_args);
+        targets.packages
     }
 
     fn parse_npm_install_packages(&self) -> Vec<(String, Option<String>)> {
-        parse_npm_install_packages_from_args(&self.passthrough_args)
-            .unwrap_or_else(|e| exit_with(&e))
+        let targets =
+            parse_npm_install_targets(&self.passthrough_args).unwrap_or_else(|e| exit_with(&e));
+        *self.ranges.borrow_mut() = targets.ranges;
+        *self.package_args.borrow_mut() = Some(targets.package_args);
+        targets.packages
     }
 
     fn parse_uv_lock_upgrade_packages(&self) -> Vec<String> {

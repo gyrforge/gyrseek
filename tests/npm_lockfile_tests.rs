@@ -124,15 +124,44 @@ fn update_without_packages_exits_1_with_the_lockfile_only_route() {
 }
 
 #[test]
-fn ranges_and_tags_on_the_command_line_exit_1() {
+fn ranges_on_the_command_line_are_scanned_at_the_latest_version() {
     let dir = project_with_lock();
     for args in [
         &["npm", "install", "lodash@^3.0.0"][..],
-        &["pnpm", "add", "react@next"],
+        &["npm", "install", "express", "lodash@>=4 <5"],
+        &["pnpm", "add", "react@4.x"],
+        &["npm", "update", "lodash@^3"],
+    ] {
+        let (code, out) = run(dir.path(), args);
+        assert_eq!(
+            code,
+            Some(1),
+            "no Docker: the scan itself fails closed, {args:?}"
+        );
+        assert!(
+            out.contains("Testing"),
+            "a range must reach the scan, {args:?}: {out}"
+        );
+        assert!(!out.contains("exact versions"), "{args:?}: {out}");
+    }
+}
+
+#[test]
+fn dist_tags_and_aliases_on_the_command_line_still_exit_1() {
+    let dir = project_with_lock();
+    for args in [
+        &["pnpm", "add", "react@next"][..],
+        &["npm", "install", "lodash@beta"],
+        &["npm", "install", "foo@npm:bar@1.0.0"],
+        &["npm", "install", "lodash@v"],
+        &["pnpm", "add", "react@dev"],
     ] {
         let (code, out) = run(dir.path(), args);
         assert_eq!(code, Some(1), "{args:?}");
-        assert!(out.contains("exact versions"), "{args:?}: {out}");
+        assert!(
+            out.contains("Failing closed") && out.contains("alias"),
+            "{args:?}: {out}"
+        );
         assert!(!out.contains("Testing"), "{args:?}: {out}");
     }
 }

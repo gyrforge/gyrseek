@@ -81,20 +81,33 @@ fn r_pyproject_toml_fails_closed_instead_of_scanning_a_package_named_after_the_f
 }
 
 #[test]
-fn version_ranges_exit_1_with_a_message_about_exact_versions() {
-    for args in [
-        &["uv", "add", "pytest>=9.0.3"][..],
-        &["pip", "install", "requests", "six~=1.16"],
-        &["poetry", "add", "requests@^2.0"],
+fn version_ranges_on_the_command_line_are_scanned_at_the_latest_version() {
+    for (args, count) in [
+        (&["uv", "add", "pytest>=9.0.3"][..], 1),
+        (&["pip", "install", "requests", "six~=1.16"], 2),
+        (&["poetry", "add", "requests@^2.0"], 1),
+        (&["uv", "pip", "install", "a>=1,<3", "b==1.0", "c"], 3),
     ] {
         let out = run(args);
-        assert!(out.contains("version range"), "{args:?}: {out}");
-        assert!(out.contains("exact versions"), "{args:?}: {out}");
         assert!(
-            !out.contains("Testing"),
-            "nothing may be scanned for {args:?}: {out}"
+            out.contains(&format!("Testing {count} package(s)")),
+            "{args:?}: {out}"
         );
+        assert!(!out.contains("exact versions"), "{args:?}: {out}");
     }
+}
+
+#[test]
+fn a_range_inside_a_requirements_file_still_exits_1() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("r.txt");
+    std::fs::write(&file, "six==1.16.0\nrequests>=2\n").unwrap();
+    let out = run(&["pip", "install", "-r", file.to_str().unwrap()]);
+    assert!(
+        out.contains("version range") && out.contains("inside a file"),
+        "{out}"
+    );
+    assert!(!out.contains("Testing"), "{out}");
 }
 
 #[test]
@@ -157,8 +170,9 @@ fn a_missing_requirements_file_fails_closed_for_every_spelling() {
 
 #[test]
 fn spaced_ranges_markers_and_poetry_latest_are_classified_correctly() {
+    // A spaced range is still a range (scanned at the latest version).
     let out = run(&["pip", "install", "requests >= 2"]);
-    assert!(out.contains("version range"), "{out}");
+    assert!(out.contains("Testing 1 package(s)"), "{out}");
     let out = run(&["pip", "install", "re quests==1.0"]);
     assert!(out.contains("space inside"), "{out}");
     // Exact, with spaces and a marker, is accepted and scanned.
@@ -189,4 +203,20 @@ fn an_empty_requirements_file_fails_closed_instead_of_scanning_nothing() {
     std::fs::write(&empty, "# nothing here\n\n").unwrap();
     let out = run(&["pip", "install", "-r", empty.to_str().unwrap()]);
     assert!(out.contains("no parseable package entries"), "{out}");
+}
+
+#[test]
+fn poetry_only_constraint_syntax_is_not_accepted_for_pip_and_uv() {
+    for args in [
+        &["pip", "install", "six~1.17"][..],
+        &["uv", "add", "six~1.17"],
+        &["uv", "pip", "install", "six^2"],
+    ] {
+        let out = run(args);
+        assert!(out.contains("Failing closed"), "{args:?}: {out}");
+        assert!(!out.contains("Testing"), "{args:?}: {out}");
+    }
+    // PEP 440 and Poetry's own syntax still reach the scan.
+    assert!(run(&["pip", "install", "six~=1.17"]).contains("Testing 1 package(s)"));
+    assert!(run(&["poetry", "add", "six~1.17"]).contains("Testing 1 package(s)"));
 }

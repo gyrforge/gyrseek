@@ -4,18 +4,6 @@
 
 ## Detailed Findings
 
-### Finding 14 — Low | `parsing.rs:880` | ⚠️ Open
-
-**Summary:** A test writes a temp requirements file but only removes it on the success path — assertion failures leave the file on disk.
-
-**Root cause:** `let _ = std::fs::remove_file(req_path)` is placed after the `assert_eq!` calls. A panicking assertion skips the removal.
-
-**Failure scenario:** Any `assert_eq!` in the test panics → temp file accumulates across repeated runs. Low impact in practice (OS temp cleanup handles it) but adds noise in CI.
-
-**Fix direction:** Use `tempfile::NamedTempFile` (already a project dependency), which removes the file automatically on drop.
-
----
-
 ### Finding 22 — Medium | `scanning.rs:188` | ⚠️ Open
 
 **Summary:** `is_sandbox_local_ip` filters IPv6 loopback and link-local (`fe80::/10`) but does not filter Unique Local Addresses (`fc00::/7`), the IPv6 equivalent of RFC 1918 private ranges. Internal container traffic over IPv6 ULAs is flagged as external exfiltration.
@@ -252,36 +240,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 45 — High | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** CI prompt injection amplification and censorship vector via deduplication instruction.
-
-**Root cause:** 
-1. The deduplication instruction at line 295-298 creates a censorship vector.
-2. `gh run download` at line 261 lacks `--run-id` or `--repo` scoping.
-3. No SHA-256 verification on the downloaded `review_ledger.md`.
-4. Bundle `GH_TOKEN` draining across both the consolidation step (line 244) AND the sanitize/post step (line 395).
-5. **Ledger LLM output re-injection loop**: The ledger accumulates raw LLM output (`consolidated_gyrseek_review.md`) which is re-injected as `<previous_review>` in the next run. A one-time compromise propagates to all subsequent PRs on the same branch.
-6. **Fallback-path poisoning**: When the consolidation LLM exits non-zero, raw untrusted reviewer inputs are concatenated directly into the ledger — bypassing LLM-mediated sanitization.
-7. **`WONT_FIX_FINDINGS.md` injected as accepted attack surface**: When injected unsanitized, the LLM is effectively told "these attacks are accepted — do not flag them."
-
-**Failure scenario:** 
-1. A PR author adds their vulnerability to `OPEN_FINDINGS.md`, and the consolidation LLM removes it from the report due to the deduplication instruction ("If an incoming finding is already documented… you MUST remove it entirely").
-2. A compromised fork uploads a fake `review-ledger` artifact which is picked up cross-run due to missing `--run-id` and `--repo` flags.
-
-**Fix direction:** Fetch findings files from base-branch SHA; add `--repo`/`--run-id` to `gh`; upload/verify `review_ledger.sha256`; scope `GH_TOKEN` strictly; truncate ledger to only finding IDs; write a static "Consolidation failed" message in the fallback path.
-
-**Enhancements:**
-- **Broader Injection Surface:** The injection surface is 3×, not 1×. `docs/WONT_FIX_FINDINGS.md` and `docs/OPEN_FINDINGS.md` are also injected unsanitized. A PR author modifying these files can inject arbitrary instructions. Fix: Redact closing tags from these files as well.
-- **Artifact Name Confusion:** `gh run download` uses only `--name review-ledger` without `--run-id` or `--repo`. A compromised fork could upload an identically named artifact picked up by consolidation, allowing cross-run prompt injection.
-- **Ledger Integrity:** The downloaded `review_ledger.md` has no SHA-256 checksum verification. Any artifact named `review-ledger` is accepted. Fix: Upload a `review_ledger.sha256` artifact and verify with `sha256sum --check` before use.
-- **Skill File Injection Vector:** The new skill file injection block (added to fix dead skill references) uses four `cat` blocks (`.github/workflows/ci.yml:157-207`) to inject skill content into `<code_security_skill>`, `<llm_security_skill>`, `<ponytail_skill>`, and `<ponytail_review_skill>` tags without `</tag> → <REDACTED>` escaping. This expands the injection surface by 4 additional XML injection points outside `<untrusted_diff>`. Additionally, the content is read from the PR workspace (`actions/checkout` of PR head), not the base ref. A PR modifying `code-security/SKILL.md`, `llm-security/SKILL.md`, `ponytail/SKILL.md`, or `ponytail-review/SKILL.md` can embed arbitrary instructions ("Ignore all vulnerabilities") that are implicitly trusted as authoritative security guidance. Fix: Apply `</tag> → <REDACTED>` escaping to all 4 skill content blocks before injection; read the skill files strictly from the base branch (e.g., `git show origin/${{ github.base_ref }}:.github/skills/$skill/SKILL.md`). Note that relying on CODEOWNERS is insufficient, as CODEOWNERS only blocks PR merges but does not prevent CI data-flow attacks from the PR workspace during the review run itself.
-- **Review Ledger Tag-Escaping Gap and Persistence:** `cat review_ledger.md` (`.github/workflows/ci.yml:406`) writes raw LLM output inside `<previous_review>` without closing-tag redaction, unlike `<untrusted_diff>` (line 226) and `<untrusted_inputs>` (line 435). A compromised review entry in the ledger can break the prompt structure. Furthermore, final assembly (`ci.yml:458-459`) uses `cat consolidated_gyrseek_review.md >> review_ledger.md` to append raw LLM output to the ledger without closing-tag redaction. This persistence means a one-time compromise propagates to all subsequent PRs on the same branch via capped-run persistence by re-introducing injection markers (`</previous_review>`, `SYSTEM:`). Fix: Apply closing-tag redaction (`python3 -c "import sys; print(sys.stdin.read().replace('</previous_review>', '<REDACTED>'))"`) before injecting the ledger and before appending to it.
-- **Unsanitized File Content in XML Tags:** `AGENTS.md` (in `<agents_rules>`), `WONT_FIX_FINDINGS.md` (in `<wont_fix_findings>`), `OPEN_FINDINGS.md` (in `<open_findings>`), and `graphify-out/GRAPH_REPORT.md` (in `<graph_context>`) are all catted into `prompt.txt` (`.github/workflows/ci.yml:408-427`) inside XML tags without closing-tag redaction. The `<graph_context>` specifically cats `GRAPH_REPORT.md` generated from the PR workspace (not base ref), compounding the vector. This creates a total of 9 untagged XML injection points (5 in the consolidation prompt: `previous_review`, `wont_fix_findings`, `open_findings`, `agents_rules`, `graph_context`; and 4 skill tags in the first-stage prompt). Any PR modifying these files can inject arbitrary instructions by embedding a closing tag. Fix: Apply closing-tag redaction to every file catted into an XML context.
-- **Consolidation Fallback Silent Errors:** `cat all_reviewer_inputs.md >> consolidated_gyrseek_review.md 2>/dev/null || true` (`ci.yml:442, 454`) silently discards I/O and missing file errors. Fix: Replace with `test -f all_reviewer_inputs.md && cat ... || echo "::error::fallback file missing"`.
-
----
-
 ### Finding 46 — Medium | `scanning.rs` | ⚠️ Open
 
 **Summary:** `is_harness_command` `uv` check coupling with sandbox script.
@@ -303,57 +261,6 @@ if next.starts_with('-') {
 **Failure scenario:** Increased maintenance burden, higher risk of introducing logic bugs, and poor testability.
 
 **Fix direction:** Extract helper functions like `build_fd_table` and `resolve_proc_fd_path`. Start by extracting the shared clone/fork inheritance logic (Finding 67) as `fn inherit_fds(child_pid, parent_pid, fd_table)`.
-
----
-
-### Finding 48 — High | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** CI commands silenced with `|| true` and `>/dev/null 2>&1` create blind spots and swallow errors.
-
-**Root cause:** The `|| true` combined with output redirection (`>/dev/null 2>&1`) on `gh run download`, `gh run list`, and `graphify update .` hides auth failures, missing artifacts, tool failures, and network blips by silencing ALL diagnostics (stdout, stderr, AND exit code). Furthermore, the download path lacks a SHA-256 integrity check. The consolidation fallback `cat all_reviewer_inputs.md >> consolidated_gyrseek_review.md 2>/dev/null || true` expands this pattern to two locations (`ci.yml:442, 454`), silently swallowing missing-file and I/O errors.
-
-**Failure scenario:** Failed downloads or tool executions fail silently. Graphify failures inject stale or missing graph content with no diagnostic. In the two fallback paths, the `|| true` swallows the error and produces an empty/partial review with no `::error` or `::warning` diagnostic. Every command silenced this way is a complete observability blind spot.
-
-**Fix direction:** Capture stderr before `|| true` and emit `::error` on failure. At a minimum, remove `2>&1`. Implement SHA-256 artifact verification. For the consolidation fallback `cat` in both locations, add a presence check (`test -f`) and emit an `::error` when the file is missing.
-
----
-
-### Finding 49 — Medium | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** CI `GH_TOKEN` in environment for consolidation step increases blast radius.
-
-**Root cause:** `GH_TOKEN` is set globally for a multi-step bash script that iterates over files with `find ... | while read ...`.
-
-**Failure scenario:** If an attacker crafts a filename with shell metacharacters, they could exfiltrate the GitHub token (which has `pull-requests: write`).
-
-**Fix direction:** Drain the token from the environment before file iteration or use a separate step for API calls.
-
-**Enhancements:**
-- **Exposure in Multiple Steps:** `GH_TOKEN` is exposed in both the "Consolidate Reviews" step and the "Sanitize and Post Consolidated Comment" step. Fix: Drain token from env before `cmark` processing; scope strictly to `gh` CLI calls via prefix.
-
----
-
-### Finding 51 — Medium | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** Ledger delimiter collision can corrupt review history.
-
-**Root cause:** Python capping logic splits strictly on `"=== REVIEW FROM RUN"`.
-
-**Failure scenario:** If a reviewer's text happens to contain this string, the split generates false fragments and incorrectly truncates valid history.
-
-**Fix direction:** Use a UUID or a highly unpredictable string for the ledger delimiter.
-
----
-
-### Finding 52 — Medium | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** Review ledger Python capping drops leading newline.
-
-**Root cause:** `.join([""] + kept)` does not prepend a newline to the reconstructed string.
-
-**Failure scenario:** The formatting of the first review in the truncated ledger is incorrectly stitched.
-
-**Fix direction:** Change `""` to `"\n"` in the Python join statement.
 
 ---
 
@@ -489,30 +396,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 65 — Low | `graphify-out` | ⚠️ Open
-
-**Summary:** `GRAPH_REPORT.md` references stale `docs/FINDINGS.md`.
-
-**Root cause:** The knowledge graph extraction engine retained edges pointing to `docs/FINDINGS.md` even after it was renamed and removed from Git.
-
-**Failure scenario:** AI agents reading the knowledge graph might attempt to read or modify a file that no longer exists.
-
-**Fix direction:** Address graphify's caching mechanism or run a clean rebuild.
-
----
-
-### Finding 66 — Low | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** LLM prompt instructs model to suggest holistic fix under attacker influence.
-
-**Root cause:** On loop cycle detection, the LLM is explicitly asked to "suggest a holistic fix that resolves both constraints." Combined with the ledger persisting across runs, this creates an attacker-controlled iterative fix generator.
-
-**Failure scenario:** An attacker can craft review inputs that intentionally induce a cycle and steer the LLM into generating code-level fixes that introduce subtle vulnerabilities.
-
-**Fix direction:** Instruct the LLM to only output a natural language explanation of the cycle, without proposing code-level fixes.
-
----
-
 ### Finding 67 — Medium | `scanning.rs` | ⚠️ Open
 
 **Summary:** Clone/fork fd-inheritance block duplicated verbatim.
@@ -522,60 +405,6 @@ if next.starts_with('-') {
 **Failure scenario:** Maintenance trap; updating one copy but not the other causes the two paths to drift out of sync.
 
 **Fix direction:** Extract to `fn inherit_fds(child_pid: u32, pid: u32, fd_table: &mut HashMap<(u32, i32), String>)` and call it from both sites.
-
----
-
-### Finding 68 — Medium | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** `gh run list` and `download` missing `--repo` flag.
-
-**Root cause:** Commands infer the repository from the git remote, which in a fork PR context may resolve to the fork rather than the canonical repository.
-
-**Failure scenario:** Prevents retrieving artifacts correctly in fork PR scenarios.
-
-**Fix direction:** Scope explicitly with `--repo "${{ github.repository }}"`.
-
----
-
----
-
----
-
-### Finding 72 — Low | `.github/workflows/ci.yml` | ⚠️ Open
-
-**Summary:** `PR_HEAD_REF` branch name passed to `gh` without validation.
-
-**Root cause:** The branch name `${{ github.event.pull_request.head.ref }}` is interpolated via `${{ }}` which GitHub evaluates before shell execution. Branch names containing `$()`, backticks, or newlines are a YAML injection risk.
-
-**Failure scenario:** Unexpected behavior from the GitHub CLI if the branch name mimics a flag or special path.
-
-**Fix direction:** Use `github.head_ref` which GitHub pre-validates, or sanitize the ref before passing to `gh`.
-
----
-
-### Finding 78 — High | `.github/workflows/ci.yml:449` | ⚠️ Open
-
-**Summary:** `grep -qi "^# consolidated review"` creates XML injection gate and silent pass.
-
-**Root cause:** The `-i` flag combined with `2>/dev/null` creates an unauthenticated XML injection gate into `<previous_review>` via casing bypass (e.g., `# CONSOLIDATED REVIEW`). Additionally, the `2>/dev/null` allows a missing file to silently pass the check (exit 0 from grep on non-existent file), which is more dangerous than case-insensitivity.
-
-**Failure scenario:** If the LLM generates a malformed header, or an attacker injects a mixed-case bypass, or the file goes missing, the check will pass and inject corrupted, attacker-controlled, or empty review content into the ledger.
-
-**Fix direction:** Add a `if [ ! -f consolidated_gyrseek_review.md ]; then exit 1; fi` guard before the grep check. Remove the `-i` flag to enforce exact case, and do not swallow stderr so failures are visible.
-
----
-
----
-
-### Finding 80 — Low | `.github/workflows/ci.yml:163` | ⚠️ Open
-
-**Summary:** Symlink TOCTOU race for `.github/skills/`.
-
-**Root cause:** The symlink `.github/skills/` → `.agents/skills/` is checked at workflow start but could be swapped before `cat`.
-
-**Failure scenario:** A malicious PR or concurrent process could modify the symlink target to redirect `cat` to read arbitrary files (e.g., repository secrets stored on disk) and inject them into the LLM context.
-
-**Fix direction:** Use `.agents/skills/` directly instead of following the symlink, since the workflow has its own checkout of `.agents/skills/`.
 
 ---
 
@@ -639,8 +468,6 @@ if next.starts_with('-') {
 
 ---
 
----
-
 ### Finding 34 — High | `scanning.rs` | ⚠️ Open
 
 **Summary:** Cross-PID `/proc/N/fd/` resolution bypass.
@@ -650,8 +477,6 @@ if next.starts_with('-') {
 **Failure scenario:** A process reading another process's sensitive file descriptor goes undetected because the scanner looks up the fd in the wrong process's table.
 
 **Fix direction:** Extract the target PID from the path and use it for the fd_table lookup.
-
----
 
 ---
 
@@ -667,8 +492,6 @@ if next.starts_with('-') {
 
 ---
 
----
-
 ### Finding 75 — High | `scanning.rs` | ⚠️ Open
 
 **Summary:** `openat` relative path bypasses absolute suffix checks in `is_sensitive_file_read`.
@@ -678,22 +501,6 @@ if next.starts_with('-') {
 **Failure scenario:** Since no CWD tracking exists per PID (because `chdir`/`fchdir` syscalls are not intercepted), an attacker postinstall script can simply call `chdir("/")` followed by `open("etc/passwd")`. This produces the path `"etc/passwd"` in strace, completely bypassing all detection. This also applies to `open("passwd")` from cwd `/etc`.
 
 **Fix direction:** Track cwd per PID by adding `chdir`/`fchdir` to the strace trace set. For `openat(AT_FDCWD, ...)` and `open(...)` with relative paths, resolve against the tracked cwd before passing to `is_sensitive_file_read`.
-
----
-
----
-
-### Finding 76 — High | `scanning.rs:1753-1768` | ⚠️ Open
-
-**Summary:** Missing inline test for insufficient_baselines fail-closed.
-
-**Root cause:** No inline test asserts the `insufficient_baselines` blocked_reason. The related test `scan_fails_closed_when_one_baseline_trace_is_missing` tests `sandbox_trace_missing` only. 
-
-**Failure scenario:** A regression in `insufficient_baselines` means a package with 0 baselines and no `new_package_exemptions` bypass passes through, producing an empty `TraceSignals` diff (trivially passing all anomaly checks).
-
-**Fix direction:** Add explicit inline tests targeting the `insufficient_baselines` blocked reason. The tests should assert both: "0 baselines + no exemption → blocked" AND "0 baselines + wildcard exemption → allowed."
-
----
 
 ---
 
@@ -725,18 +532,6 @@ if next.starts_with('-') {
 **Root cause:** ARCHITECTURE.md accepted risks section omits the Telnyx T26 bypass (where Python module-scope code executes after sandbox exits).
 **Failure scenario:** Security auditors and developers reading the threat model are unaware of the highest-severity known bypass in the sandbox architecture.
 **Fix direction:** Add a dedicated accepted risk entry for the import-time execution gap in ARCHITECTURE.md.
-
----
-
-### Finding 177 — Low | `*_DETAILED.md` | ⚠️ Open
-
-**Summary:** Duplicate summary tables create a two-source-of-truth maintenance burden.
-
-**Root cause:** The `_DETAILED.md` files begin with an exact copy of the summary table from the main files, requiring agents to perfectly synchronize both files on every update.
-
-**Failure scenario:** Agents often fail to update the detailed file's summary table, causing checklist drift and contradictory documentation states.
-
-**Fix direction:** Consider a future consolidation where the detailed file omits the summary table entirely, leaving the main file as the single source of truth for the index.
 
 ---
 
@@ -929,18 +724,6 @@ if next.starts_with('-') {
 **Failure scenario:** An operator explicitly sets `baseline_count: 1` expecting single-baseline behaviour (e.g. for a package with only one prior version). Gyrseek silently fetches 2, the missing second baseline causes `insufficient_baselines`, and the operator has no diagnostic explaining why.
 
 **Fix direction:** Either warn in the config parser when `baseline_count < 2` (matching the 0 case), or document that the effective minimum is 2 and reject values below it with a clear message.
-
----
-
-### Finding 283 — Low | `lib.rs:289-298,311-320` | ⚠️ Open
-
-**Summary:** `release_burst_threshold` and `minimum_release_age_package` match blocks contain redundant `None => None` arms.
-
-**Root cause:** Both match blocks have the pattern `Some(v) => Some(v), None => None`, which is semantically identical to `v => v` (or just removing the match entirely and using the value as-is). The `None => None` arm is dead code that adds noise without functionality.
-
-**Failure scenario:** No correctness impact. Maintenance hazard: a future contributor adding another arm may not notice the redundancy and introduce inconsistent handling.
-
-**Fix direction:** Simplify each match to `Some(0) => { warn; None }, v => v` (collapsing `Some(v) => Some(v)` and `None => None` into a single wildcard arm).
 
 ---
 
@@ -1220,18 +1003,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 387 — Low | `src/scanning.rs` | ⚠️ Open
-
-**Summary:** No unit test exercises `domain_is_allowlisted` with a trailing-dot hostname (e.g. `"example.com."`) as the FCrDNS result. `normalize_domain` strips the trailing dot before comparison, but this path is untested.
-
-**Root cause:** The normalization is a no-op for all current production inputs (FCrDNS results in the sandbox never carry a trailing dot in practice), so no test was written for it.
-
-**Failure scenario:** A future refactor of `normalize_domain` or `domain_is_allowlisted` removes the `trim_end_matches('.')` step. All existing tests pass because none supply a trailing-dot input. A real FCrDNS result with a trailing dot then fails to match its allowlist entry, silently blocking a legitimate package.
-
-**Fix direction:** Add a unit test to `domain_is_allowlisted` that supplies an allowlist entry `"example.com"` and verifies that a trailing-dot lookup `"example.com."` also matches.
-
----
-
 ### Finding 378: Parse-time warnings omit config file path
 
 **Summary:** `load_policy_config` receives the config file `path` as a parameter but parse-time warnings (invalid IP entries, invalid domain entries, overly-permissive `sensitive_file_access_allowlist` values) do not include it in their output. Only the post-load startup summary lines include `config_path`.
@@ -1253,8 +1024,6 @@ if next.starts_with('-') {
 **Failure scenario:** An operator configured 2 global IPs and 13 per-package IPs across 5 packages sees "Loaded 15 allowlisted IP(s)" — they cannot tell whether all 15 are global (applying to every package) or scoped per-package without reading the config file.
 
 **Fix direction:** Separate the count: `N global, M per-package across P package(s)` by checking `ip_allowlist.get("*")` for the global count and summing the rest for per-package.
-
----
 
 ---
 
@@ -1349,4 +1118,3 @@ if next.starts_with('-') {
 **Fix direction:** cap the files (`ulimit -f` around the strace command needs care so strace's own trace write is not what hits the limit; a size-limited tmpfs for `/out` is simpler), read with a byte limit, and fail closed with a clear message when a trace exceeds it.
 
 ---
-
