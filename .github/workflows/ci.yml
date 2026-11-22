@@ -156,6 +156,15 @@ jobs:
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-uv
 
+      # Real package manager and sandbox with a local stand-in mirror: redirects are refused until the
+      # host is trusted, and a drifted lockfile is not re-resolved.
+      - name: Just test uv redirects and lockfile guards
+        env:
+          GYRSEEK_PY_SCANNER_PREBUILT: true
+          GYRSEEK_PY_SCANNER_IMAGE: "gyrseek-python-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-redirects-uv
+
   linux-docker-apparmor-seccomp-pip-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (pip)
     runs-on: ubuntu-latest
@@ -188,6 +197,15 @@ jobs:
           GYRSEEK_PY_SCANNER_IMAGE: "gyrseek-python-scanner:latest"
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-pip
+
+      # Real package manager and sandbox with a local stand-in mirror: redirects are refused until the
+      # host is trusted, and a drifted lockfile is not re-resolved.
+      - name: Just test pip redirects and lockfile guards
+        env:
+          GYRSEEK_PY_SCANNER_PREBUILT: true
+          GYRSEEK_PY_SCANNER_IMAGE: "gyrseek-python-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-redirects-pip
 
   linux-docker-apparmor-seccomp-poetry-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (poetry)
@@ -227,6 +245,15 @@ jobs:
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-poetry
 
+      # Real package manager and sandbox with a local stand-in mirror: redirects are refused until the
+      # host is trusted, and a drifted lockfile is not re-resolved.
+      - name: Just test poetry redirects and lockfile guards
+        env:
+          GYRSEEK_PY_SCANNER_PREBUILT: true
+          GYRSEEK_PY_SCANNER_IMAGE: "gyrseek-python-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-redirects-poetry
+
   linux-docker-apparmor-seccomp-npm-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (npm)
     runs-on: ubuntu-latest
@@ -259,6 +286,15 @@ jobs:
           GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-npm
+
+      # Real package manager and sandbox with a local stand-in mirror: redirects are refused until the
+      # host is trusted, and a drifted lockfile is not re-resolved.
+      - name: Just test npm redirects and lockfile guards
+        env:
+          GYRSEEK_NPM_SCANNER_PREBUILT: true
+          GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-redirects-npm
 
   linux-docker-apparmor-seccomp-pnpm-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (pnpm)
@@ -294,6 +330,15 @@ jobs:
           GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-pnpm
+
+      # Real package manager and sandbox with a local stand-in mirror: redirects are refused until the
+      # host is trusted, and a drifted lockfile is not re-resolved.
+      - name: Just test pnpm redirects and lockfile guards
+        env:
+          GYRSEEK_NPM_SCANNER_PREBUILT: true
+          GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-redirects-pnpm
 
   cargo-audit:
     name: Dependency advisory scan

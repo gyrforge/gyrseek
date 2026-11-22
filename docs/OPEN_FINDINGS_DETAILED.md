@@ -1151,13 +1151,35 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 457 — Medium | `.github/workflows/ci.yml`, `justfile` | ⚠️ Open
+### Finding 458 — Low | `tests/e2e/redirects.sh` | ⚠️ Open
 
-**Summary:** No real end-to-end check of the new guards.
+**Summary:** uv and poetry e2e checks do not confirm the setting is read or the mirror used.
 
-**Root cause:** The existing `just test-*` recipes install clean projects only; the new refusal and forwarding behaviour is exercised with stand-in managers.
+**Root cause:** `tests/e2e/redirects.sh` asserts `npm/pnpm config get registry` and `pip config list` and the proxy's request log for npm, pnpm and pip. uv and poetry install from the lockfile's own URLs, and neither has an equally cheap way to print the effective index, so only the refusal and the exit code are asserted.
 
-**Fix direction:** add e2e recipes with a local registry mirror and a deliberately drifted lockfile for each manager and run them in the Docker jobs.
+**Fix direction:** find a command per manager that prints the effective index (or use verbose output) and assert it; point a lockfile-less install at the mirror so the request log can be checked.
+
+
+---
+
+### Finding 459 — Low | `tests/e2e/redirects.sh`, `justfile` | ⚠️ Open
+
+**Summary:** e2e redirect checks depend on live registries.
+
+**Root cause:** The script creates fixtures with the real tools against the public registries (`npm install --package-lock-only`, `uv lock`, `poetry lock`) and the sandbox probes the public registry, so it needs network. The machine's own settings, caches and stores are no longer a factor: the run uses its own `HOME`.
+
+**Fix direction:** a fixture registry for the lockfile creation, served by the stand-in mirror.
+
+
+---
+
+### Finding 460 — Low | `src/index_settings.rs` | ⚠️ Open
+
+**Summary:** POETRY_REPOSITORIES_*_URL is probably not an install source.
+
+**Root cause:** `python_env_redirects` treats every `POETRY_REPOSITORIES_*_URL` variable and the `[repositories]` table of Poetry's `config.toml` as an index setting; Poetry documents them as upload targets. Neither the unit tests nor the e2e test checked what Poetry does with them.
+
+**Fix direction:** confirm with a real Poetry (install from a lockfile-less project with the variable set and watch the requests); remove the sources that are publish-only and keep `[[tool.poetry.source]]`.
 
 
 ---

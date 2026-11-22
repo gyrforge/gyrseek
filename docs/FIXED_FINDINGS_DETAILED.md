@@ -1940,3 +1940,7 @@ only.
 ### Finding 445: Index and registry redirects
 - **Root Cause**: The sandbox always probes the public package, while the forwarded install follows the user's own package-manager configuration, which can name another index.
 - **Fix**: `index_settings::refusal` (see AGENTS.md) refuses a redirect to any host that is not public or listed in `trusted_index_hosts`, before anything is scanned. The project `.npmrc` is found from the project root when gyrseek runs in a subdirectory, and the direct-forward path for only non-registry specs is checked too.
+
+### Finding 457: No real end-to-end check of the new guards
+- **Root Cause**: The `just test-*` recipes install clean projects only; the refusal and forwarding behaviour was covered by unit tests, fake package managers and `tests/lockfile-guards.sh`.
+- **Fix**: `tests/e2e/redirects.sh <manager>` and `tests/e2e/mirror_proxy.py` (see AGENTS.md); recipes `test-redirects-<manager>`; a step in each AppArmor Docker CI job. Running it showed two real behaviours the stand-ins could not: uv creates an empty `.venv` before it checks the lockfile, and an extra index can make `uv sync --locked` fail on its own.

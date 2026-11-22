@@ -66,8 +66,23 @@ test-uv +args='': build
     "{{bin}}" {{args}} uv sync
     "{{bin}}" {{args}} uv lock
 
+# End-to-end redirect and lockfile guards for one manager (real package manager, real Docker sandbox, local stand-in mirror)
+[private]
+test-redirects manager +args='': build
+    tests/e2e/redirects.sh {{manager}} "{{bin}}" {{args}}
+
+test-redirects-npm +args='': (test-redirects "npm" args)
+
+test-redirects-pnpm +args='': (test-redirects "pnpm" args)
+
+test-redirects-pip +args='': (test-redirects "pip" args)
+
+test-redirects-poetry +args='': (test-redirects "poetry" args)
+
+test-redirects-uv +args='': (test-redirects "uv" args)
+
 # Run all Docker end-to-end tests
-test-docker: test-npm test-pnpm test-pip test-poetry test-uv
+test-docker: test-npm test-pnpm test-pip test-poetry test-uv test-redirects-npm test-redirects-pnpm test-redirects-pip test-redirects-poetry test-redirects-uv
 
 # Install to local machine
 install:
