@@ -564,23 +564,7 @@ fn trace_install_docker_matrix(
         ));
     }
 
-    collect_probe_traces(
-        out_dir.path(),
-        probes,
-        probe_timeout_secs,
-        trace_limit,
-        &|package, version| {
-            trace_install_docker_single(
-                manager,
-                package,
-                version,
-                danger_disable_seccomp,
-                probe_timeout_secs,
-                trace_limit,
-                default_image,
-            )
-        },
-    )
+    collect_probe_traces(out_dir.path(), probes, probe_timeout_secs, trace_limit)
 }
 
 /// Allowed growth of a decoded file beyond the tmpfs size (the tmpfs counts pages, not bytes).
@@ -798,14 +782,14 @@ fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
 
 /// Reads what the container script left in `out_dir` for each probe: the trace, the
 /// artifact inventory, an exit-code file for a failed install and a marker for a probe that
-/// timed out. `retry_single` re-runs one probe on its own when its trace in the batch is
-/// missing.
+/// timed out or filled the trace tmpfs. A probe whose trace is missing or blank is an error and
+/// is never re-run: a second run would have its own artifact inventory, and mixing the two
+/// would describe two different installs (FIXED #418).
 fn collect_probe_traces(
     out_dir: &std::path::Path,
     probes: &[(String, String)],
     probe_timeout_secs: usize,
     trace_limit: &str,
-    retry_single: &dyn Fn(&str, &str) -> Result<String, String>,
 ) -> Result<Vec<ProbeTrace>, String> {
     let mut results = Vec::new();
     let mut timed_out: Vec<String> = Vec::new();
@@ -831,13 +815,9 @@ fn collect_probe_traces(
             continue;
         }
         let trace_path = out_dir.join(format!("gyrseek_trace_{}.log", idx));
-        // Prefer the matrix log; if it is missing/unreadable, retry the probe in
-        // isolation. Either way, a blank trace means strace produced no data and
-        // MUST NOT be treated as a clean zero-connection scan — fail closed.
-        let mut trace = match std::fs::read_to_string(&trace_path) {
-            Ok(contents) if !contents.trim().is_empty() => contents,
-            _ => retry_single(package, version)?,
-        };
+        // A missing or blank trace means strace produced no data and MUST NOT be treated as a
+        // clean zero-connection scan: fail closed, with strace's own error.
+        let mut trace = std::fs::read_to_string(&trace_path).unwrap_or_default();
         if trace.trim().is_empty() {
             let err_path = out_dir.join(format!("gyrseek_err_{}.log", idx));
             let strace_err = std::fs::read_to_string(&err_path).unwrap_or_default();
@@ -871,72 +851,6 @@ fn collect_probe_traces(
     }
 
     Ok(results)
-}
-
-fn trace_install_docker_single(
-    manager: &str,
-    package: &str,
-    version: &str,
-    danger_disable_seccomp: bool,
-    probe_timeout_secs: usize,
-    trace_limit: &str,
-    default_image: &str,
-) -> Result<String, String> {
-    let image_config = scanner_image_config(manager, default_image);
-    let script = build_single_script(
-        manager,
-        package,
-        version,
-        image_config.prebuilt,
-        probe_timeout_secs,
-    );
-    // The single-probe fallback captures strace output from stderr rather than a log file; it
-    // has no trace tmpfs, so the host bounds what it reads instead.
-    let name = container_name();
-    let args = build_docker_run_args(
-        &image_config.image,
-        &script,
-        danger_disable_seccomp,
-        None,
-        &name,
-    )?;
-    let limit = trace_limit;
-    let cap = size_to_bytes(limit).unwrap_or(0);
-
-    use std::io::Read;
-    let mut child = Command::new("docker")
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
-    let mut stderr = child.stderr.take().expect("piped stderr");
-    let mut captured = Vec::new();
-    let _ = (&mut stderr).take(cap + 1).read_to_end(&mut captured);
-    if captured.len() as u64 > cap {
-        let _ = Command::new("docker").args(["kill", &name]).output();
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(trace_limit_message(limit, package, version));
-    }
-    let status = child
-        .wait()
-        .map_err(|e| format!("failed to wait for docker: {e}"))?;
-    let stderr_text = String::from_utf8_lossy(&captured).to_string();
-
-    if is_timeout_exit(status.code()) {
-        return Err(probe_timeout_message(probe_timeout_secs, package, version));
-    }
-
-    if !status.success() {
-        return Err(format!(
-            "single-probe docker sandbox failed for '{}@{}': {}",
-            package, version, stderr_text
-        ));
-    }
-
-    Ok(stderr_text)
 }
 
 /// Unprivileged in-container user the untrusted install payload runs as. The
@@ -1084,6 +998,7 @@ fn install_invocation(manager: &str, pkg_spec: &str) -> String {
 /// The syscalls every gyrseek strace records.
 const STRACE_SYSCALL_FILTER: &str = "network,execve,?execveat,open,openat,?openat2,?openat64,link,linkat,symlink,symlinkat,clone,?clone3,fork,vfork,dup,dup2,?dup3,fcntl";
 
+#[cfg(test)]
 fn strace_install_command(
     manager: &str,
     pkg_spec: &str,
@@ -1139,28 +1054,144 @@ fn image_setup_steps(manager: &str, prebuilt: bool) -> Vec<String> {
 /// `.pth` files with executable content (Hades/Miasma pattern), unexpected
 /// runtime binaries (bun/deno), and other suspicious artifacts. The scan is
 /// per-probe so faulty findings are attributed to a specific package-version.
-fn build_artifact_scan_steps(idx: usize) -> Vec<String> {
+///
+/// One `find` and one interpreter process inventory the whole tree (a `node_modules` of 10,000
+/// files used to cost tens of thousands of processes, FIXED #24). The interpreter is the one the
+/// package manager needs anyway, so a custom scanner image has it too: Python for pip, uv and
+/// poetry, Node for npm and pnpm. The executable formats are recognised from the files' magic
+/// bytes, because the scanner images have no `file` command: with the old per-file `file -b` the
+/// type was always empty, so ELF, Mach-O and PE payloads and a dropped `bun` or `deno` were never
+/// reported (FIXED #467). If the interpreter is missing or fails, the script stops with a message
+/// (exit 126) instead of carrying on with an empty inventory, unless the trace tmpfs is full, in
+/// which case the probe is reported as over the limit.
+fn build_artifact_scan_steps(manager: &str, idx: usize) -> Vec<String> {
     let out = probe_file("artifacts", idx);
+    let (find_interpreter, script, runtime) = if is_npm_family_manager(manager) {
+        (
+            "INTERP=$(command -v node || true)",
+            format!("\"$INTERP\" -e '{ARTIFACT_INVENTORY_NODE}'"),
+            "node",
+        )
+    } else {
+        (
+            "INTERP=$(command -v python3 || command -v python || true)",
+            format!("\"$INTERP\" -c '{ARTIFACT_INVENTORY_PYTHON}'"),
+            "python3 or python",
+        )
+    };
     vec![
         // Initialize/clear the artifact log for this probe. The trace tmpfs may be full by now
         // (the probe is then reported as over the limit), and the script runs under `set -e`.
         format!("{{ true > {out}; }} 2>/dev/null || true"),
-        // Single inventory pipeline: record path, size (bytes), file type, and
-        // first 300 bytes of content for every installed file. Null byte (\0)
-        // is used as the field delimiter because it cannot appear in POSIX
-        // file paths, making delimiter-injection attacks impossible. Pipe
-        // characters in content are still replaced with spaces as a defence-
-        // in-depth measure.
         format!(
-            "find /work -type f 2>/dev/null | while IFS= read -r f; do \
-             size=$(stat -c%s \"$f\" 2>/dev/null || wc -c < \"$f\" 2>/dev/null); \
-             type=$(file -b \"$f\" 2>/dev/null | head -c 100); \
-             content=$(head -c 300 \"$f\" 2>/dev/null | tr '|' ' '); \
-             printf '%s\\0%s\\0%s\\0%s\\n' \"$f\" \"$size\" \"$type\" \"$content\" >> {}; done || true",
-            out
+            "{find_interpreter}; \
+             if [ -n \"$INTERP\" ] && find /work -type f -print0 2>/dev/null | {script} > {out} 2>/dev/null; \
+             then true; elif gyrseek_full; then true; \
+             else echo \"gyrseek: cannot inventory the installed files: the scanner image has no working {runtime}\" >&2; exit 126; fi"
         ),
     ]
 }
+
+/// Reads the NUL-separated file names `find` prints and writes one inventory line per file:
+/// `path \0 size \0 type \0 content \n`. The type is `ELF …`, `Mach-O …` or `PE32[+] executable`
+/// (what the classifier looks for) from the file's first bytes, empty otherwise; the content
+/// (first 300 bytes, with `|`, NUL and line breaks replaced by spaces, trailing space trimmed) is
+/// kept for `.pth` files only, the one place it is used. A line break in a path is replaced by
+/// `?` so a file name cannot split its own record. It contains no single quote and no apostrophe:
+/// the shell wraps it in single quotes. `ARTIFACT_INVENTORY_NODE` does the same in Node.
+const ARTIFACT_INVENTORY_PYTHON: &str = r#"import os, struct, sys
+def kind(f):
+    try:
+        with open(f, "rb") as h:
+            b = h.read(64)
+            if len(b) < 4:
+                return ""
+            m = b[:4]
+            if m == b"\x7fELF":
+                return "ELF %s-bit %s executable" % ("64" if b[4:5] == b"\x02" else "32", "MSB" if b[5:6] == b"\x02" else "LSB")
+            if m in (b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe"):
+                return "Mach-O binary"
+            if m == b"\xca\xfe\xba\xbe" and len(b) >= 8 and struct.unpack(">I", b[4:8])[0] < 45:
+                return "Mach-O universal binary"
+            if b[:2] == b"MZ" and len(b) >= 64:
+                h.seek(struct.unpack("<I", b[60:64])[0])
+                if h.read(4) == b"PE\0\0":
+                    h.read(20)
+                    opt = h.read(2)
+                    if len(opt) == 2:
+                        return "PE32+ executable" if struct.unpack("<H", opt)[0] == 0x20b else "PE32 executable"
+    except (OSError, ValueError, struct.error):
+        pass
+    return ""
+out = sys.stdout.buffer
+for f in sys.stdin.buffer.read().split(b"\0"):
+    if not f:
+        continue
+    try:
+        size = os.stat(f).st_size
+    except OSError:
+        size = 0
+    content = b""
+    if f.endswith(b".pth"):
+        try:
+            with open(f, "rb") as h:
+                content = h.read(300)
+        except OSError:
+            pass
+        content = content.translate(bytes(32 if c in (0, 10, 13, 124) else c for c in range(256))).rstrip()
+    out.write(f.replace(b"\n", b"?") + b"\0" + str(size).encode() + b"\0" + kind(f).encode() + b"\0" + content + b"\n")"#;
+
+const ARTIFACT_INVENTORY_NODE: &str = r#"const fs = require("fs");
+const data = fs.readFileSync("/dev/stdin");
+const names = [];
+for (let start = 0, i = 0; i < data.length; i++) {
+  if (data[i] === 0) { if (i > start) names.push(data.subarray(start, i)); start = i + 1; }
+}
+function kind(f) {
+  let fd;
+  try {
+    fd = fs.openSync(f, "r");
+    const b = Buffer.alloc(64);
+    const n = fs.readSync(fd, b, 0, 64, 0);
+    if (n < 4) return "";
+    const m = b.subarray(0, 4).toString("latin1");
+    if (m === "\x7fELF") return "ELF " + (b[4] === 2 ? "64" : "32") + "-bit " + (b[5] === 2 ? "MSB" : "LSB") + " executable";
+    if (["\xfe\xed\xfa\xce", "\xfe\xed\xfa\xcf", "\xce\xfa\xed\xfe", "\xcf\xfa\xed\xfe"].includes(m)) return "Mach-O binary";
+    if (m === "\xca\xfe\xba\xbe" && n >= 8 && b.readUInt32BE(4) < 45) return "Mach-O universal binary";
+    if (b[0] === 0x4d && b[1] === 0x5a && n >= 64) {
+      const sig = Buffer.alloc(26);
+      if (fs.readSync(fd, sig, 0, 26, b.readUInt32LE(60)) === 26 && sig.subarray(0, 4).toString("latin1") === "PE\0\0") {
+        return sig.readUInt16LE(24) === 0x20b ? "PE32+ executable" : "PE32 executable";
+      }
+    }
+  } catch (e) {
+  } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch (e) {} }
+  }
+  return "";
+}
+const parts = [];
+for (const f of names) {
+  let size = 0;
+  try { size = fs.statSync(f).size; } catch (e) {}
+  let content = Buffer.alloc(0);
+  if (f.length >= 4 && f.subarray(f.length - 4).toString("latin1") === ".pth") {
+    try {
+      const fd = fs.openSync(f, "r");
+      const b = Buffer.alloc(300);
+      content = Buffer.from(b.subarray(0, fs.readSync(fd, b, 0, 300, 0)));
+      fs.closeSync(fd);
+    } catch (e) {}
+    for (let i = 0; i < content.length; i++) if ([0, 10, 13, 124].includes(content[i])) content[i] = 32;
+    let end = content.length;
+    while (end > 0 && [32, 9, 11, 12].includes(content[end - 1])) end--;
+    content = content.subarray(0, end);
+  }
+  const path = Buffer.from(f);
+  for (let i = 0; i < path.length; i++) if (path[i] === 10) path[i] = 63;
+  parts.push(path, Buffer.from("\0" + size + "\0" + kind(f) + "\0"), content, Buffer.from("\n"));
+}
+process.stdout.write(Buffer.concat(parts));"#;
 
 /// Where the matrix script keeps what each probe leaves behind (strace log, strace stderr,
 /// artifact inventory, exit code, timeout marker) while that probe runs: a size-limited tmpfs that
@@ -1184,8 +1215,8 @@ fn probe_file(kind: &str, idx: usize) -> String {
 /// and the host blocks that package. The functions never fail (`return 0`) because the script
 /// runs under `set -e`.
 const TRACE_FUNCTIONS: &str = "gyrseek_emit() { echo \"GYRSEEK-FILE ${1##*/}\"; base64 < \"$1\"; echo GYRSEEK-END; rm -f \"$1\"; }; \
-gyrseek_publish() { set -- \"$1\" $(df -Pk /gyrseek-trace 2>/dev/null | tail -n 1 | tr -s ' ' | cut -d' ' -f2,4); \
-if [ \"${3:-0}\" -lt 16 ] || [ $(( ${3:-0} * 100 )) -lt \"${2:-0}\" ]; then echo \"GYRSEEK-LIMIT $1\"; rm -f /gyrseek-trace/gyrseek_*_$1.log; return 0; fi; \
+gyrseek_full() { set -- $(df -Pk /gyrseek-trace 2>/dev/null | tail -n 1 | tr -s ' ' | cut -d' ' -f2,4); [ \"${2:-0}\" -lt 16 ] || [ $(( ${2:-0} * 100 )) -lt \"${1:-0}\" ]; }; \
+gyrseek_publish() { if gyrseek_full; then echo \"GYRSEEK-LIMIT $1\"; rm -f /gyrseek-trace/gyrseek_*_$1.log; return 0; fi; \
 for kind in trace err artifacts rc timeout; do f=/gyrseek-trace/gyrseek_${kind}_$1.log; if [ -f \"$f\" ]; then gyrseek_emit \"$f\"; fi; done; return 0; }; \
 gyrseek_publish_rest() { for f in /gyrseek-trace/gyrseek_*.log; do if [ -f \"$f\" ]; then gyrseek_emit \"$f\"; fi; done; return 0; }";
 
@@ -1262,30 +1293,13 @@ fn build_matrix_script_with(
             strace_command(&install(&spec), Some(&log), timeout_secs),
         ));
         // After each install, scan the installed tree for suspicious artifacts.
-        steps.extend(build_artifact_scan_steps(idx));
+        steps.extend(build_artifact_scan_steps(manager, idx));
         // Send this probe's files to the host and free the tmpfs for the next probe.
         steps.push(format!("gyrseek_publish {idx}"));
         // Then wipe the install tree so the next probe starts from the same
         // empty state and its scan cannot see this probe's files.
         steps.push(WORK_RESET_STEP.to_string());
     }
-
-    steps.join("; ")
-}
-
-/// Builds the `sh -lc` script for the single-probe fallback (trace to stderr).
-fn build_single_script(
-    manager: &str,
-    package: &str,
-    version: &str,
-    prebuilt: bool,
-    timeout_secs: usize,
-) -> String {
-    let mut steps = image_setup_steps(manager, prebuilt);
-    steps.extend(scanner_user_setup_steps());
-
-    let spec = package_spec(manager, package, version);
-    steps.push(strace_install_command(manager, &spec, None, timeout_secs));
 
     steps.join("; ")
 }
@@ -1618,17 +1632,17 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, is_timeout_exit,
-        read_file_tail,
-    };
-    use super::{
-        EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
-        EMBEDDED_SECCOMP_PROFILE_JSON, KILL_PAYLOAD_PROCESSES_STEP, SCANNER_USER, TRACE_FUNCTIONS,
-        WORK_RESET_STEP, base64_decode, build_artifact_scan_steps, build_docker_run_args,
-        build_matrix_script, build_runner_from_env, build_single_script,
+        ARTIFACT_INVENTORY_NODE, ARTIFACT_INVENTORY_PYTHON, EMBEDDED_APPARMOR_PROFILE_NAME,
+        EMBEDDED_APPARMOR_PROFILE_TEXT, EMBEDDED_SECCOMP_PROFILE_JSON, KILL_PAYLOAD_PROCESSES_STEP,
+        SCANNER_USER, TRACE_FUNCTIONS, WORK_RESET_STEP, base64_decode, build_artifact_scan_steps,
+        build_docker_run_args, build_matrix_script, build_runner_from_env,
         docker_apparmor_enabled_from_env, docker_apparmor_profile_name, install_output_tail,
         probe_timeout_message, read_frames, read_install_failure, sandbox_max_processes,
         sandbox_trace_limit, size_to_bytes, strace_install_command,
+    };
+    use super::{
+        DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, is_timeout_exit,
+        read_file_tail,
     };
     use crate::sandbox::SandboxRunner;
     use std::sync::Mutex;
@@ -1727,11 +1741,6 @@ mod tests {
         assert!(matrix.contains("-s 4096"));
         assert!(matrix.contains(" -v "));
         assert!(matrix.contains(" -xx "));
-
-        let single = build_single_script("pip", "requests", "2.31.0", true, 300);
-        assert!(single.contains("-s 4096"));
-        assert!(single.contains(" -v "));
-        assert!(single.contains(" -xx "));
     }
 
     // --- #5 the traced payload runs unprivileged so it can't rewrite its trace ---
@@ -2084,63 +2093,109 @@ mod tests {
 
     #[test]
     fn artifact_scan_steps_inventory_all_files() {
-        let steps = build_artifact_scan_steps(0);
-        let combined = steps.join(" ");
-        assert!(
-            combined.contains("find /work -type f"),
-            "should inventory every file: {combined}"
-        );
-        assert!(
-            combined.contains("file -b"),
-            "should capture file type via file(1): {combined}"
-        );
-        assert!(
-            combined.contains("stat -c%s"),
-            "should capture file size: {combined}"
-        );
-        assert!(
-            combined.contains("head -c 300"),
-            "should capture content prefix: {combined}"
-        );
+        for manager in ["pip", "npm"] {
+            let combined = build_artifact_scan_steps(manager, 0).join(" ");
+            assert!(
+                combined.contains("find /work -type f -print0"),
+                "should inventory every file, names NUL-separated: {combined}"
+            );
+        }
     }
 
     #[test]
-    fn artifact_scan_steps_pipe_char_in_content_replaced() {
-        let steps = build_artifact_scan_steps(0);
-        let combined = steps.join(" ");
-        assert!(
-            combined.contains("tr '|' ' '"),
-            "should replace pipe in content to preserve delimiter: {combined}"
-        );
+    fn the_inventory_runs_in_the_language_the_package_manager_needs() {
+        // The image must have it for the package manager to run at all, custom images included.
+        for manager in ["pip", "pip3", "uv", "poetry"] {
+            let scan = &build_artifact_scan_steps(manager, 0)[1];
+            assert!(
+                scan.contains("command -v python3 || command -v python"),
+                "{manager}: {scan}"
+            );
+            assert!(scan.contains("\"$INTERP\" -c '"), "{manager}: {scan}");
+            assert!(
+                !scan.contains("node") && !scan.contains("perl"),
+                "{manager}: {scan}"
+            );
+        }
+        for manager in ["npm", "pnpm"] {
+            let scan = &build_artifact_scan_steps(manager, 0)[1];
+            assert!(scan.contains("command -v node"), "{manager}: {scan}");
+            assert!(scan.contains("\"$INTERP\" -e '"), "{manager}: {scan}");
+            assert!(
+                !scan.contains("python") && !scan.contains("perl"),
+                "{manager}: {scan}"
+            );
+        }
     }
 
     #[test]
-    fn artifact_scan_steps_uses_null_byte_delimiter() {
-        // Finding 20 fix: the shell script must use printf with \0 delimiter
-        // to prevent pipe-in-filename injection attacks.
-        let steps = build_artifact_scan_steps(0);
-        let cmd = &steps[1];
-        assert!(
-            cmd.contains("printf "),
-            "must use printf for null-byte delimiters: {cmd}"
-        );
-        assert!(
-            cmd.contains("\\0"),
-            "must use \\0 null-byte field delimiter: {cmd}"
-        );
-        // Ensure the old echo-based pipe-delimiter approach is gone.
-        assert!(
-            !cmd.contains("echo \"$f|"),
-            "must not use echo with pipe delimiter: {cmd}"
-        );
+    fn a_missing_or_failing_interpreter_stops_the_script_instead_of_leaving_an_empty_inventory() {
+        // The only quiet exit is a full trace tmpfs, which is reported as over the limit.
+        for (manager, runtime) in [("pip", "python3 or python"), ("npm", "node")] {
+            let scan = &build_artifact_scan_steps(manager, 0)[1];
+            assert!(scan.contains("[ -n \"$INTERP\" ] && find /work"), "{scan}");
+            assert!(
+                scan.contains("; then true; elif gyrseek_full; then true; else echo"),
+                "{scan}"
+            );
+            assert!(
+                scan.contains(&format!(
+                    "the scanner image has no working {runtime}\" >&2; exit 126; fi"
+                )),
+                "{scan}"
+            );
+            // No fallback that would carry on without executable types.
+            assert!(
+                !scan.contains("file -b") && !scan.contains("stat -c"),
+                "{scan}"
+            );
+        }
+        assert!(TRACE_FUNCTIONS.contains("gyrseek_full() {"));
+    }
+
+    #[test]
+    fn the_inventory_scripts_have_no_quote_the_shell_would_trip_on_and_start_no_process() {
+        // They are wrapped in single quotes by the shell.
+        for script in [ARTIFACT_INVENTORY_PYTHON, ARTIFACT_INVENTORY_NODE] {
+            assert!(!script.contains('\''), "{script}");
+        }
+        for spawn in [
+            "subprocess",
+            "os.system",
+            "os.popen",
+            "child_process",
+            "execSync",
+            "spawn(",
+        ] {
+            assert!(
+                !ARTIFACT_INVENTORY_PYTHON.contains(spawn)
+                    && !ARTIFACT_INVENTORY_NODE.contains(spawn),
+                "{spawn}"
+            );
+        }
+        // The executable formats come from the file's own bytes, not from a `file` command that
+        // the scanner images do not have; `|`, NUL and line breaks never reach the content field.
+        for script in [ARTIFACT_INVENTORY_PYTHON, ARTIFACT_INVENTORY_NODE] {
+            for magic in [
+                "\\x7fELF",
+                "\\xfe\\xed\\xfa\\xce",
+                "\\xca\\xfe\\xba\\xbe",
+                "PE\\0\\0",
+                "PE32+",
+                "Mach-O universal binary",
+            ] {
+                assert!(script.contains(magic), "{magic}");
+            }
+            assert!(script.contains("\\0"), "NUL field delimiter");
+        }
     }
 
     #[test]
     fn artifact_scan_steps_output_to_correct_log() {
-        let steps0 = build_artifact_scan_steps(0);
-        let steps1 = build_artifact_scan_steps(1);
-        assert!(steps0[1].contains("/gyrseek-trace/gyrseek_artifacts_0.log"));
-        assert!(steps1[1].contains("/gyrseek-trace/gyrseek_artifacts_1.log"));
+        let steps0 = build_artifact_scan_steps("pip", 0);
+        let steps1 = build_artifact_scan_steps("npm", 1);
+        assert!(steps0[1].contains("> /gyrseek-trace/gyrseek_artifacts_0.log"));
+        assert!(steps1[1].contains("> /gyrseek-trace/gyrseek_artifacts_1.log"));
     }
 
     #[test]
@@ -2183,8 +2238,6 @@ mod tests {
         let matrix = build_matrix_script("pip", &probes, true, 45);
         assert_eq!(matrix.matches("timeout -k 5 45 strace -f").count(), 2);
         assert!(!matrix.contains("timeout -k 5 300"));
-        let single = build_single_script("pip", "pkg-a", "1.0.0", true, 45);
-        assert!(single.contains("timeout -k 5 45 strace -f"));
     }
 
     #[test]
@@ -2423,14 +2476,13 @@ mod tests {
             ("big".to_string(), "1".to_string()),
             ("ok".to_string(), "2".to_string()),
         ];
-        let no_retry = |_: &str, _: &str| -> Result<String, String> { panic!("must not retry") };
-        let got = collect_probe_traces(d, &probes, 300, "64m", &no_retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "64m").unwrap();
         // Only the second probe is returned, and the first is never read or re-run.
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].probe.0, "ok");
         // When every probe filled it, the batch is an error that names the limit.
         std::fs::write(d.join("gyrseek_limit_1.log"), b"").unwrap();
-        let err = collect_probe_traces(d, &probes, 300, "64m", &no_retry).unwrap_err();
+        let err = collect_probe_traces(d, &probes, 300, "64m").unwrap_err();
         assert!(
             err.contains("trace limit of 64m") && err.contains("GYRSEEK_TRACE_LIMIT"),
             "{err}"
@@ -2547,6 +2599,167 @@ mod tests {
         );
     }
 
+    /// FIXED #24 and #467. Runs the artifact inventory (the Python script in the Python image, the
+    /// Node script in the Node image) on a tree of every executable format the classifier knows
+    /// plus names that try to confuse it, and checks what is reported and how long it takes.
+    /// Needs Docker and the two scanner images (no network otherwise).
+    #[test]
+    #[ignore = "needs Docker; run with `just test-trace-integrity`"]
+    fn the_artifact_inventory_reports_executables_without_file_and_is_fast() {
+        use std::collections::HashSet;
+        // PE32+: "MZ", padding, e_lfanew = 0x40, "PE\0\0", a 20 byte COFF header, magic 0x020b.
+        // Mach-O thin (64-bit, little endian), Mach-O universal (2 architectures) and a Java class
+        // file, which shares the universal magic (major version 52).
+        let fixture = r#"mkdir -p /work/sp; cd /work
+cp /bin/ls bun; cp /bin/ls native-elf; cp /bin/ls "trailing "; cp /bin/ls "$(printf 'new\nline')"
+printf 'import os; os.system(1)\n' > sp/evil.pth; printf 'plain\n' > sp/ok.pth
+head -c 11000000 /dev/zero > big.bin
+{ printf 'MZ'; head -c 58 /dev/zero; printf '\100\0\0\0PE\0\0'; head -c 20 /dev/zero; printf '\013\002'; } > win.exe
+printf '\317\372\355\376\0\0\0\0' > mac-thin; printf '\312\376\272\276\0\0\0\002' > mac-fat; printf '\312\376\272\276\0\0\0\064' > Foo.class
+i=0; while [ $i -lt 3000 ]; do echo x > small$i; i=$((i+1)); done"#;
+        for manager in ["pip", "npm"] {
+            let image = crate::runtime_image::select_for_manager(
+                manager,
+                None,
+                None,
+                std::path::Path::new("."),
+            )
+            .image;
+            let steps = build_artifact_scan_steps(manager, 0).join("; ");
+            let script = format!(
+                r#"{TRACE_FUNCTIONS}
+{fixture}
+t0=$(date +%s%N); {steps}; t1=$(date +%s%N)
+echo "MS=$(( (t1 - t0) / 1000000 ))"; echo BEGIN; base64 < /gyrseek-trace/gyrseek_artifacts_0.log; echo END"#
+            );
+            let name = super::container_name();
+            let args = build_docker_run_args(&image, &script, false, Some("64m"), &name).unwrap();
+            let output = std::process::Command::new("docker")
+                .args(&args)
+                .output()
+                .expect("docker");
+            assert!(
+                output.status.success(),
+                "{manager}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let text = String::from_utf8_lossy(&output.stdout).to_string();
+            let ms: u64 = text
+                .lines()
+                .find_map(|l| l.strip_prefix("MS="))
+                .expect("MS")
+                .trim()
+                .parse()
+                .unwrap();
+            let body: String = text
+                .split("BEGIN\n")
+                .nth(1)
+                .and_then(|r| r.split("END").next())
+                .expect("log")
+                .lines()
+                .collect();
+            let log = base64_decode(body.as_bytes()).expect("base64");
+            let lines = String::from_utf8_lossy(&log)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect();
+            let fast: HashSet<String> = crate::scanning::classify_inventory_lines(lines);
+            eprintln!("{manager}: artifact inventory of ~3000 files took {ms} ms");
+            let has = |prefix: &str| fast.iter().any(|f| f.starts_with(prefix));
+            // Executables of every format, recognised from their bytes.
+            for path in [
+                "/work/native-elf",
+                "/work/bun",
+                "/work/trailing ",
+                "/work/new?line",
+                "/work/win.exe",
+                "/work/mac-thin",
+                "/work/mac-fat",
+            ] {
+                assert!(
+                    has(&format!("binary|{path}|")),
+                    "{manager}: binary {path:?}: {fast:#?}"
+                );
+            }
+            assert!(
+                fast.iter()
+                    .any(|f| f.starts_with("binary|/work/win.exe|PE32+")),
+                "{manager}: {fast:#?}"
+            );
+            assert!(has("unexpected_runtime|/work/bun|"), "{manager}: {fast:#?}");
+            // A Java class file shares the universal Mach-O magic and must not be reported.
+            assert!(
+                !fast.iter().any(|f| f.contains("Foo.class")),
+                "{manager}: {fast:#?}"
+            );
+            // The other classes of finding.
+            assert!(
+                has("suspicious_pth|/work/sp/evil.pth|import os; os.system(1)"),
+                "{manager}: {fast:#?}"
+            );
+            assert!(
+                !has("suspicious_pth|/work/sp/ok.pth|"),
+                "{manager}: {fast:#?}"
+            );
+            assert!(
+                has("large_file|/work/big.bin|11000000"),
+                "{manager}: {fast:#?}"
+            );
+            // A single pass, not a process per file (the old loop needed several seconds here).
+            assert!(ms < 3000, "{manager}: {ms} ms");
+        }
+    }
+
+    /// A scanner image without the interpreter, or with one that fails, must stop the scan with a
+    /// message (exit 126) and never carry on with an empty inventory that would pass for clean.
+    /// Needs Docker and the network for the tiny `busybox` image.
+    #[test]
+    #[ignore = "needs Docker; run with `just test-trace-integrity`"]
+    fn a_scanner_image_without_a_working_interpreter_fails_the_scan_with_a_message() {
+        let python_image =
+            crate::runtime_image::select_for_manager("pip", None, None, std::path::Path::new("."))
+                .image;
+        // (image, manager, set-up that breaks the interpreter, runtime named in the message)
+        let cases = [
+            ("busybox:1.36.1", "pip", "", "python3 or python"),
+            ("busybox:1.36.1", "npm", "", "node"),
+            (
+                python_image.as_str(),
+                "pip",
+                "mkdir /fake; printf '#!/bin/sh\\nexit 1\\n' > /fake/python3; chmod +x /fake/python3; PATH=/fake:$PATH;",
+                "python3 or python",
+            ),
+        ];
+        for (image, manager, setup, runtime) in cases {
+            let steps = build_artifact_scan_steps(manager, 0).join("; ");
+            let script = format!(
+                "{TRACE_FUNCTIONS}; mkdir -p /work; echo x > /work/f; {setup} {steps}; echo REACHED-THE-END"
+            );
+            let args =
+                build_docker_run_args(image, &script, false, Some("64m"), &super::container_name())
+                    .unwrap();
+            let output = std::process::Command::new("docker")
+                .args(&args)
+                .output()
+                .expect("docker");
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            assert_eq!(
+                output.status.code(),
+                Some(126),
+                "{image} {manager}: {stderr}"
+            );
+            assert!(
+                stderr.contains(&format!("no working {runtime}")),
+                "{image} {manager}: {stderr}"
+            );
+            assert!(
+                !String::from_utf8_lossy(&output.stdout).contains("REACHED-THE-END"),
+                "{image} {manager}: the script carried on"
+            );
+        }
+    }
+
     /// FIXED #434: a package that produces more trace than the tmpfs holds blocks only itself;
     /// the next probe still gets a whole tmpfs. Needs Docker and the network.
     #[test]
@@ -2650,10 +2863,6 @@ mod tests {
         std::fs::write(dir.join(file), content).unwrap();
     }
 
-    fn no_retry(_: &str, _: &str) -> Result<String, String> {
-        panic!("the probe's trace was present, so it must not be re-run");
-    }
-
     #[test]
     fn collects_each_probes_trace_in_order_and_appends_the_artifact_inventory() {
         let dir = tempfile::tempdir().unwrap();
@@ -2662,7 +2871,7 @@ mod tests {
         put(d, "gyrseek_trace_1.log", "execve(\"/bin/b\") = 0\n");
         put(d, "gyrseek_artifacts_1.log", "  /work/x\0\0\0  \n");
         let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
-        let got = collect_probe_traces(d, &probes, 300, "256m", &no_retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "256m").unwrap();
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].probe, probe("a", "1.0.0"));
         assert_eq!(got[0].trace, "execve(\"/bin/a\") = 0\n");
@@ -2681,47 +2890,40 @@ mod tests {
         let d = dir.path();
         put(d, "gyrseek_trace_0.log", "trace\n");
         put(d, "gyrseek_artifacts_0.log", " \n\n");
-        let got = collect_probe_traces(d, &[probe("a", "1")], 300, "256m", &no_retry).unwrap();
+        let got = collect_probe_traces(d, &[probe("a", "1")], 300, "256m").unwrap();
         assert_eq!(got[0].trace, "trace\n");
     }
 
     #[test]
-    fn a_missing_or_blank_batch_trace_is_re_run_on_its_own() {
+    fn a_missing_or_blank_trace_is_an_error_and_nothing_is_re_run() {
+        // A second run would come with its own artifact inventory, and the two would describe
+        // different installs (FIXED #418): the probe fails closed instead.
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
-        put(d, "gyrseek_trace_1.log", "  \n"); // blank
+        put(d, "gyrseek_artifacts_0.log", "/work/x\0\0\0\n");
+        let err = collect_probe_traces(d, &[probe("a", "1.0.0")], 300, "256m").unwrap_err();
+        assert!(err.contains("empty trace for 'a@1.0.0'"), "missing: {err}");
+        put(d, "gyrseek_trace_0.log", "  \n"); // blank
+        let err = collect_probe_traces(d, &[probe("a", "1.0.0")], 300, "256m").unwrap_err();
+        assert!(err.contains("empty trace for 'a@1.0.0'"), "blank: {err}");
+        // One bad probe fails the batch even when the others are fine.
+        put(d, "gyrseek_trace_0.log", "good\n");
         let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
-        let calls = std::cell::RefCell::new(Vec::new());
-        let retry = |p: &str, v: &str| -> Result<String, String> {
-            calls.borrow_mut().push(format!("{p}@{v}"));
-            Ok(format!("retried {p}\n"))
-        };
-        let got = collect_probe_traces(d, &probes, 300, "256m", &retry).unwrap();
-        assert_eq!(*calls.borrow(), ["a@1.0.0", "b@2.0.0"]);
-        assert_eq!(got[0].trace, "retried a\n");
-        assert_eq!(got[1].trace, "retried b\n");
+        let err = collect_probe_traces(d, &probes, 300, "256m").unwrap_err();
+        assert!(err.contains("empty trace for 'b@2.0.0'"), "{err}");
     }
 
     #[test]
-    fn a_failed_re_run_is_an_error_not_a_clean_scan() {
-        let dir = tempfile::tempdir().unwrap();
-        let retry = |_: &str, _: &str| -> Result<String, String> { Err("docker exploded".into()) };
-        let err =
-            collect_probe_traces(dir.path(), &[probe("a", "1")], 300, "256m", &retry).unwrap_err();
-        assert!(err.contains("docker exploded"), "{err}");
-    }
-
-    #[test]
-    fn a_blank_trace_even_after_the_re_run_fails_closed_with_the_strace_error() {
+    fn a_blank_trace_fails_closed_with_the_strace_error() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
+        put(d, "gyrseek_trace_0.log", "\n");
         put(
             d,
             "gyrseek_err_0.log",
             "strace: ptrace(PTRACE_SEIZE): Operation not permitted\n",
         );
-        let retry = |_: &str, _: &str| -> Result<String, String> { Ok("  \n".into()) };
-        let err = collect_probe_traces(d, &[probe("a", "1.0.0")], 300, "256m", &retry).unwrap_err();
+        let err = collect_probe_traces(d, &[probe("a", "1.0.0")], 300, "256m").unwrap_err();
         assert!(err.contains("empty trace for 'a@1.0.0'"), "{err}");
         assert!(err.contains("Operation not permitted"), "{err}");
     }
@@ -2734,7 +2936,7 @@ mod tests {
         put(d, "gyrseek_timeout_0.log", "");
         put(d, "gyrseek_trace_1.log", "good\n");
         let probes = [probe("slow", "1.0.0"), probe("fast", "1.0.0")];
-        let got = collect_probe_traces(d, &probes, 300, "256m", &no_retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "256m").unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].probe, probe("fast", "1.0.0"));
     }
@@ -2746,7 +2948,7 @@ mod tests {
         put(d, "gyrseek_timeout_0.log", "");
         put(d, "gyrseek_timeout_1.log", "");
         let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
-        let err = collect_probe_traces(d, &probes, 45, "256m", &no_retry).unwrap_err();
+        let err = collect_probe_traces(d, &probes, 45, "256m").unwrap_err();
         assert!(err.contains("a@1.0.0") && err.contains("b@2.0.0"), "{err}");
         assert!(err.contains("probe_timeout_seconds=45"), "{err}");
     }
@@ -2764,7 +2966,7 @@ mod tests {
             "strace: Process 7 attached\nerror: no solution\n",
         );
         let probes = [probe("ok", "1"), probe("bad", "1")];
-        let got = collect_probe_traces(d, &probes, 300, "256m", &no_retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "256m").unwrap();
         assert!(got[0].install_failure.is_none());
         let failure = got[1].install_failure.as_ref().expect("probe 1 failed");
         assert_eq!(failure.exit_code, 2);
@@ -2785,7 +2987,7 @@ mod tests {
         }
         put(d, "gyrseek_timeout_11.log", "");
         put(d, "gyrseek_rc_12.log", "1\n");
-        let got = collect_probe_traces(d, &probes, 300, "256m", &no_retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "256m").unwrap();
         assert_eq!(got.len(), 12, "probe 11 timed out");
         assert!(
             got.iter()
@@ -2812,7 +3014,7 @@ mod tests {
     fn no_probes_means_no_results() {
         let dir = tempfile::tempdir().unwrap();
         assert!(
-            collect_probe_traces(dir.path(), &[], 300, "256m", &no_retry)
+            collect_probe_traces(dir.path(), &[], 300, "256m")
                 .unwrap()
                 .is_empty()
         );

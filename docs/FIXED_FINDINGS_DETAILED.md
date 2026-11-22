@@ -1956,3 +1956,15 @@ only.
 ### Finding 461: Host mount writable by the payload
 - **Root Cause**: `build_docker_run_args` bind-mounted the whole output directory for the container's lifetime, and the payload could write to it wherever the mount does not enforce ownership.
 - **Fix**: The container gets no host mount at all; see #434 for how the logs leave. The tampering test also tries to print a forged frame on the container's stdout and fails if it arrives.
+
+### Finding 24: Artifact scan spawned processes per file
+- **Root Cause**: The inventory loop ran `stat`, `file -b`, `head -c` and `tr` for every file found under `/work`.
+- **Fix**: One `find /work -type f -print0` feeds one interpreter process that stats each file, reads the first bytes for the format and, for `.pth` files, the first 300 bytes. The interpreter is the language of the package manager (Python for pip, uv and poetry; Node for npm and pnpm), because that runtime exists in every scanner image, custom ones included; `perl` was tried first and dropped, since it is only a detail of the Debian base images. A real container with a tree of about 3000 files took 34 ms (Python) and 88 ms (Node) against 4319 ms for the per-file loop (`the_artifact_inventory_reports_executables_without_file_and_is_fast`). There is no per-file fallback: a missing or failing interpreter stops the script with exit 126 and a message, because a fallback without `file` would carry on with empty types and pass for clean (the step's `2>/dev/null || true` had already turned a typo into an empty inventory once). The one quiet exit is a full trace tmpfs, reported as over the limit.
+
+### Finding 418: Retry mixed two runs
+- **Root Cause**: `trace_install_docker_matrix` re-ran a probe with `trace_install_docker_single` when its matrix trace was missing or blank but still appended the artifact inventory of the matrix run.
+- **Fix**: Removed the re-run, the single-probe script and its capped stderr reader. A missing or blank trace is an error naming strace's stderr; the other failure modes (timeout, trace limit) already have markers.
+
+### Finding 467: The executable type was always empty
+- **Root Cause**: The inventory read the type with `file -b`, which neither scanner image installs (`python:3.13-slim` and `node:26-slim` both lack it) and which the non-prebuilt setup does not install either. The shell silenced the error, so every file had an empty type and the classifier's ELF/Mach-O/PE test never matched. Found while measuring the scan for #24.
+- **Fix**: The magic bytes are read in the same pass (`kind` in `ARTIFACT_INVENTORY_PYTHON` and the Node equivalent); the Docker test covers ELF, a `bun`-named binary, PE32+, thin and universal Mach-O, a Java class file (which shares the universal magic) and names with a trailing space or a line break.

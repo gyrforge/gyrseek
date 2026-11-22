@@ -27,31 +27,6 @@ v6.is_loopback() || is_link_local || is_ula
 
 ---
 
-### Finding 24 — Medium | `sandbox.rs:555` | ⚠️ Open
-
-**Summary:** The post-install artifact scan shell loop spawns 3 child processes (stat, file, head) per discovered file. On a standard `node_modules` tree with 10,000 files, this launches 30,000–40,000 processes, causing the scan phase to take minutes or time out.
-
-**Root cause:** The script at `sandbox.rs:555–559` iterates with a `while read` loop and calls `stat`, `file`, and `head` individually per file:
-```sh
-find /work -type f 2>/dev/null | while IFS= read -r f; do \
-  size=$(stat -c%s "$f" 2>/dev/null || wc -c < "$f" 2>/dev/null); \
-  type=$(file -b "$f" 2>/dev/null | head -c 100); \
-  content=$(head -c 300 "$f" 2>/dev/null | tr '|' ' '); \
-  echo "$f|$size|$type|$content" >> {}; done || true
-```
-Each invocation forks a new process. On large projects (e.g. a Next.js app with 10k+ `node_modules` files), this creates prohibitive overhead.
-
-**Failure scenario:** `gyrseek npm install next` triggers a post-install artifact scan of 15,000 files. The container times out (default Docker `--stop-timeout` or CI job timeout) before the scan finishes. gyrseek fails closed on an incomplete/empty artifact log, blocking a legitimate install.
-
-**Fix direction:** Replace the per-file shell loop with bulk operations:
-```
-find /work -type f -exec stat -c '%s|%n' {} + > /tmp/sizes
-find /work -type f -exec file -b {} + > /tmp/types
-```
-Or, more robustly, compile a small Rust helper (`src/artifact_scanner.rs`) that walks the tree and writes the log directly — a single process, no shell overhead, and the delimiter-injection surface (Finding 20) is eliminated at the same time.
-
----
-
 ### Finding 25 — High | `README.md:363` / `sandbox.rs` | ⚠️ Open
 
 **Summary:** gyrseek's sandbox only monitors behavior during `pip install`. A Python package that places malicious code at module scope (e.g. Telnyx T26's `_client.py` with `FetchAudio()` / `setup()` calls) executes entirely on `import <pkg>` — after the sandbox exits — and is never observed.
@@ -991,16 +966,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 418 — Medium | `src/sandbox.rs` | ⚠️ Open
-
-**Summary:** `trace_install_docker_matrix` prefers each probe's matrix trace (`gyrseek_trace_{idx}.log`). If it is missing or blank, it reruns the probe in isolation with `trace_install_docker_single` and uses that stderr as the trace. It then appends `gyrseek_artifacts_{idx}.log` from the matrix run's `/out` directory regardless of which attempt supplied the trace. The single-probe script mounts no `/out` and has no artifact step.
-
-**Impact:** the trace and the artifact inventory can describe different container runs. A suspicious file present only in the retry's install is not scanned, and one present only in the matrix install is attributed to the retry's trace. It needs the matrix trace to be unusable while the install and artifact step still ran, so it is unlikely, and it is present on `main`.
-
-**Fix direction:** fail closed. When the matrix trace is missing or blank, report a probe error instead of mixing attempts, consistent with the rule that an empty trace is a hard error. The alternative is a single-probe artifact inventory with its own output channel, which is more work. Keep reading the matrix inventory whenever the matrix trace is used.
-
----
-
 ### Finding 420 — Medium | `src/scanning.rs` | ⚠️ Open
 
 **Summary:** `extract_process_exec_signatures` builds each signature from the full argv (`exe|arg1|arg2|…`). When a package is built from source, the installer runs helper processes whose arguments contain freshly generated temp directories, for example `python -c "… backend.build_wheel(b\"/tmp/.tmpvmamp8/builds-v0/.tmpTcdcXQ\" …"` from `uv`'s build isolation. The directory names are random, so the same build in a baseline produces a different signature and the candidate's signatures always look new.
@@ -1213,6 +1178,60 @@ if next.starts_with('-') {
 **Root cause:** `PolicyConfig` carries one `trace_limit` and one `probe_timeout_seconds` for the whole batch, and the matrix script gives every probe the same tmpfs.
 
 **Fix direction:** pass a per-probe limit (the tmpfs is shared by the batch, so size it for the largest configured value and compare each probe's usage with its own limit in `gyrseek_publish`).
+
+
+---
+
+### Finding 468 — Medium | `src/scanning.rs`, `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** `binary` findings are compared as `binary|<path>|<type>` strings between a candidate and its baselines, and they only started to fire with FIXED #467.
+
+**Root cause:** the comparison was written and unit-tested against synthetic inventories; in real scans the type was always empty, so the path-and-type equality was never exposed to real packages that ship compiled files whose names change between versions.
+
+**Fix direction:** scan numpy, pandas, scipy, cryptography, grpcio and a few npm packages with native addons against their real baselines; if they block, compare binaries by directory and extension (or by count and format) rather than the exact file name, keep an exact match for executables outside the package's own directories, and document `artifact_allowlist` for the rest.
+
+---
+
+### Finding 469 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** One probe without a trace fails the whole batch.
+
+**Root cause:** `collect_probe_traces` returns `Err` for a missing or blank trace file, while the timeout and trace-limit markers skip just that probe.
+
+**Fix direction:** skip a probe whose trace file is missing with a message (as for a timeout), keep `Err` for a blank trace (strace produced nothing), and test both.
+
+
+---
+
+### Finding 470 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** A custom image can have the package manager but no interpreter on PATH.
+
+**Root cause:** `build_artifact_scan_steps` resolves the interpreter with `command -v` as root, which is not the environment the install runs in.
+
+**Fix direction:** add `GYRSEEK_INVENTORY_INTERPRETER` (or a config key) that overrides the lookup, and mention it in the exit 126 message.
+
+
+---
+
+### Finding 471 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The inventory covers only /work and three executable formats.
+
+**Root cause:** `find /work -type f -print0` feeds a script that checks four magic numbers; nothing else is looked at.
+
+**Fix direction:** extend the `find` to `/home/gyrseek` and `/var/tmp` (and any other path writable by the scanner user), add `#!` and `\0asm` detection, and test each in the Docker fixture.
+
+
+---
+
+### Finding 472 — Low | `.github/workflows/ci.yml`, `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Docker tests depend on pulling images and apt packages.
+
+**Root cause:** `a_scanner_image_without_a_working_interpreter_fails_the_scan_with_a_message` names a public image by tag; the other tests need the network for apt.
+
+**Fix direction:** pin `busybox` by digest, add `docker pull` with a retry to the recipe before running the tests, and use the prebuilt scanner images in CI.
 
 
 ---
