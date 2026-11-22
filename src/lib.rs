@@ -98,6 +98,8 @@ struct GyrseekConfig {
     #[serde(default)]
     probe_timeout_seconds: Option<usize>,
     #[serde(default)]
+    trace_limit: Option<String>,
+    #[serde(default)]
     python_version: Option<String>,
     #[serde(default)]
     node_version: Option<String>,
@@ -480,6 +482,21 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
     )
     .unwrap_or(24);
 
+    // A trace limit that is not a size is dropped here, not later: the default applies.
+    let trace_limit = cfg
+        .trace_limit
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .filter(|v| {
+            let valid = sandbox::is_valid_trace_limit(v);
+            if !valid {
+                println!(
+                    "⚠️ [gyrseek] Ignoring trace_limit '{v}': it must be a size such as 256m, 1g or 65536k. Using the default."
+                );
+            }
+            valid
+        });
+
     let minimum_release_age_package = option_zero_to_none(
         cfg.minimum_release_age_package,
         "Ignoring invalid minimum_release_age_package=0; disabling minimum release age check",
@@ -580,6 +597,7 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         release_burst_window_hours,
         minimum_release_age_package,
         probe_timeout_seconds,
+        trace_limit,
         python_version,
         node_version,
         process_exec_allowlist,
@@ -1429,6 +1447,27 @@ mod config_tests {
     }
 
     #[test]
+    fn trace_limit_is_unset_by_default_and_read_from_the_config() {
+        let empty = tempfile::NamedTempFile::new().unwrap();
+        assert_eq!(load(&empty).trace_limit, None);
+        for (yaml, expected) in [
+            ("trace_limit: 512m", Some("512m")),
+            ("trace_limit: \"1g\"", Some("1g")),
+            ("trace_limit: '  65536k '", Some("65536k")),
+            // Not a size, zero or empty: ignored with a warning, the default applies.
+            ("trace_limit: abc", None),
+            ("trace_limit: 0", None),
+            ("trace_limit: 12x", None),
+            ("trace_limit: ''", None),
+            ("trace_limit: -5m", None),
+        ] {
+            let mut file = tempfile::NamedTempFile::new().unwrap();
+            writeln!(file, "{yaml}").unwrap();
+            assert_eq!(load(&file).trace_limit.as_deref(), expected, "{yaml}");
+        }
+    }
+
+    #[test]
     fn probe_timeout_zero_falls_back_to_300_rather_than_disabling_it() {
         let mut file = NamedTempFile::new().expect("temp file should be created");
         writeln!(file, "probe_timeout_seconds: 0").expect("config should be written");
@@ -1741,6 +1780,7 @@ struct LazyRunner {
     danger_disable_seccomp: bool,
     no_sandbox: bool,
     probe_timeout_secs: usize,
+    trace_limit: Option<String>,
     image: ImageChoice,
     /// Set when a package-manager setting sends the install to a registry gyrseek did not scan.
     /// Checked on the first scan, so an unscanned passthrough is never refused for it.
@@ -1766,6 +1806,7 @@ impl LazyRunner {
                     self.danger_disable_seccomp,
                     self.no_sandbox,
                     self.probe_timeout_secs,
+                    self.trace_limit.clone(),
                     self.image.clone(),
                 ) {
                     Ok(runner) => runner,
@@ -2184,6 +2225,9 @@ pub async fn run(args: Vec<String>) {
             policy.probe_timeout_seconds
         );
     }
+    if let Some(limit) = &policy.trace_limit {
+        println!("ℹ️ [gyrseek] Probe trace limit set to {limit} (trace_limit)");
+    }
     if let Some(days) = policy.minimum_release_age_package {
         println!(
             "ℹ️ [gyrseek] Minimum release age policy enabled (minimum_release_age_package={} day(s))",
@@ -2221,6 +2265,7 @@ pub async fn run(args: Vec<String>) {
         danger_disable_seccomp,
         no_sandbox,
         probe_timeout_secs: policy.probe_timeout_seconds,
+        trace_limit: policy.trace_limit.clone(),
         image,
         index_refusal: index_settings::refusal(
             &eye.manager,

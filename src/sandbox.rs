@@ -143,8 +143,6 @@ profile gyrseek-tracing flags=(attach_disconnected,mediate_deleted) {
   /opt/** rix,
   /work/ rw,
   /work/** rwixk,
-  /out/ rw,
-  /out/** rwk,
   /gyrseek-trace/ rw,
   /gyrseek-trace/** rwk,
   /tmp/ rw,
@@ -234,6 +232,7 @@ pub(crate) fn build_runner_from_env(
     danger_disable_seccomp: bool,
     no_sandbox: bool,
     probe_timeout_secs: usize,
+    trace_limit: Option<String>,
     image: ImageChoice,
 ) -> Result<Box<dyn SandboxRunner>, String> {
     let runner: Result<Box<dyn SandboxRunner>, String> = if no_sandbox {
@@ -249,6 +248,7 @@ pub(crate) fn build_runner_from_env(
         Ok(Box::new(DockerRunner {
             danger_disable_seccomp,
             probe_timeout_secs,
+            trace_limit,
             image,
         }))
     };
@@ -391,6 +391,8 @@ impl HostRunner {
 struct DockerRunner {
     danger_disable_seccomp: bool,
     probe_timeout_secs: usize,
+    /// `trace_limit` from the config; `GYRSEEK_TRACE_LIMIT` overrides it.
+    trace_limit: Option<String>,
     image: ImageChoice,
 }
 
@@ -426,6 +428,7 @@ impl SandboxRunner for DockerRunner {
             probes,
             self.danger_disable_seccomp,
             self.probe_timeout_secs,
+            &sandbox_trace_limit(self.trace_limit.as_deref()),
             &self.image.image,
         )
     }
@@ -437,6 +440,68 @@ pub(crate) fn sandbox_mem_limit() -> String {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "2g".to_string())
+}
+
+/// Size of the root-only tmpfs that holds one probe's logs, and so the largest trace gyrseek
+/// accepts for a probe. Traces seen in practice are a few MB (an npm install) to about 40 MB (a
+/// failing source build of a large Python package); the tmpfs counts against the container's
+/// memory limit (so a limit near `GYRSEEK_MEM_LIMIT` can get a flooding probe OOM-killed instead of
+/// blocked on its own). A probe that fills it is blocked, not scanned from a partial trace.
+pub(crate) const DEFAULT_TRACE_LIMIT: &str = "1024m";
+
+/// A valid size: `256m`, `1g`, `65536k` (or a plain number of bytes), greater than zero.
+pub(crate) fn is_valid_trace_limit(size: &str) -> bool {
+    size_to_bytes(size.trim()).is_some_and(|b| b > 0)
+}
+
+/// The trace limit in effect: `GYRSEEK_TRACE_LIMIT` when it is set to a valid size, otherwise
+/// `trace_limit` from `gyrseek.yaml` (`configured`, already validated), otherwise the default.
+/// A value in the environment that is not a size is ignored with a warning.
+pub(crate) fn sandbox_trace_limit(configured: Option<&str>) -> String {
+    let fallback = || {
+        configured
+            .map(str::trim)
+            .filter(|c| is_valid_trace_limit(c))
+            .unwrap_or(DEFAULT_TRACE_LIMIT)
+            .to_string()
+    };
+    match std::env::var("GYRSEEK_TRACE_LIMIT") {
+        Ok(v) if is_valid_trace_limit(&v) => v.trim().to_string(),
+        Ok(v) if !v.trim().is_empty() => {
+            let used = fallback();
+            eprintln!(
+                "⚠️ [gyrseek] Ignoring GYRSEEK_TRACE_LIMIT='{v}': it must be a size such as 256m, 1g or 65536k. Using {used}."
+            );
+            used
+        }
+        _ => fallback(),
+    }
+}
+
+/// `256m` -> bytes (`k`, `m`, `g` suffixes, or a plain number of bytes).
+fn size_to_bytes(size: &str) -> Option<u64> {
+    let size = size.trim().to_ascii_lowercase();
+    let (digits, unit) = match size.chars().last()? {
+        'k' => (&size[..size.len() - 1], 1024),
+        'm' => (&size[..size.len() - 1], 1024 * 1024),
+        'g' => (&size[..size.len() - 1], 1024 * 1024 * 1024),
+        _ => (size.as_str(), 1),
+    };
+    digits.parse::<u64>().ok()?.checked_mul(unit)
+}
+
+/// A name for the container, so a run that has to be abandoned can be stopped with `docker kill`.
+fn container_name() -> String {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!(
+        "gyrseek-probe-{}-{}-{nanos}",
+        std::process::id(),
+        COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
 }
 
 pub(crate) fn sandbox_max_processes() -> String {
@@ -458,6 +523,7 @@ fn trace_install_docker_matrix(
     probes: &[(String, String)],
     danger_disable_seccomp: bool,
     probe_timeout_secs: usize,
+    trace_limit: &str,
     default_image: &str,
 ) -> Result<Vec<ProbeTrace>, String> {
     if probes.is_empty() {
@@ -466,42 +532,35 @@ fn trace_install_docker_matrix(
 
     let image_config = scanner_image_config(manager, default_image);
 
+    // Where the files that the container streams out are written; the container itself gets no
+    // host mount at all.
     let out_dir = tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
-    let out_dir_path = out_dir.path().to_string_lossy().to_string();
 
     let script = build_matrix_script(manager, probes, image_config.prebuilt, probe_timeout_secs);
+    let name = container_name();
     let args = build_docker_run_args(
         &image_config.image,
-        &out_dir_path,
         &script,
         danger_disable_seccomp,
+        Some(trace_limit),
+        &name,
     )?;
 
-    let output = Command::new("docker")
-        .args(&args)
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
+    let file_cap = size_to_bytes(trace_limit).unwrap_or(0) + MAX_FRAME_SLACK_BYTES;
+    let (code, stderr) = run_matrix_container(&args, &name, out_dir.path(), file_cap)?;
 
-    if output.status.code() == Some(124) {
+    if code == Some(124) {
         // Only the cleanup after a timed-out probe exits 124 (see KILL_PAYLOAD_PROCESSES_STEP).
         return Err(format!(
             "a probe exceeded probe_timeout_seconds={probe_timeout_secs} and left processes running that could not be stopped, so the whole batch was aborted"
         ));
     }
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut tail_lines: Vec<_> = stdout.lines().rev().take(20).collect();
-        tail_lines.reverse();
-        let tail = tail_lines.join("\n");
+    if code != Some(0) {
         return Err(format!(
-            "docker sandbox command failed (exit code: {}).\nstderr:\n{}\nstdout (last 20 lines):\n{}",
-            output.status.code().unwrap_or(-1),
+            "docker sandbox command failed (exit code: {}).\nstderr:\n{}",
+            code.unwrap_or(-1),
             stderr,
-            tail,
         ));
     }
 
@@ -509,6 +568,7 @@ fn trace_install_docker_matrix(
         out_dir.path(),
         probes,
         probe_timeout_secs,
+        trace_limit,
         &|package, version| {
             trace_install_docker_single(
                 manager,
@@ -516,10 +576,224 @@ fn trace_install_docker_matrix(
                 version,
                 danger_disable_seccomp,
                 probe_timeout_secs,
+                trace_limit,
                 default_image,
             )
         },
     )
+}
+
+/// Allowed growth of a decoded file beyond the tmpfs size (the tmpfs counts pages, not bytes).
+const MAX_FRAME_SLACK_BYTES: u64 = 1024 * 1024;
+/// The longest line accepted inside a frame (base64 lines are 76 characters).
+const MAX_FRAME_LINE_BYTES: usize = 1024;
+/// How much of docker's own stderr is kept for an error message.
+const DOCKER_STDERR_KEEP_BYTES: u64 = 256 * 1024;
+
+/// Runs the matrix container and writes the files it streams out into `out_dir`. Returns the exit
+/// code and the head of docker's stderr. A stream that cannot be trusted (a malformed or
+/// truncated frame, a file over `file_cap`) stops the container and is an error.
+fn run_matrix_container(
+    args: &[String],
+    name: &str,
+    out_dir: &std::path::Path,
+    file_cap: u64,
+) -> Result<(Option<i32>, String), String> {
+    use std::io::Read;
+    let mut child = Command::new("docker")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
+    let stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let stderr_reader = std::thread::spawn(move || {
+        let mut kept = Vec::new();
+        let _ = (&mut stderr)
+            .take(DOCKER_STDERR_KEEP_BYTES)
+            .read_to_end(&mut kept);
+        let _ = std::io::copy(&mut stderr, &mut std::io::sink());
+        String::from_utf8_lossy(&kept).to_string()
+    });
+
+    let parsed = read_frames(std::io::BufReader::new(stdout), out_dir, file_cap);
+    if parsed.is_err() {
+        // Stop the container, not just the client: `docker run` leaves it running otherwise.
+        let _ = Command::new("docker").args(["kill", name]).output();
+        let _ = child.kill();
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("failed to wait for docker: {e}"))?;
+    let stderr = stderr_reader.join().unwrap_or_default();
+    parsed?;
+    Ok((status.code(), stderr))
+}
+
+/// The container's stdout as the matrix script writes it (see `TRACE_FUNCTIONS`): files framed
+/// as `GYRSEEK-FILE <name>`, base64 lines, `GYRSEEK-END`, and `GYRSEEK-LIMIT <idx>` for a probe
+/// whose logs did not fit. Everything else is ordinary container output and is ignored. Every file
+/// is written into `out_dir` under a name checked against what the script can produce, never
+/// larger than `file_cap`, and a frame that does not end is an error: a partial trace must not be
+/// read as a whole one.
+fn read_frames(
+    mut reader: impl std::io::BufRead,
+    out_dir: &std::path::Path,
+    file_cap: u64,
+) -> Result<(), String> {
+    use std::io::Write;
+    let mut current: Option<(std::fs::File, u64)> = None;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let n = read_line_capped(&mut reader, &mut line, MAX_FRAME_LINE_BYTES)
+            .map_err(|e| format!("cannot read the sandbox output: {e}"))?;
+        if n == LineRead::End {
+            break;
+        }
+        let too_long = n == LineRead::TooLong;
+        while matches!(line.last(), Some(b'\n' | b'\r')) {
+            line.pop();
+        }
+        if let Some((file, written)) = current.as_mut() {
+            if too_long {
+                return Err("a line of the sandbox output is too long to be a trace".to_string());
+            }
+            if line == b"GYRSEEK-END" {
+                current = None;
+                continue;
+            }
+            let bytes = base64_decode(&line)
+                .ok_or("the sandbox output holds a malformed trace file".to_string())?;
+            *written += bytes.len() as u64;
+            if *written > file_cap {
+                return Err(format!(
+                    "a trace file from the sandbox is larger than the {file_cap} bytes allowed"
+                ));
+            }
+            file.write_all(&bytes)
+                .map_err(|e| format!("cannot write a trace file: {e}"))?;
+        } else if let Some(name) = line.strip_prefix(b"GYRSEEK-FILE ") {
+            let name = std::str::from_utf8(name).unwrap_or("");
+            if !is_probe_file_name(name) {
+                return Err(format!(
+                    "the sandbox output names an unexpected file '{name}'"
+                ));
+            }
+            let file = std::fs::File::create(out_dir.join(name))
+                .map_err(|e| format!("cannot create {name}: {e}"))?;
+            current = Some((file, 0));
+        } else if let Some(idx) = line.strip_prefix(b"GYRSEEK-LIMIT ") {
+            let idx = std::str::from_utf8(idx).unwrap_or("");
+            if idx.is_empty() || idx.len() > 6 || !idx.bytes().all(|b| b.is_ascii_digit()) {
+                return Err("the sandbox output holds a malformed limit marker".to_string());
+            }
+            std::fs::write(out_dir.join(format!("gyrseek_limit_{idx}.log")), b"")
+                .map_err(|e| format!("cannot write the limit marker: {e}"))?;
+        }
+    }
+    if current.is_some() {
+        return Err("the sandbox output ended inside a trace file".to_string());
+    }
+    Ok(())
+}
+
+/// `gyrseek_<kind>_<digits>.log` for the kinds the matrix script writes.
+fn is_probe_file_name(name: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix("gyrseek_")
+        .and_then(|r| r.strip_suffix(".log"))
+    else {
+        return false;
+    };
+    let Some((kind, idx)) = rest.split_once('_') else {
+        return false;
+    };
+    ["trace", "err", "artifacts", "rc", "timeout"].contains(&kind)
+        && !idx.is_empty()
+        && idx.len() <= 6
+        && idx.bytes().all(|b| b.is_ascii_digit())
+}
+
+#[derive(PartialEq, Eq, Debug)]
+enum LineRead {
+    End,
+    Line,
+    /// The line was longer than allowed; the rest of it has been skipped.
+    TooLong,
+}
+
+/// Reads one line of at most `max` bytes (a longer one is skipped to its end, never buffered).
+fn read_line_capped(
+    reader: &mut impl std::io::BufRead,
+    buf: &mut Vec<u8>,
+    max: usize,
+) -> std::io::Result<LineRead> {
+    use std::io::{BufRead, Read};
+    let n = reader
+        .by_ref()
+        .take(max as u64 + 1)
+        .read_until(b'\n', buf)?;
+    if n == 0 {
+        return Ok(LineRead::End);
+    }
+    if buf.ends_with(b"\n") || buf.len() <= max {
+        return Ok(LineRead::Line);
+    }
+    // Over the limit without a newline: discard the rest of the line.
+    buf.clear();
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            break;
+        }
+        match chunk.iter().position(|b| *b == b'\n') {
+            Some(at) => {
+                reader.consume(at + 1);
+                break;
+            }
+            None => {
+                let len = chunk.len();
+                reader.consume(len);
+            }
+        }
+    }
+    Ok(LineRead::TooLong)
+}
+
+/// Standard base64 (padding required); `None` on any other character.
+fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
+    if !input.len().is_multiple_of(4) {
+        return None;
+    }
+    let value = |c: u8| -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a') as u32 + 26),
+            b'0'..=b'9' => Some((c - b'0') as u32 + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let mut out = Vec::with_capacity(input.len() / 4 * 3);
+    for (i, quad) in input.chunks(4).enumerate() {
+        let last = (i + 1) * 4 == input.len();
+        let pad = quad.iter().rev().take_while(|c| **c == b'=').count();
+        if pad > 2 || (pad > 0 && !last) {
+            return None;
+        }
+        let mut n = 0u32;
+        for c in &quad[..4 - pad] {
+            n = (n << 6) | value(*c)?;
+        }
+        n <<= 6 * pad as u32;
+        let bytes = n.to_be_bytes();
+        out.extend_from_slice(&bytes[1..4 - pad]);
+    }
+    Some(out)
 }
 
 /// Reads what the container script left in `out_dir` for each probe: the trace, the
@@ -530,6 +804,7 @@ fn collect_probe_traces(
     out_dir: &std::path::Path,
     probes: &[(String, String)],
     probe_timeout_secs: usize,
+    trace_limit: &str,
     retry_single: &dyn Fn(&str, &str) -> Result<String, String>,
 ) -> Result<Vec<ProbeTrace>, String> {
     let mut results = Vec::new();
@@ -543,6 +818,14 @@ fn collect_probe_traces(
             .exists()
         {
             let msg = probe_timeout_message(probe_timeout_secs, package, version);
+            eprintln!("⚠️ [gyrseek] {msg}");
+            timed_out.push(msg);
+            continue;
+        }
+        // A probe whose logs did not fit in the trace tmpfs has an incomplete trace: block it,
+        // and do not retry it (it would fill the limit again).
+        if out_dir.join(format!("gyrseek_limit_{}.log", idx)).exists() {
+            let msg = trace_limit_message(trace_limit, package, version);
             eprintln!("⚠️ [gyrseek] {msg}");
             timed_out.push(msg);
             continue;
@@ -596,6 +879,7 @@ fn trace_install_docker_single(
     version: &str,
     danger_disable_seccomp: bool,
     probe_timeout_secs: usize,
+    trace_limit: &str,
     default_image: &str,
 ) -> Result<String, String> {
     let image_config = scanner_image_config(manager, default_image);
@@ -606,38 +890,59 @@ fn trace_install_docker_single(
         image_config.prebuilt,
         probe_timeout_secs,
     );
-    // No /out bind mount here: the single-probe fallback captures strace output
-    // from stderr rather than a log file.
-    let args = build_docker_run_args(&image_config.image, "", &script, danger_disable_seccomp)?;
+    // The single-probe fallback captures strace output from stderr rather than a log file; it
+    // has no trace tmpfs, so the host bounds what it reads instead.
+    let name = container_name();
+    let args = build_docker_run_args(
+        &image_config.image,
+        &script,
+        danger_disable_seccomp,
+        None,
+        &name,
+    )?;
+    let limit = trace_limit;
+    let cap = size_to_bytes(limit).unwrap_or(0);
 
-    let output = Command::new("docker")
+    use std::io::Read;
+    let mut child = Command::new("docker")
         .args(&args)
-        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .output()
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("failed to execute docker sandbox: {e}"))?;
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let mut captured = Vec::new();
+    let _ = (&mut stderr).take(cap + 1).read_to_end(&mut captured);
+    if captured.len() as u64 > cap {
+        let _ = Command::new("docker").args(["kill", &name]).output();
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(trace_limit_message(limit, package, version));
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("failed to wait for docker: {e}"))?;
+    let stderr_text = String::from_utf8_lossy(&captured).to_string();
 
-    if is_timeout_exit(output.status.code()) {
+    if is_timeout_exit(status.code()) {
         return Err(probe_timeout_message(probe_timeout_secs, package, version));
     }
 
-    if !output.status.success() {
+    if !status.success() {
         return Err(format!(
             "single-probe docker sandbox failed for '{}@{}': {}",
-            package,
-            version,
-            String::from_utf8_lossy(&output.stderr)
+            package, version, stderr_text
         ));
     }
 
-    Ok(String::from_utf8_lossy(&output.stderr).to_string())
+    Ok(stderr_text)
 }
 
 /// Unprivileged in-container user the untrusted install payload runs as. The
-/// container itself runs as root so strace can own the trace logs in /out, but
-/// `strace -u` drops the *traced* process to this user — which has no write
-/// access to the root-owned /out bind mount, so a malicious package can't
-/// overwrite or delete its own trace.
+/// container itself runs as root so strace can own the trace logs in the root-only
+/// `TRACE_DIR`, but `strace -u` drops the *traced* process to this user, which cannot enter
+/// that directory, so a malicious package can't overwrite or delete its own trace.
 const SCANNER_USER: &str = "gyrseek";
 
 /// Reads the exit code the matrix script saved for a probe whose install failed
@@ -691,6 +996,13 @@ fn install_output_tail(raw: &str) -> String {
         .collect();
     let start = lines.len().saturating_sub(INSTALL_OUTPUT_MAX_LINES);
     lines[start..].join("\n")
+}
+
+fn trace_limit_message(limit: &str, package: &str, version: &str) -> String {
+    format!(
+        "sandbox probe for '{package}@{version}' produced more than the trace limit of {limit} (GYRSEEK_TRACE_LIMIT), so its trace is incomplete; treating it as a block. \
+A package that does this is very large or hostile: raise `trace_limit` in your gyrseek.yaml (or GYRSEEK_TRACE_LIMIT) only if you trust it"
+    )
 }
 
 fn probe_timeout_message(secs: usize, package: &str, version: &str) -> String {
@@ -830,8 +1142,9 @@ fn image_setup_steps(manager: &str, prebuilt: bool) -> Vec<String> {
 fn build_artifact_scan_steps(idx: usize) -> Vec<String> {
     let out = probe_file("artifacts", idx);
     vec![
-        // Initialize/clear the artifact log for this probe.
-        format!("true > {}", out),
+        // Initialize/clear the artifact log for this probe. The trace tmpfs may be full by now
+        // (the probe is then reported as over the limit), and the script runs under `set -e`.
+        format!("{{ true > {out}; }} 2>/dev/null || true"),
         // Single inventory pipeline: record path, size (bytes), file type, and
         // first 300 bytes of content for every installed file. Null byte (\0)
         // is used as the field delimiter because it cannot appear in POSIX
@@ -850,30 +1163,38 @@ fn build_artifact_scan_steps(idx: usize) -> Vec<String> {
 }
 
 /// Where the matrix script keeps what each probe leaves behind (strace log, strace stderr,
-/// artifact inventory, exit code, timeout marker) while the batch runs: a directory on the
-/// container's own filesystem that only root can enter. The payload runs as the scanner user, so
-/// it cannot read, change or delete it, on any platform. The bind-mounted `/out` is not used for
-/// this: on Docker Desktop for macOS it does not enforce the in-container ownership, and a
-/// payload could erase or rewrite its own earlier events, or a baseline's trace, there
-/// (FIXED #411). `/out` is written only after the last probe, by `PUBLISH_TRACES_STEP`.
+/// artifact inventory, exit code, timeout marker) while that probe runs: a size-limited tmpfs that
+/// only root can enter (`--tmpfs ... mode=700,size=<GYRSEEK_TRACE_LIMIT>`). The payload runs as
+/// the scanner user, so it cannot read, change or delete it, on any platform, and it cannot fill
+/// the host: nothing from the host is mounted into the container at all. (Logs in a bind-mounted
+/// directory could be rewritten or deleted by the payload on Docker Desktop for macOS, FIXED #411,
+/// and could fill the host's disk, FIXED #434 and #461.)
 const TRACE_DIR: &str = "/gyrseek-trace";
 
-/// `/gyrseek-trace/gyrseek_<kind>_<idx>.log`; the host reads the same name from `/out`.
+/// `/gyrseek-trace/gyrseek_<kind>_<idx>.log`; the host rebuilds the same name from the stream.
 fn probe_file(kind: &str, idx: usize) -> String {
     format!("{TRACE_DIR}/gyrseek_{kind}_{idx}.log")
 }
 
-/// Run as root when the script exits (also when it aborts): empties `/out`, which the payload may
-/// have written to on a platform where the bind mount does not protect it (a planted symlink
-/// would otherwise be followed by the copy), then copies the logs there. Never fails the script.
-const PUBLISH_TRACES_STEP: &str =
-    "find /out -mindepth 1 -delete 2>/dev/null; cp /gyrseek-trace/* /out/ 2>/dev/null; true";
+/// How a probe's files leave the container: root prints each one on stdout as
+/// `GYRSEEK-FILE <name>`, its base64 lines, `GYRSEEK-END`, then deletes it, so the tmpfs only ever
+/// holds the probe that is running. Only root writes to stdout (the payload's own output goes to
+/// /dev/null and its stderr to a log), so the payload cannot forge a frame. When the tmpfs is
+/// full (under 1% or 16 KiB free) the probe's trace is incomplete: `GYRSEEK-LIMIT <idx>` is printed instead of its files
+/// and the host blocks that package. The functions never fail (`return 0`) because the script
+/// runs under `set -e`.
+const TRACE_FUNCTIONS: &str = "gyrseek_emit() { echo \"GYRSEEK-FILE ${1##*/}\"; base64 < \"$1\"; echo GYRSEEK-END; rm -f \"$1\"; }; \
+gyrseek_publish() { set -- \"$1\" $(df -Pk /gyrseek-trace 2>/dev/null | tail -n 1 | tr -s ' ' | cut -d' ' -f2,4); \
+if [ \"${3:-0}\" -lt 16 ] || [ $(( ${3:-0} * 100 )) -lt \"${2:-0}\" ]; then echo \"GYRSEEK-LIMIT $1\"; rm -f /gyrseek-trace/gyrseek_*_$1.log; return 0; fi; \
+for kind in trace err artifacts rc timeout; do f=/gyrseek-trace/gyrseek_${kind}_$1.log; if [ -f \"$f\" ]; then gyrseek_emit \"$f\"; fi; done; return 0; }; \
+gyrseek_publish_rest() { for f in /gyrseek-trace/gyrseek_*.log; do if [ -f \"$f\" ]; then gyrseek_emit \"$f\"; fi; done; return 0; }";
 
-/// Creates the root-only trace directory and arranges for it to be published on exit.
+/// Defines the publishing functions and arranges for whatever a probe left behind to be
+/// published when the script exits, also when it aborts.
 fn trace_dir_setup_steps() -> Vec<String> {
     vec![
-        format!("rm -rf {TRACE_DIR}; mkdir -m 700 {TRACE_DIR}"),
-        format!("trap '{PUBLISH_TRACES_STEP}' EXIT"),
+        TRACE_FUNCTIONS.to_string(),
+        "trap gyrseek_publish_rest EXIT".to_string(),
     ]
 }
 
@@ -893,9 +1214,9 @@ const WORK_RESET_STEP: &str =
 const KILL_PAYLOAD_PROCESSES_STEP: &str = "n=1; for _ in 1 2 3 4 5 6 7 8 9 10; do n=0; for p in /proc/[0-9]*; do [ \"$(stat -c %U \"$p\" 2>/dev/null)\" = gyrseek ] || continue; case \"$(sed -n 's/^State:[[:space:]]*//p' \"$p/status\" 2>/dev/null)\" in Z*) continue;; esac; kill -9 \"${p#/proc/}\" 2>/dev/null || true; n=1; done; [ $n -eq 0 ] && break; done; [ $n -eq 0 ] || exit 124";
 
 /// Builds the full `sh -lc` script for the matrix (multi-probe) run: per-probe
-/// strace logs kept in the root-only `TRACE_DIR`, payload dropped to the scanner
-/// user, followed by a targeted artifact scan of the installed file tree. The logs
-/// reach `/out` only when the script exits.
+/// strace logs kept in the size-limited, root-only `TRACE_DIR`, payload dropped to the scanner
+/// user, followed by a targeted artifact scan of the installed file tree. Each probe's files
+/// are streamed to the host on stdout when the probe is done.
 fn build_matrix_script(
     manager: &str,
     probes: &[(String, String)],
@@ -937,11 +1258,13 @@ fn build_matrix_script_with(
         // non-zero exit is a failed install: its exit code is saved for the host, which
         // blocks the package and shows the install's own error output.
         steps.push(format!(
-            "{} >/dev/null 2>{err} || {{ rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then : > {timeout_marker}; {KILL_PAYLOAD_PROCESSES_STEP}; else echo $rc > {rc_file}; fi; true; }}",
+            "{} >/dev/null 2>{err} || {{ rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then {{ true > {timeout_marker}; }} 2>/dev/null || true; {KILL_PAYLOAD_PROCESSES_STEP}; else {{ echo $rc > {rc_file}; }} 2>/dev/null || true; fi; true; }}",
             strace_command(&install(&spec), Some(&log), timeout_secs),
         ));
         // After each install, scan the installed tree for suspicious artifacts.
         steps.extend(build_artifact_scan_steps(idx));
+        // Send this probe's files to the host and free the tmpfs for the next probe.
+        steps.push(format!("gyrseek_publish {idx}"));
         // Then wipe the install tree so the next probe starts from the same
         // empty state and its scan cannot see this probe's files.
         steps.push(WORK_RESET_STEP.to_string());
@@ -967,19 +1290,23 @@ fn build_single_script(
     steps.join("; ")
 }
 
-/// Builds the `docker run` argument vector. When `out_dir_path` is non-empty it
-/// is bind-mounted at /out, where the matrix script publishes the trace logs when it exits.
+/// Builds the `docker run` argument vector. Nothing from the host is mounted. With a
+/// `trace_limit` the root-only tmpfs `TRACE_DIR` of that size is added (the matrix probes keep
+/// their logs there); `name` lets the host stop the container.
 fn build_docker_run_args(
     image: &str,
-    out_dir_path: &str,
     script: &str,
     danger_disable_seccomp: bool,
+    trace_limit: Option<&str>,
+    name: &str,
 ) -> Result<Vec<String>, String> {
     let mem_limit = sandbox_mem_limit();
     let max_procs = sandbox_max_processes();
     let mut args = vec![
         "run".to_string(),
         "--rm".to_string(),
+        "--name".to_string(),
+        name.to_string(),
         "--network".to_string(),
         "bridge".to_string(),
         "--security-opt".to_string(),
@@ -1014,9 +1341,11 @@ fn build_docker_run_args(
         args.push("--security-opt".to_string());
         args.push(format!("apparmor={}", apparmor_profile));
     }
-    if !out_dir_path.is_empty() {
-        args.push("-v".to_string());
-        args.push(format!("{}:/out", out_dir_path));
+    if let Some(limit) = trace_limit {
+        args.push("--tmpfs".to_string());
+        args.push(format!(
+            "{TRACE_DIR}:rw,noexec,nosuid,nodev,mode=700,size={limit}"
+        ));
     }
     args.push("--workdir".to_string());
     args.push("/work".to_string());
@@ -1289,16 +1618,17 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DockerRunner, INSTALL_OUTPUT_READ_BYTES, PUBLISH_TRACES_STEP, collect_probe_traces,
-        is_timeout_exit, read_file_tail,
+        DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, is_timeout_exit,
+        read_file_tail,
     };
     use super::{
         EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
-        EMBEDDED_SECCOMP_PROFILE_JSON, KILL_PAYLOAD_PROCESSES_STEP, SCANNER_USER, WORK_RESET_STEP,
-        build_artifact_scan_steps, build_docker_run_args, build_matrix_script,
-        build_runner_from_env, build_single_script, docker_apparmor_enabled_from_env,
-        docker_apparmor_profile_name, install_output_tail, probe_timeout_message,
-        read_install_failure, sandbox_max_processes, strace_install_command,
+        EMBEDDED_SECCOMP_PROFILE_JSON, KILL_PAYLOAD_PROCESSES_STEP, SCANNER_USER, TRACE_FUNCTIONS,
+        WORK_RESET_STEP, base64_decode, build_artifact_scan_steps, build_docker_run_args,
+        build_matrix_script, build_runner_from_env, build_single_script,
+        docker_apparmor_enabled_from_env, docker_apparmor_profile_name, install_output_tail,
+        probe_timeout_message, read_frames, read_install_failure, sandbox_max_processes,
+        sandbox_trace_limit, size_to_bytes, strace_install_command,
     };
     use crate::sandbox::SandboxRunner;
     use std::sync::Mutex;
@@ -1468,22 +1798,83 @@ mod tests {
     }
 
     #[test]
-    fn docker_args_keep_out_mount_when_provided_and_omit_when_empty() {
-        let with_out = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
-            .expect("docker args should build");
-        assert!(with_out.iter().any(|a| a == "/tmp/out:/out"));
-        assert!(with_out.iter().any(|a| a == "no-new-privileges"));
+    fn docker_args_mount_nothing_from_the_host_and_size_the_trace_tmpfs() {
+        let with_traces =
+            build_docker_run_args("img:latest", "echo hi", false, Some("256m"), "probe-1")
+                .expect("docker args should build");
+        // Nothing from the host is mounted: a payload cannot write to the host's disk.
+        for flag in ["-v", "--volume", "--mount"] {
+            assert!(
+                !with_traces.iter().any(|a| a == flag),
+                "{flag}: {with_traces:?}"
+            );
+        }
+        assert!(with_traces.iter().any(|a| a == "no-new-privileges"));
+        // The probe logs live in a root-only, size-limited tmpfs.
+        assert!(
+            with_traces
+                .iter()
+                .any(|a| a == "/gyrseek-trace:rw,noexec,nosuid,nodev,mode=700,size=256m"),
+            "{with_traces:?}"
+        );
+        // The container has a name so an abandoned run can be stopped.
+        let at = with_traces
+            .iter()
+            .position(|a| a == "--name")
+            .expect("--name");
+        assert_eq!(with_traces[at + 1], "probe-1");
 
-        let without_out = build_docker_run_args("img:latest", "", "echo hi", false)
+        let without = build_docker_run_args("img:latest", "echo hi", false, None, "probe-2")
             .expect("docker args should build");
-        assert!(!without_out.iter().any(|a| a.ends_with(":/out")));
+        assert!(!without.iter().any(|a| a.contains("gyrseek-trace")));
+    }
+
+    #[test]
+    fn trace_limits_are_read_from_the_environment_and_validated() {
+        // One guard holds the environment lock (and removes the variable again on drop).
+        let _guard = SandboxEnvVarGuard::remove("GYRSEEK_TRACE_LIMIT");
+        assert_eq!(sandbox_trace_limit(None), "1024m");
+        // The config value applies when the environment says nothing, and so does the default
+        // when the config value is not a size.
+        assert_eq!(sandbox_trace_limit(Some("512m")), "512m");
+        assert_eq!(sandbox_trace_limit(Some(" 1g ")), "1g");
+        for bad in ["abc", "0", "12x", ""] {
+            assert_eq!(sandbox_trace_limit(Some(bad)), "1024m", "{bad:?}");
+        }
+        // The environment wins over the config; an invalid environment value falls back to the
+        // config (then the default) with a warning.
+        for (value, configured, expected) in [
+            ("512m", None, "512m"),
+            (" 1g ", None, "1g"),
+            ("65536k", None, "65536k"),
+            ("1g", Some("512m"), "1g"),
+            ("not-a-size", None, "1024m"),
+            ("not-a-size", Some("512m"), "512m"),
+            ("0", Some("2g"), "2g"),
+            ("", Some("512m"), "512m"),
+            ("", None, "1024m"),
+        ] {
+            unsafe { std::env::set_var("GYRSEEK_TRACE_LIMIT", value) };
+            assert_eq!(
+                sandbox_trace_limit(configured),
+                expected,
+                "{value:?} {configured:?}"
+            );
+        }
+        assert_eq!(size_to_bytes("256m"), Some(256 * 1024 * 1024));
+        assert_eq!(size_to_bytes("2G"), Some(2 * 1024 * 1024 * 1024));
+        assert_eq!(size_to_bytes("10k"), Some(10 * 1024));
+        assert_eq!(size_to_bytes("1000"), Some(1000));
+        assert_eq!(size_to_bytes("12x"), None);
+        assert_eq!(size_to_bytes(""), None);
+        assert_eq!(size_to_bytes("m"), None);
     }
 
     #[test]
     fn docker_args_memory_limit_defaults_to_2g_and_is_configurable() {
         {
             let _env = SandboxEnvVarGuard::remove("GYRSEEK_MEM_LIMIT");
-            let args = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
+            let args = build_docker_run_args("img:latest", "echo hi", false, None, "probe-test")
                 .expect("docker args should build");
             let mem_pos = args
                 .iter()
@@ -1495,8 +1886,9 @@ mod tests {
 
         {
             let _guard = SandboxEnvVarGuard::set("GYRSEEK_MEM_LIMIT", "4g");
-            let args_custom = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
-                .expect("docker args should build");
+            let args_custom =
+                build_docker_run_args("img:latest", "echo hi", false, None, "probe-test")
+                    .expect("docker args should build");
             let mem_pos_custom = args_custom
                 .iter()
                 .position(|a| a == "--memory")
@@ -1519,7 +1911,7 @@ mod tests {
         // UIDs needs CAP_SYS_PTRACE, which Docker does not grant by default.
         // Without this the sandbox can never produce a trace.
 
-        let args = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
+        let args = build_docker_run_args("img:latest", "echo hi", false, None, "probe-test")
             .expect("docker args should build");
         let pos = args
             .iter()
@@ -1530,7 +1922,7 @@ mod tests {
 
     #[test]
     fn docker_args_adds_seccomp_profile_by_default() {
-        let args = build_docker_run_args("img:latest", "/tmp/out", "echo hi", false)
+        let args = build_docker_run_args("img:latest", "echo hi", false, None, "probe-test")
             .expect("docker args should build");
 
         let mut found = false;
@@ -1548,7 +1940,7 @@ mod tests {
 
     #[test]
     fn docker_args_disables_seccomp_when_danger_flag_true() {
-        let args = build_docker_run_args("img:latest", "/tmp/out", "echo hi", true)
+        let args = build_docker_run_args("img:latest", "echo hi", true, None, "probe-test")
             .expect("docker args should build");
         assert!(
             !args.iter().any(|a| a.starts_with("seccomp=")),
@@ -1619,8 +2011,8 @@ mod tests {
             "profile must grant rw to /work"
         );
         assert!(
-            EMBEDDED_APPARMOR_PROFILE_TEXT.contains("/out/ rw"),
-            "profile must grant rw to /out"
+            EMBEDDED_APPARMOR_PROFILE_TEXT.contains("/gyrseek-trace/ rw"),
+            "profile must grant rw to the trace directory"
         );
         assert!(
             EMBEDDED_APPARMOR_PROFILE_TEXT.contains("/tmp/ rw"),
@@ -1796,6 +2188,29 @@ mod tests {
     }
 
     #[test]
+    fn writes_into_the_trace_tmpfs_cannot_abort_the_script_when_it_is_full() {
+        // The script runs under `set -e`, and a probe that fills the tmpfs makes every later write
+        // into it fail: each such write must be tolerated so the probe is reported as over the
+        // limit instead of the whole batch dying with a generic error.
+        let script = build_matrix_script(
+            "pip",
+            &[("pkg-a".to_string(), "1.0.0".to_string())],
+            true,
+            45,
+        );
+        for write in [
+            "{ true > /gyrseek-trace/gyrseek_timeout_0.log; } 2>/dev/null || true",
+            "{ echo $rc > /gyrseek-trace/gyrseek_rc_0.log; } 2>/dev/null || true",
+            "{ true > /gyrseek-trace/gyrseek_artifacts_0.log; } 2>/dev/null || true",
+        ] {
+            assert!(script.contains(write), "{write}: {script}");
+        }
+        // `:` is a special builtin, whose failed redirection ends a non-interactive shell even
+        // after `|| true`, so it must not be used for these writes.
+        assert!(!script.contains(": > /gyrseek-trace"), "{script}");
+    }
+
+    #[test]
     fn matrix_script_marks_a_timed_out_probe_and_keeps_going() {
         let script = build_matrix_script(
             "pip",
@@ -1816,53 +2231,238 @@ mod tests {
     }
 
     #[test]
-    fn the_matrix_script_keeps_every_probe_log_in_a_root_only_directory_until_it_exits() {
+    fn the_matrix_script_keeps_probe_logs_in_a_root_only_tmpfs_and_streams_them_out() {
         let probes = [
             ("pkg-a".to_string(), "1.0.0".to_string()),
             ("pkg-b".to_string(), "2.0.0".to_string()),
         ];
         let script = build_matrix_script("pip", &probes, true, 300);
-        // The directory exists, is only for root and is published on exit, before any payload runs.
-        let mkdir = script
-            .find("mkdir -m 700 /gyrseek-trace")
-            .expect("root-only directory");
+        // The publishing functions exist and are published on exit before any payload runs.
+        let functions = script
+            .find("gyrseek_publish() {")
+            .expect("publish function");
         let trap = script
-            .find(&format!("trap '{PUBLISH_TRACES_STEP}' EXIT"))
+            .find("trap gyrseek_publish_rest EXIT")
             .expect("publish on exit");
         let first_payload = script.find("strace").expect("first probe");
-        assert!(mkdir < first_payload && trap < first_payload, "{script}");
-        // The only mention of the bind mount is the publish step: the payload never has a log
-        // there to rewrite, and a probe cannot reach an earlier probe's files.
         assert!(
-            !script.replace(PUBLISH_TRACES_STEP, "").contains("/out"),
+            functions < first_payload && trap < first_payload,
             "{script}"
         );
-        // Publishing empties /out first (a payload may have planted a symlink there) and never
-        // fails the script.
-        let wipe = PUBLISH_TRACES_STEP
-            .find("find /out -mindepth 1 -delete")
-            .expect("wipe");
-        let copy = PUBLISH_TRACES_STEP
-            .find("cp /gyrseek-trace/* /out/")
-            .expect("copy");
-        assert!(wipe < copy && PUBLISH_TRACES_STEP.ends_with("; true"));
+        // Nothing is read from or written to a host mount.
+        assert!(!script.contains("/out"), "{script}");
+        // Each probe is published after its artifact scan and before the next probe's reset.
+        for idx in 0..2 {
+            let scan = script
+                .find(&format!("gyrseek_artifacts_{idx}.log"))
+                .expect("scan");
+            let publish = script
+                .find(&format!("gyrseek_publish {idx}"))
+                .expect("publish");
+            let reset = script[publish..].find(WORK_RESET_STEP).expect("reset") + publish;
+            assert!(scan < publish && publish < reset, "probe {idx}: {script}");
+        }
+        // A full tmpfs is reported instead of publishing an incomplete trace, and the functions
+        // never fail the script (it runs under `set -e`).
+        assert!(TRACE_FUNCTIONS.contains("GYRSEEK-LIMIT"));
+        assert!(TRACE_FUNCTIONS.contains("return 0"));
         // The AppArmor profile lets root use the directory.
         assert!(EMBEDDED_APPARMOR_PROFILE_TEXT.contains("/gyrseek-trace/** rwk"));
+        assert!(!EMBEDDED_APPARMOR_PROFILE_TEXT.contains("/out"));
     }
 
-    /// A payload that tries every way to rewrite what was recorded: write, truncate, delete and
-    /// replace by a symlink, in the bind mount, in the trace directory and in an earlier probe's file.
-    const TAMPERING_PAYLOAD: &str = r#"sh -c 'echo FORGED >> /out/gyrseek_trace_0.log; echo FORGED > /out/gyrseek_trace_1.log; ln -s /etc/hostname /out/gyrseek_err_1.log; : > /out/gyrseek_artifacts_0.log; rm -f /out/gyrseek_trace_0.log; echo FORGED >> /gyrseek-trace/gyrseek_trace_0.log; : > /gyrseek-trace/gyrseek_trace_1.log; rm -f /gyrseek-trace/gyrseek_trace_0.log; rm -rf /gyrseek-trace; ls /gyrseek-trace; echo tamper-attempted'"#;
+    fn frame(name: &str, content: &[u8]) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut text = String::new();
+        for chunk in content.chunks(57) {
+            for quad in chunk.chunks(3) {
+                let n = (quad[0] as u32) << 16
+                    | (*quad.get(1).unwrap_or(&0) as u32) << 8
+                    | *quad.get(2).unwrap_or(&0) as u32;
+                for k in 0..4 {
+                    if k <= quad.len() {
+                        text.push(ALPHABET[(n >> (18 - 6 * k) & 63) as usize] as char);
+                    } else {
+                        text.push('=');
+                    }
+                }
+            }
+            text.push('\n');
+        }
+        format!("GYRSEEK-FILE {name}\n{text}GYRSEEK-END\n")
+    }
 
-    /// Needs Docker and the network (the image's strace comes from apt): run it with
-    /// `just test-trace-integrity`, which CI does in a Docker job. FIXED #411: on Docker Desktop
-    /// for macOS the payload could rewrite or delete a trace kept in the bind mount.
     #[test]
-    #[ignore = "needs Docker; run with `just test-trace-integrity`"]
-    fn a_payload_cannot_tamper_with_its_own_or_another_probes_trace() {
+    fn base64_decoding_matches_the_standard_alphabet_and_rejects_anything_else() {
+        for (input, expected) in [
+            ("", &b""[..]),
+            ("Zg==", b"f"),
+            ("Zm8=", b"fo"),
+            ("Zm9v", b"foo"),
+            ("Zm9vYg==", b"foob"),
+            ("Zm9vYmE=", b"fooba"),
+            ("Zm9vYmFy", b"foobar"),
+            ("AAECAw==", &[0, 1, 2, 3]),
+            ("+/+/", &[0xfb, 0xff, 0xbf]),
+        ] {
+            assert_eq!(
+                base64_decode(input.as_bytes()).as_deref(),
+                Some(expected),
+                "{input}"
+            );
+        }
+        for bad in [
+            "Zg=", "Zg", "Z===", "Zm9v=A==", "Zm 9", "Zm9\n", "Zm9*", "=Zm9",
+        ] {
+            assert_eq!(base64_decode(bad.as_bytes()), None, "{bad:?}");
+        }
+        // Round trip through the test encoder, including bytes a payload may write (NUL, newline).
+        let data: Vec<u8> = (0..=255u8).chain(0..=255u8).collect();
+        let text = frame("gyrseek_err_0.log", &data);
+        let dir = tempfile::tempdir().unwrap();
+        read_frames(text.as_bytes(), dir.path(), 1 << 20).unwrap();
+        assert_eq!(
+            std::fs::read(dir.path().join("gyrseek_err_0.log")).unwrap(),
+            data
+        );
+    }
+
+    #[test]
+    fn frames_from_the_container_become_files_and_everything_else_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let stream = format!(
+            "some ordinary output\n{}{}GYRSEEK-LIMIT 3\n{}{}trailing noise\n",
+            frame("gyrseek_trace_0.log", b"execve(\"/bin/a\") = 0\n"),
+            frame("gyrseek_artifacts_0.log", b"/work/a\x00100\x00text\x00hi\n"),
+            frame("gyrseek_rc_1.log", b"7\n"),
+            frame("gyrseek_timeout_2.log", b""),
+        );
+        read_frames(stream.as_bytes(), dir.path(), 1 << 20).unwrap();
+        let read = |n: &str| std::fs::read(dir.path().join(n)).unwrap();
+        assert_eq!(read("gyrseek_trace_0.log"), b"execve(\"/bin/a\") = 0\n");
+        assert_eq!(
+            read("gyrseek_artifacts_0.log"),
+            b"/work/a\x00100\x00text\x00hi\n"
+        );
+        assert_eq!(read("gyrseek_rc_1.log"), b"7\n");
+        assert_eq!(read("gyrseek_timeout_2.log"), b"");
+        assert_eq!(read("gyrseek_limit_3.log"), b"");
+        // A line far longer than a frame line is ordinary output, skipped without being buffered.
+        let long = format!(
+            "{}\n{}",
+            "x".repeat(100_000),
+            frame("gyrseek_trace_4.log", b"ok")
+        );
+        read_frames(long.as_bytes(), dir.path(), 1 << 20).unwrap();
+        assert_eq!(read("gyrseek_trace_4.log"), b"ok");
+    }
+
+    #[test]
+    fn a_frame_that_cannot_be_trusted_is_an_error_not_a_partial_trace() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |stream: &str, cap: u64| read_frames(stream.as_bytes(), dir.path(), cap);
+        // Names outside what the script writes: no path traversal, no other kinds, no huge index.
+        for name in [
+            "../gyrseek_trace_0.log",
+            "gyrseek_trace_0.log/../../x",
+            "gyrseek_trace_.log",
+            "gyrseek_other_0.log",
+            "gyrseek_trace_0.txt",
+            "gyrseek_trace_1234567.log",
+            "/etc/passwd",
+            "",
+        ] {
+            let err = run(&format!("GYRSEEK-FILE {name}\nGYRSEEK-END\n"), 1024).unwrap_err();
+            assert!(err.contains("unexpected file"), "{name:?}: {err}");
+        }
+        // Malformed data, a stream that stops inside a file, a file over the cap, a long line
+        // inside a frame, a malformed limit marker.
+        assert!(
+            run(
+                "GYRSEEK-FILE gyrseek_trace_0.log\nnot base64!\nGYRSEEK-END\n",
+                1024
+            )
+            .unwrap_err()
+            .contains("malformed")
+        );
+        assert!(
+            run("GYRSEEK-FILE gyrseek_trace_0.log\nZm9v\n", 1024)
+                .unwrap_err()
+                .contains("ended inside")
+        );
+        assert!(
+            run(&frame("gyrseek_trace_0.log", &[b'a'; 500]), 100)
+                .unwrap_err()
+                .contains("larger than")
+        );
+        let long = format!(
+            "GYRSEEK-FILE gyrseek_trace_0.log\n{}\nGYRSEEK-END\n",
+            "A".repeat(5000)
+        );
+        assert!(run(&long, 1 << 20).unwrap_err().contains("too long"));
+        for bad in ["GYRSEEK-LIMIT x", "GYRSEEK-LIMIT ", "GYRSEEK-LIMIT 1234567"] {
+            assert!(
+                run(&format!("{bad}\n"), 1024)
+                    .unwrap_err()
+                    .contains("limit marker"),
+                "{bad}"
+            );
+        }
+        // The size is the decoded size, so base64 padding cannot sneak a file past the cap.
+        assert!(run(&frame("gyrseek_trace_0.log", &[b'a'; 100]), 100).is_ok());
+    }
+
+    #[test]
+    fn a_probe_that_filled_the_trace_tmpfs_is_blocked_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::write(d.join("gyrseek_limit_0.log"), b"").unwrap();
+        std::fs::write(d.join("gyrseek_trace_0.log"), b"partial").unwrap();
+        std::fs::write(d.join("gyrseek_trace_1.log"), b"execve(\"/bin/b\") = 0\n").unwrap();
+        let probes = [
+            ("big".to_string(), "1".to_string()),
+            ("ok".to_string(), "2".to_string()),
+        ];
+        let no_retry = |_: &str, _: &str| -> Result<String, String> { panic!("must not retry") };
+        let got = collect_probe_traces(d, &probes, 300, "64m", &no_retry).unwrap();
+        // Only the second probe is returned, and the first is never read or re-run.
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].probe.0, "ok");
+        // When every probe filled it, the batch is an error that names the limit.
+        std::fs::write(d.join("gyrseek_limit_1.log"), b"").unwrap();
+        let err = collect_probe_traces(d, &probes, 300, "64m", &no_retry).unwrap_err();
+        assert!(
+            err.contains("trace limit of 64m") && err.contains("GYRSEEK_TRACE_LIMIT"),
+            "{err}"
+        );
+    }
+
+    /// A payload that tries every way to rewrite what was recorded or to forge what the host
+    /// receives: write, truncate, delete and symlink over the trace files (its own and an earlier
+    /// probe's), remove the directory, and print a fake frame on the container's stdout.
+    const TAMPERING_PAYLOAD: &str = r#"sh -c 'echo FORGED >> /gyrseek-trace/gyrseek_trace_0.log; : > /gyrseek-trace/gyrseek_trace_1.log; ln -s /etc/hostname /gyrseek-trace/gyrseek_err_1.log; rm -f /gyrseek-trace/gyrseek_trace_0.log; rm -rf /gyrseek-trace; ls /gyrseek-trace; echo GYRSEEK-LIMIT 0 > /proc/1/fd/1; echo FORGED-FRAME > /proc/1/fd/1; echo tamper-attempted'"#;
+
+    /// Runs `script` in a container built like the real one (`limit` is the trace tmpfs size) and
+    /// returns the files it streamed out.
+    fn run_in_container(script: &str, limit: &str) -> tempfile::TempDir {
         let image =
             crate::runtime_image::select_for_manager("pip", None, None, std::path::Path::new("."))
                 .image;
+        let name = super::container_name();
+        let args = build_docker_run_args(&image, script, false, Some(limit), &name).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let cap = size_to_bytes(limit).unwrap() + super::MAX_FRAME_SLACK_BYTES;
+        let (code, stderr) = super::run_matrix_container(&args, &name, out.path(), cap).unwrap();
+        assert_eq!(code, Some(0), "{stderr}");
+        out
+    }
+
+    /// Needs Docker and the network (the image's strace comes from apt): run it with
+    /// `just test-trace-integrity`, which CI does in a Docker job. FIXED #411: on Docker Desktop
+    /// for macOS a payload could rewrite or delete a trace kept in a bind mount.
+    #[test]
+    #[ignore = "needs Docker; run with `just test-trace-integrity`"]
+    fn a_payload_cannot_tamper_with_its_own_or_another_probes_trace() {
         let probes = vec![
             ("benign".to_string(), "1.0.0".to_string()),
             ("evil".to_string(), "1.0.0".to_string()),
@@ -1881,19 +2481,7 @@ mod tests {
                 "sh -c 'echo benign-marker'".to_string()
             }
         });
-        let out = tempfile::tempdir().unwrap();
-        let args =
-            super::build_docker_run_args(&image, &out.path().to_string_lossy(), &script, false)
-                .unwrap();
-        let output = std::process::Command::new("docker")
-            .args(&args)
-            .output()
-            .expect("docker");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let out = run_in_container(&script, "256m");
 
         let read = |name: &str| {
             std::fs::read_to_string(out.path().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
@@ -1925,31 +2513,73 @@ mod tests {
             seen(&evil, "/gyrseek-trace"),
             "the attempts on the trace directory are recorded: {evil}"
         );
+        // The payload could not print a frame or a limit marker on the container's stdout.
+        assert!(
+            !out.path().join("gyrseek_limit_0.log").exists(),
+            "a forged limit marker arrived"
+        );
         for entry in std::fs::read_dir(out.path()).unwrap() {
             let entry = entry.unwrap();
             assert!(
                 !entry.file_type().unwrap().is_symlink(),
-                "{:?} is a symlink the payload planted",
+                "{:?} is a symlink",
                 entry.file_name()
             );
         }
         assert!(
             out.path().join("gyrseek_artifacts_0.log").exists(),
-            "every probe's artifact log is published"
+            "every probe's artifact log is streamed"
         );
-        // What the other probes left (exit code, timeout marker, trace) travels the same way.
+
+        // What the other probes left (exit code, timeout marker) travels the same way.
         assert_eq!(
             read("gyrseek_rc_2.log").trim(),
             "7",
-            "a failed install's exit code is published"
+            "a failed install's exit code arrives"
         );
         assert!(
             out.path().join("gyrseek_timeout_3.log").exists(),
-            "a timed-out probe's marker is published"
+            "a timed-out probe's marker arrives"
         );
         assert!(
             !out.path().join("gyrseek_rc_0.log").exists(),
             "a probe whose install succeeded leaves no exit-code file"
+        );
+    }
+
+    /// FIXED #434: a package that produces more trace than the tmpfs holds blocks only itself;
+    /// the next probe still gets a whole tmpfs. Needs Docker and the network.
+    #[test]
+    #[ignore = "needs Docker; run with `just test-trace-integrity`"]
+    fn a_probe_that_floods_its_trace_is_blocked_and_the_next_probe_is_unaffected() {
+        let probes = vec![
+            ("flood".to_string(), "1.0.0".to_string()),
+            ("after".to_string(), "1.0.0".to_string()),
+        ];
+        // About twenty thousand forks and execs: far more than the tiny tmpfs below holds, so every
+        // write the script itself makes into it (exit code, markers, inventory) fails too.
+        let flood = "sh -c 'i=0; while [ $i -lt 20000 ]; do /bin/true; i=$((i+1)); done'";
+        let script = super::build_matrix_script_with("pip", &probes, false, 120, &|spec| {
+            if spec.contains("flood") {
+                flood.to_string()
+            } else {
+                "sh -c 'echo after-marker'".to_string()
+            }
+        });
+        let out = run_in_container(&script, "64k");
+        assert!(
+            out.path().join("gyrseek_limit_0.log").exists(),
+            "the flooding probe is marked"
+        );
+        assert!(
+            !out.path().join("gyrseek_trace_0.log").exists(),
+            "its partial trace is not sent"
+        );
+        let after = std::fs::read_to_string(out.path().join("gyrseek_trace_1.log"))
+            .expect("next probe's trace");
+        assert!(
+            after.contains("after-marker") || after.contains("\\x61\\x66\\x74\\x65\\x72"),
+            "{after}"
         );
     }
 
@@ -1963,7 +2593,7 @@ mod tests {
         );
         // Only a non-timeout failure writes the exit-code file the host reads.
         assert!(script.contains("echo $rc > /gyrseek-trace/gyrseek_rc_0.log"));
-        assert!(script.contains("; else echo $rc"));
+        assert!(script.contains("; else { echo $rc"));
     }
 
     #[test]
@@ -2032,7 +2662,7 @@ mod tests {
         put(d, "gyrseek_trace_1.log", "execve(\"/bin/b\") = 0\n");
         put(d, "gyrseek_artifacts_1.log", "  /work/x\0\0\0  \n");
         let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
-        let got = collect_probe_traces(d, &probes, 300, &no_retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "256m", &no_retry).unwrap();
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].probe, probe("a", "1.0.0"));
         assert_eq!(got[0].trace, "execve(\"/bin/a\") = 0\n");
@@ -2051,7 +2681,7 @@ mod tests {
         let d = dir.path();
         put(d, "gyrseek_trace_0.log", "trace\n");
         put(d, "gyrseek_artifacts_0.log", " \n\n");
-        let got = collect_probe_traces(d, &[probe("a", "1")], 300, &no_retry).unwrap();
+        let got = collect_probe_traces(d, &[probe("a", "1")], 300, "256m", &no_retry).unwrap();
         assert_eq!(got[0].trace, "trace\n");
     }
 
@@ -2066,7 +2696,7 @@ mod tests {
             calls.borrow_mut().push(format!("{p}@{v}"));
             Ok(format!("retried {p}\n"))
         };
-        let got = collect_probe_traces(d, &probes, 300, &retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "256m", &retry).unwrap();
         assert_eq!(*calls.borrow(), ["a@1.0.0", "b@2.0.0"]);
         assert_eq!(got[0].trace, "retried a\n");
         assert_eq!(got[1].trace, "retried b\n");
@@ -2076,7 +2706,8 @@ mod tests {
     fn a_failed_re_run_is_an_error_not_a_clean_scan() {
         let dir = tempfile::tempdir().unwrap();
         let retry = |_: &str, _: &str| -> Result<String, String> { Err("docker exploded".into()) };
-        let err = collect_probe_traces(dir.path(), &[probe("a", "1")], 300, &retry).unwrap_err();
+        let err =
+            collect_probe_traces(dir.path(), &[probe("a", "1")], 300, "256m", &retry).unwrap_err();
         assert!(err.contains("docker exploded"), "{err}");
     }
 
@@ -2090,7 +2721,7 @@ mod tests {
             "strace: ptrace(PTRACE_SEIZE): Operation not permitted\n",
         );
         let retry = |_: &str, _: &str| -> Result<String, String> { Ok("  \n".into()) };
-        let err = collect_probe_traces(d, &[probe("a", "1.0.0")], 300, &retry).unwrap_err();
+        let err = collect_probe_traces(d, &[probe("a", "1.0.0")], 300, "256m", &retry).unwrap_err();
         assert!(err.contains("empty trace for 'a@1.0.0'"), "{err}");
         assert!(err.contains("Operation not permitted"), "{err}");
     }
@@ -2103,7 +2734,7 @@ mod tests {
         put(d, "gyrseek_timeout_0.log", "");
         put(d, "gyrseek_trace_1.log", "good\n");
         let probes = [probe("slow", "1.0.0"), probe("fast", "1.0.0")];
-        let got = collect_probe_traces(d, &probes, 300, &no_retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "256m", &no_retry).unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].probe, probe("fast", "1.0.0"));
     }
@@ -2115,7 +2746,7 @@ mod tests {
         put(d, "gyrseek_timeout_0.log", "");
         put(d, "gyrseek_timeout_1.log", "");
         let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
-        let err = collect_probe_traces(d, &probes, 45, &no_retry).unwrap_err();
+        let err = collect_probe_traces(d, &probes, 45, "256m", &no_retry).unwrap_err();
         assert!(err.contains("a@1.0.0") && err.contains("b@2.0.0"), "{err}");
         assert!(err.contains("probe_timeout_seconds=45"), "{err}");
     }
@@ -2133,7 +2764,7 @@ mod tests {
             "strace: Process 7 attached\nerror: no solution\n",
         );
         let probes = [probe("ok", "1"), probe("bad", "1")];
-        let got = collect_probe_traces(d, &probes, 300, &no_retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "256m", &no_retry).unwrap();
         assert!(got[0].install_failure.is_none());
         let failure = got[1].install_failure.as_ref().expect("probe 1 failed");
         assert_eq!(failure.exit_code, 2);
@@ -2154,7 +2785,7 @@ mod tests {
         }
         put(d, "gyrseek_timeout_11.log", "");
         put(d, "gyrseek_rc_12.log", "1\n");
-        let got = collect_probe_traces(d, &probes, 300, &no_retry).unwrap();
+        let got = collect_probe_traces(d, &probes, 300, "256m", &no_retry).unwrap();
         assert_eq!(got.len(), 12, "probe 11 timed out");
         assert!(
             got.iter()
@@ -2181,7 +2812,7 @@ mod tests {
     fn no_probes_means_no_results() {
         let dir = tempfile::tempdir().unwrap();
         assert!(
-            collect_probe_traces(dir.path(), &[], 300, &no_retry)
+            collect_probe_traces(dir.path(), &[], 300, "256m", &no_retry)
                 .unwrap()
                 .is_empty()
         );
@@ -2207,6 +2838,7 @@ mod tests {
         let runner = DockerRunner {
             danger_disable_seccomp: false,
             probe_timeout_secs: 300,
+            trace_limit: None,
             image: ImageChoice {
                 image: "python:3.12-slim-bookworm@sha256:x".into(),
                 description: "Python 3.12 (from .python-version)".into(),
@@ -2473,7 +3105,8 @@ sys.exit(0 if success else 1)"#;
             } // python:3.13-slim-bookworm (arm64/v8)
             _ => unreachable!(),
         };
-        let protected_args = build_docker_run_args(image, "", &command_str, false).unwrap();
+        let protected_args =
+            build_docker_run_args(image, &command_str, false, None, "probe-test").unwrap();
 
         let protected_run = Command::new("docker")
             .args(&protected_args)
@@ -2572,6 +3205,7 @@ Stderr: {}",
                 false,
                 true,
                 300,
+                None,
                 crate::runtime_image::select_for_manager(
                     "uv",
                     None,

@@ -1948,3 +1948,11 @@ only.
 ### Finding 411: Trace integrity on Docker Desktop for macOS
 - **Root Cause**: The trace and the other per-probe files were written into the `/out` bind mount, which Docker Desktop for macOS serves through a file-sharing layer that ignores the in-container ownership. A payload (uid 1000, no capabilities) could append to, truncate or delete them, and a later probe could rewrite an earlier probe's files, for example to add its own behaviour to a baseline.
 - **Fix**: All per-probe files go to `/gyrseek-trace` (mode 700, root, container filesystem) while the batch runs; an `EXIT` trap, run as root, empties `/out` and copies them there. The AppArmor profile allows the directory. A Docker test (`just test-trace-integrity`) runs a tampering payload next to a benign probe, a failing one and a timed-out one and checks every file; reverting to the old layout makes it fail on macOS, with a baseline's trace deleted. The container's writable layer now holds the logs (see #434).
+
+### Finding 434: Unbounded probe logs
+- **Root Cause**: The matrix script wrote the strace trace, strace's stderr and the artifact inventory to a bind-mounted host directory with no size limit, and the host read each trace with `read_to_string`.
+- **Fix**: The files go to a root-only tmpfs sized by `GYRSEEK_TRACE_LIMIT` (default 1024m) and root streams each probe's files to the host on stdout when the probe is done (base64 frames), deleting them so the tmpfs holds one probe at a time. Measured sizes: 2 to 4 MB for an npm install, 43 MB for a failing source build of pandas. A full tmpfs is detected after the probe (under 1% or 16 KiB free), blocks only that package and does not trigger a retry; `read_frames` bounds line length, file size and file names and refuses a frame that does not end. `a_probe_that_floods_its_trace_is_blocked_and_the_next_probe_is_unaffected` runs it in a real container and fails when the tmpfs cannot fill.
+
+### Finding 461: Host mount writable by the payload
+- **Root Cause**: `build_docker_run_args` bind-mounted the whole output directory for the container's lifetime, and the payload could write to it wherever the mount does not enforce ownership.
+- **Fix**: The container gets no host mount at all; see #434 for how the logs leave. The tampering test also tries to print a forged frame on the container's stdout and fails if it arrives.
