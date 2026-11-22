@@ -97,6 +97,10 @@ jobs:
       - name: Just test uv
         run: just test-uv "--danger-disable-seccomp"
 
+      # A real container and a payload that tries to rewrite its own and an earlier probe's trace.
+      - name: Just test trace integrity
+        run: just test-trace-integrity
+
   linux-docker-seccomp-uv-test:
     name: (Linux) (Docker) (Seccomp) Test CLI with (uv)
     runs-on: ubuntu-latest

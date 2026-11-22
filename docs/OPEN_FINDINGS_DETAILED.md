@@ -863,18 +863,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 411 — High | `src/sandbox.rs`, `docs/DOCKER_SECURITY.md` | ⚠️ Open
-
-**Summary:** The Docker backend's trace-integrity design is that strace runs as root, writes `gyrseek_trace_N.log` into the bind-mounted `/out`, and the payload runs as an unprivileged user (`strace -u gyrseek`), so it cannot modify or delete the trace. On Docker Desktop for macOS that does not hold.
-
-**Evidence:** Using the flags `build_docker_run_args` builds (bridge network, `no-new-privileges`, `SYS_PTRACE`, limits, `--user root`, `noexec` tmpfs for `/tmp` and `/work`, `-v <dir>:/out`) and the pinned Python scanner image, a root-owned `0600` file on `/out` showed as `root:root 600` inside the container, yet the payload (uid 1000, `CapEff` 0) appended to it and deleted it; the file was gone on the host. This comes from the macOS file-sharing layer, not from Docker's configuration. Not tested on native Linux, where bind mounts enforce Unix permissions.
-
-**Failure scenario:** a malicious package truncates or rewrites its trace after its own early actions (the download, the credential read). strace keeps writing at its previous offset, so later events survive and earlier ones are lost or zeroed; deleting the file fails closed through the empty-trace check, but partial erasure does not.
-
-**Fix direction:** write traces to container-local, root-only storage (a directory on the container filesystem, mode 700) and copy them to `/out` as root after the payload exits. A test in a Linux VM confirmed the payload cannot read, write or delete such a directory. Add a test for this, and qualify the "root-owned trace" claims in the README, `AGENTS.md` and the docs until it is fixed.
-
----
-
 ### Finding 412 — Medium | `src/sandbox.rs`, `docs/DOCKER_SECURITY.md` | ⚠️ Open
 
 **Summary:** The 2nd stage of a supply-chain package (for example the Shai-Hulud pattern of downloading Bun and running an obfuscated stealer) runs inside the sandbox in every backend. Docker probes have open egress: the payload can download and run a 2nd stage and send data to any host.
@@ -1180,6 +1168,17 @@ if next.starts_with('-') {
 **Root cause:** `python_env_redirects` treats every `POETRY_REPOSITORIES_*_URL` variable and the `[repositories]` table of Poetry's `config.toml` as an index setting; Poetry documents them as upload targets. Neither the unit tests nor the e2e test checked what Poetry does with them.
 
 **Fix direction:** confirm with a real Poetry (install from a lockfile-less project with the variable set and watch the requests); remove the sources that are publish-only and keep `[[tool.poetry.source]]`.
+
+
+---
+
+### Finding 461 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** A payload can fill the host disk through the /out bind mount during a batch.
+
+**Root cause:** `build_docker_run_args` bind-mounts the whole output directory for the container's lifetime and `--user root` + `strace -u gyrseek` leave `/out` writable for the payload wherever the mount does not enforce ownership. FIXED #411 stops the payload from changing what the scan reads, not from writing there.
+
+**Fix direction:** get the logs out without a long-lived writable host mount: run the batch without `-v`, keep the container (no `--rm`) until `docker cp` has copied `/gyrseek-trace`, then remove it; or limit the writable area with a size-limited volume.
 
 
 ---
