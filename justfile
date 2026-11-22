@@ -23,6 +23,11 @@ lint:
     cargo clippy --all-targets --all-features --locked
     cargo fmt --all --check
 
+# Lockfile guards with the real binary and real npm, no Docker: foreign-source lockfiles are refused before anything is forwarded
+test-lockfile-guards:
+    cargo build --locked
+    tests/lockfile-guards.sh "{{root}}/target/debug/gyrseek"
+
 # End-to-end tests for npm
 [working-directory: 'tests/npm']
 test-npm +args='': build

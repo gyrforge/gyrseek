@@ -64,6 +64,13 @@ jobs:
       - name: Just Test
         run: just test
 
+      # Real binary and real npm, no Docker: lockfiles from other sources must be refused
+      # before anything is forwarded.
+      - name: Just lockfile guards
+        run: just test-lockfile-guards
+        env:
+          GYRSEEK_REQUIRE_NPM: '1'
+
   linux-docker-uv-test:
     name: (Linux) (Docker) Test CLI with (uv)
     runs-on: ubuntu-latest

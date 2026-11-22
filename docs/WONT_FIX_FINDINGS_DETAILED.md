@@ -1065,3 +1065,13 @@ PyPI is case-insensitive but does NOT normalize package names before they reach 
 **Reason for Not Fixing:** `validate_allowlist_pkg_key` is a private helper with three callers, all of which pass the full map because they already have it in scope. Narrowing to `&HashSet<String>` would require callers to pass `map.keys().collect()` or a separate set, adding an allocation and a transformation step at each call site. Introducing a trait bound for a single `.contains_key()` call adds abstraction for no correctness gain. The function is already well-scoped and the broader type costs nothing at runtime.
 
 ---
+
+---
+
+### Finding 448 — `yagni` | `src/parsing.rs` | 🚫 Won't Fix
+
+**Summary:** Compare the hash in a lockfile entry with the hash the registry publishes for the scanned name and version.
+
+**Reason for Not Fixing:** After FIXED #432, #442 and #446 a registry download must come from the registry host and be the file named for that exact package and version, so its content is the registry's own file. If the lockfile's hash differs from that file, the package manager's integrity check fails the install, which fails safe rather than installing something unscanned. PyPI also does not allow a file name to be reused, so the name and version identify one project's file. The comparison would add a registry lookup per entry without closing a gap. The real remaining divergence (the scanned artifact versus the pinned artifact) is tracked as open #447.
+
+---

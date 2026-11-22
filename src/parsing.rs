@@ -1,283 +1,394 @@
 use std::collections::HashMap;
 use std::fs;
 
-fn parse_toml_quoted_value(line: &str, key: &str) -> Option<String> {
-    let prefix = format!("{} = \"", key);
-    let rest = line.strip_prefix(&prefix)?;
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+/// Hosts a Python lockfile entry may be downloaded from for the scan to describe it: the PyPI
+/// index and the file host it redirects to.
+const PYPI_HOSTS: &[&str] = &["pypi.org", "files.pythonhosted.org"];
+
+fn toml_str<'a>(table: &'a toml::Table, key: &str) -> Option<&'a str> {
+    table.get(key).and_then(|v| v.as_str())
 }
 
-pub(crate) fn parse_uv_lock_packages_from_content(content: &str) -> Vec<(String, String)> {
-    let mut packages = Vec::new();
-    let mut in_package = false;
-    let mut name: Option<String> = None;
-    let mut version: Option<String> = None;
-    let mut local_source = false;
-
-    let finalize_package = |packages: &mut Vec<(String, String)>,
-                            name: &mut Option<String>,
-                            version: &mut Option<String>,
-                            local_source: &mut bool| {
-        if !*local_source {
-            if let (Some(n), Some(v)) = (name.take(), version.take()) {
-                packages.push((n, v));
-            }
-        } else {
-            name.take();
-            version.take();
-        }
-        *local_source = false;
-    };
-
-    for raw_line in content.lines() {
-        let line = raw_line.trim();
-
-        if line == "[[package]]" {
-            finalize_package(&mut packages, &mut name, &mut version, &mut local_source);
-            in_package = true;
-            name = None;
-            version = None;
-            local_source = false;
-            continue;
-        }
-
-        if !in_package {
-            continue;
-        }
-
-        if line.starts_with("[[") && line != "[[package]]" {
-            finalize_package(&mut packages, &mut name, &mut version, &mut local_source);
-            in_package = false;
-            continue;
-        }
-
-        if line.starts_with("source")
-            && (line.contains("editable = \".\"")
-                || line.contains("path = \".")
-                || line.contains("workspace = true")
-                || line.contains("virtual = \".\""))
-        {
-            local_source = true;
-        }
-
-        if name.is_none() {
-            name = parse_toml_quoted_value(line, "name");
-            continue;
-        }
-
-        if version.is_none() {
-            version = parse_toml_quoted_value(line, "version");
-        }
-    }
-
-    finalize_package(&mut packages, &mut name, &mut version, &mut local_source);
-
-    packages
+/// Parses a Python lockfile with a real TOML parser, so no spelling of the same data (dotted or
+/// quoted keys, a `[package.source]` table, missing spaces) can hide a source from the scan.
+fn parse_lock_toml(content: &str) -> Result<toml::Table, String> {
+    content
+        .parse::<toml::Table>()
+        .map_err(|e| format!("is not valid TOML ({})", e.message()))
 }
-pub(crate) fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, String)> {
-    let mut packages = Vec::new();
-    let mut in_package = false;
-    let mut in_package_source = false;
 
-    let mut name: Option<String> = None;
-    let mut version: Option<String> = None;
-    let mut local_source = false;
-    let mut source_type: Option<String> = None;
-    let mut source_url: Option<String> = None;
-    let mut source_path: Option<String> = None;
+/// The tables of the first of `keys` that is an array of tables (`[[package]]`).
+fn toml_package_tables<'a>(doc: &'a toml::Table, keys: &[&str]) -> Vec<&'a toml::Table> {
+    keys.iter()
+        .find_map(|k| doc.get(*k).and_then(|v| v.as_array()))
+        .map(|items| items.iter().filter_map(|v| v.as_table()).collect())
+        .unwrap_or_default()
+}
 
-    let is_local_location = |value: &str| {
-        value == "."
-            || value.starts_with("./")
-            || value.starts_with("../")
-            || value.starts_with('/')
-    };
+/// A Python index or download URL: a path (`./`, `../`, `/`, `file:`) is the user's own, anything
+/// without a scheme is not understood and so refused, and the rest must be on a PyPI host.
+fn python_url_source(url: &str) -> LockSource {
+    let url = url.trim();
+    if url.starts_with("./")
+        || url.starts_with("../")
+        || url.starts_with('/')
+        || url.starts_with("file:")
+    {
+        LockSource::Local
+    } else if !url.contains("://") {
+        LockSource::Remote(url.split(['/', '?', '#']).next().unwrap_or(url).to_string())
+    } else {
+        lock_url_source(url, PYPI_HOSTS)
+    }
+}
 
-    let finalize_package = |packages: &mut Vec<(String, String)>,
-                            name: &mut Option<String>,
-                            version: &mut Option<String>,
-                            local_source: &mut bool,
-                            source_type: &mut Option<String>,
-                            source_url: &mut Option<String>,
-                            source_path: &mut Option<String>| {
-        let directory_local = source_type.as_deref() == Some("directory")
-            && (source_url
-                .as_deref()
-                .map(is_local_location)
-                .unwrap_or(false)
-                || source_path
-                    .as_deref()
-                    .map(is_local_location)
-                    .unwrap_or(false));
+/// `black-26.5.1.tar.gz` or `typing_extensions-4.12.2-py3-none-any.whl` -> (`black`, `26.5.1`).
+fn python_artifact_name_version(file: &str) -> Option<(&str, &str)> {
+    if let Some(wheel) = file.strip_suffix(".whl") {
+        let mut parts = wheel.split('-');
+        return Some((parts.next()?, parts.next()?));
+    }
+    let stem = [".tar.gz", ".tar.bz2", ".tar.xz", ".zip", ".tgz"]
+        .iter()
+        .find_map(|ext| file.strip_suffix(ext))?;
+    stem.rsplit_once('-')
+}
 
-        if !*local_source && !directory_local {
-            if let (Some(n), Some(v)) = (name.take(), version.take()) {
-                packages.push((n, v));
-            }
-        } else {
-            name.take();
-            version.take();
-        }
-
-        *local_source = false;
-        *source_type = None;
-        *source_url = None;
-        *source_path = None;
-    };
-
-    for raw_line in content.lines() {
-        let line = raw_line.trim();
-
-        if line == "[[package]]" {
-            finalize_package(
-                &mut packages,
-                &mut name,
-                &mut version,
-                &mut local_source,
-                &mut source_type,
-                &mut source_url,
-                &mut source_path,
-            );
-            in_package = true;
-            in_package_source = false;
-            continue;
-        }
-
-        if !in_package {
-            continue;
-        }
-
-        if line.starts_with("[[") && line != "[[package]]" {
-            finalize_package(
-                &mut packages,
-                &mut name,
-                &mut version,
-                &mut local_source,
-                &mut source_type,
-                &mut source_url,
-                &mut source_path,
-            );
-            in_package = false;
-            in_package_source = false;
-            continue;
-        }
-
-        if line.starts_with('[') && !line.starts_with("[[") {
-            in_package_source = line == "[package.source]";
-            continue;
-        }
-
-        if line.starts_with("source")
-            && (line.contains("editable = \".\"")
-                || line.contains("path = \".")
-                || line.contains("workspace = true")
-                || line.contains("virtual = \".\"")
-                || (line.contains("type = \"directory\"")
-                    && (line.contains("url = \".\"")
-                        || line.contains("url = \"./")
-                        || line.contains("url = \"../")
-                        || line.contains("path = \".")
-                        || line.contains("path = \"./")
-                        || line.contains("path = \"../"))))
-        {
-            local_source = true;
-        }
-
-        if in_package_source {
-            if source_type.is_none() {
-                source_type = parse_toml_quoted_value(line, "type");
-            }
-            if source_url.is_none() {
-                source_url = parse_toml_quoted_value(line, "url");
-            }
-            if source_path.is_none() {
-                source_path = parse_toml_quoted_value(line, "path");
-            }
-
-            if source_type.as_deref() == Some("directory")
-                && (source_url
-                    .as_deref()
-                    .map(is_local_location)
-                    .unwrap_or(false)
-                    || source_path
-                        .as_deref()
-                        .map(is_local_location)
-                        .unwrap_or(false))
-            {
-                local_source = true;
-            }
-        }
-
-        if name.is_none() {
-            name = parse_toml_quoted_value(line, "name");
-            continue;
-        }
-
-        if version.is_none() {
-            version = parse_toml_quoted_value(line, "version");
+fn normalize_python_name(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        match c {
+            '-' | '_' | '.' if !out.ends_with('-') => out.push('-'),
+            '-' | '_' | '.' => {}
+            c => out.push(c.to_ascii_lowercase()),
         }
     }
+    out
+}
 
-    finalize_package(
-        &mut packages,
-        &mut name,
-        &mut version,
-        &mut local_source,
-        &mut source_type,
-        &mut source_url,
-        &mut source_path,
+/// True if a download URL is a file of `name` (and `version` when known). A PyPI host alone would
+/// accept the file of any other project, so the scan would describe something else.
+fn python_artifact_matches(url: &str, name: &str, version: Option<&str>) -> bool {
+    let Some((dist, file_version)) = python_artifact_name_version(url_file_name(url)) else {
+        return false;
+    };
+    let same_version = |a: &str, b: &str| match (
+        a.parse::<pep440_rs::Version>(),
+        b.parse::<pep440_rs::Version>(),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    normalize_python_name(dist) == normalize_python_name(name)
+        && version.is_none_or(|v| same_version(file_version, v))
+}
+
+/// Where a `uv.lock` package comes from, read from its `source` table. No source means the
+/// default index, as for the older lockfiles in the tests.
+fn uv_source(table: &toml::Table) -> LockSource {
+    match uv_index_source(table) {
+        // uv downloads from the `url` recorded for the sdist and each wheel, which need not be
+        // on the index named in `source`.
+        LockSource::Registry => uv_artifact_hosts(table),
+        other => other,
+    }
+}
+
+fn uv_artifact_hosts(table: &toml::Table) -> LockSource {
+    let artifacts = table
+        .get("sdist")
+        .into_iter()
+        .chain(
+            table
+                .get("wheels")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten(),
+        )
+        .filter_map(|v| v.as_table());
+    let (name, version) = (
+        toml_str(table, "name").unwrap_or(""),
+        toml_str(table, "version"),
     );
-
-    packages
+    artifacts
+        .filter_map(|t| toml_str(t, "url"))
+        .find_map(|u| match python_url_source(u) {
+            LockSource::Remote(from) => Some(from),
+            _ if !python_artifact_matches(u, name, version) => {
+                Some(format!("a file of another package: {u}"))
+            }
+            _ => None,
+        })
+        .map_or(LockSource::Registry, LockSource::Remote)
 }
 
-pub(crate) fn parse_pylock_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
+fn uv_index_source(table: &toml::Table) -> LockSource {
+    let source = match table.get("source") {
+        None => return LockSource::Registry,
+        Some(toml::Value::Table(source)) => source,
+        Some(_) => return LockSource::Remote("an unrecognised source".to_string()),
+    };
+    if ["editable", "virtual", "directory", "path"]
+        .iter()
+        .any(|k| source.contains_key(*k))
+        || source.get("workspace").and_then(|v| v.as_bool()) == Some(true)
+    {
+        return LockSource::Local;
+    }
+    if let Some(index) = toml_str(source, "registry") {
+        return python_url_source(index);
+    }
+    LockSource::Remote(
+        ["git", "url"]
+            .iter()
+            .find_map(|k| toml_str(source, k))
+            .unwrap_or("an unrecognised source")
+            .to_string(),
+    )
+}
+
+/// Where a `poetry.lock` package comes from: no `source` table is PyPI, `legacy` is a named
+/// index, `directory` is the user's own code.
+fn poetry_source(table: &toml::Table) -> LockSource {
+    let source = match table.get("source") {
+        None => return LockSource::Registry,
+        Some(toml::Value::Table(source)) => source,
+        Some(_) => return LockSource::Remote("an unrecognised source".to_string()),
+    };
+    let url = toml_str(source, "url");
+    match (toml_str(source, "type"), url) {
+        (Some("directory"), _) => LockSource::Local,
+        (Some("legacy"), Some(url)) => python_url_source(url),
+        (Some("file"), Some(url)) if !url.contains("://") => LockSource::Local,
+        (kind, url) => {
+            LockSource::Remote(url.or(kind).unwrap_or("an unrecognised source").to_string())
+        }
+    }
+}
+
+/// Where a `pylock.toml` (PEP 751) package comes from: a `vcs` or `archive` URL, an `index`, or
+/// the URLs of its sdist and wheels. A directory or file path is the user's own code.
+/// The artifact tables of a `pylock.toml` package: `archive`, `sdist` and every wheel.
+fn pylock_parts(table: &toml::Table) -> Vec<&toml::Table> {
+    let mut parts: Vec<&toml::Table> = ["archive", "sdist"]
+        .iter()
+        .filter_map(|k| table.get(*k).and_then(|v| v.as_table()))
+        .collect();
+    parts.extend(
+        table
+            .get("wheels")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|w| w.as_table()),
+    );
+    parts
+}
+
+/// The version of a `pylock.toml` package. An entry without one installs whatever its files are,
+/// so the version is read from their names (all must agree); with no files it stays unknown.
+fn pylock_version(table: &toml::Table) -> Result<Option<String>, String> {
+    if let Some(version) = toml_str(table, "version") {
+        return Ok(Some(version.to_string()));
+    }
+    let mut found: Option<&str> = None;
+    for part in pylock_parts(table) {
+        let file = toml_str(part, "url").or_else(|| toml_str(part, "path"));
+        let Some((_, version)) = file.and_then(|f| python_artifact_name_version(url_file_name(f)))
+        else {
+            continue;
+        };
+        match found {
+            Some(first) if first != version => {
+                return Err(format!(
+                    "lists files of different versions ({first} and {version})"
+                ));
+            }
+            _ => found = Some(version),
+        }
+    }
+    Ok(found.map(str::to_string))
+}
+
+fn pylock_source(table: &toml::Table) -> LockSource {
+    let sub = |key: &str| table.get(key).and_then(|v| v.as_table());
+    if let Some(vcs) = sub("vcs") {
+        return LockSource::Remote(
+            toml_str(vcs, "url")
+                .unwrap_or("a git repository")
+                .to_string(),
+        );
+    }
+    if sub("directory").is_some() {
+        return LockSource::Local;
+    }
+    let parts = pylock_parts(table);
+    let artifact_urls: Vec<&str> = parts.iter().filter_map(|t| toml_str(t, "url")).collect();
+    let has_path = parts.iter().any(|t| t.contains_key("path"));
+    // Files taken from a path are the user's own, whichever index the entry was found on.
+    if artifact_urls.is_empty() && has_path {
+        return LockSource::Local;
+    }
+    let mut urls = artifact_urls.clone();
+    urls.extend(toml_str(table, "index"));
+    let (name, version) = (
+        toml_str(table, "name").unwrap_or(""),
+        toml_str(table, "version"),
+    );
+    let files = parts.iter().filter_map(|t| toml_str(t, "url"));
+    let remote = urls
+        .iter()
+        .find_map(|u| match python_url_source(u) {
+            LockSource::Remote(from) => Some(from),
+            _ => None,
+        })
+        .or_else(|| {
+            files
+                .filter(|u| !python_artifact_matches(u, name, version))
+                .map(|u| format!("a file of another package: {u}"))
+                .next()
+        });
+    match remote {
+        Some(from) => LockSource::Remote(from),
+        None => LockSource::Registry,
+    }
+}
+
+/// Keeps the registry packages of a Python lockfile. An entry from another index, a git
+/// repository or a URL is an error (the scan would examine the PyPI package of the same name and
+/// version instead of what is installed) unless the package is in `exempt`.
+fn python_lock_packages(
+    entries: Vec<(String, Option<String>, LockSource)>,
+    exempt: &std::collections::HashSet<String>,
+    needs_version: bool,
+) -> Result<Vec<(String, Option<String>)>, String> {
     let mut packages = Vec::new();
-    let mut in_package = false;
-    let mut name: Option<String> = None;
-    let mut version: Option<String> = None;
-
-    for raw_line in content.lines() {
-        let line = raw_line.trim();
-
-        if line == "[[package]]" || line == "[[packages]]" {
-            if let Some(n) = name.take() {
-                packages.push((n, version.take()));
+    let mut remote = Vec::new();
+    for (name, version, source) in entries {
+        let shown = version
+            .as_deref()
+            .map_or(name.clone(), |v| format!("{name}@{v}"));
+        match source {
+            LockSource::Local => continue,
+            LockSource::Remote(from) if !exempt.contains(&name) => {
+                remote.push(format!("{shown} (from {from})"));
+                continue;
             }
-            in_package = true;
-            name = None;
-            version = None;
-            continue;
+            _ => {}
         }
-
-        if !in_package {
-            continue;
+        if needs_version && version.is_none() {
+            return Err(format!(
+                "{name} has no locked version, so there is nothing to scan"
+            ));
         }
-
-        if line.starts_with("[[") && line != "[[package]]" && line != "[[packages]]" {
-            if let Some(n) = name.take() {
-                packages.push((n, version.take()));
-            }
-            in_package = false;
-            continue;
-        }
-
-        if name.is_none() {
-            name = parse_toml_quoted_value(line, "name");
-            continue;
-        }
-
-        if version.is_none() {
-            version = parse_toml_quoted_value(line, "version");
-        }
+        packages.push((name, version));
     }
-
-    if let Some(n) = name {
-        packages.push((n, version));
+    if remote.is_empty() {
+        Ok(packages)
+    } else {
+        Err(remote_lock_error(&remote, "PyPI", PYPI_HOSTS))
     }
+}
 
+/// `(name, version, source)` for every package table; a package without a name is an error.
+fn python_lock_entries(
+    tables: Vec<&toml::Table>,
+    source: fn(&toml::Table) -> LockSource,
+    version: fn(&toml::Table) -> Result<Option<String>, String>,
+) -> Result<Vec<(String, Option<String>, LockSource)>, String> {
+    tables
+        .into_iter()
+        .map(|t| {
+            let name = toml_str(t, "name").ok_or("a package entry has no name")?;
+            let version = version(t).map_err(|e| format!("{name} {e}"))?;
+            Ok((name.to_string(), version, source(t)))
+        })
+        .collect()
+}
+
+fn plain_version(table: &toml::Table) -> Result<Option<String>, String> {
+    Ok(toml_str(table, "version").map(str::to_string))
+}
+
+fn python_lock(
+    content: &str,
+    exempt: &std::collections::HashSet<String>,
+    keys: &[&str],
+    source: fn(&toml::Table) -> LockSource,
+    version: fn(&toml::Table) -> Result<Option<String>, String>,
+    needs_version: bool,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let doc = parse_lock_toml(content)?;
+    let entries = python_lock_entries(toml_package_tables(&doc, keys), source, version)?;
+    python_lock_packages(entries, exempt, needs_version)
+}
+
+fn with_versions(packages: Vec<(String, Option<String>)>) -> Vec<(String, String)> {
     packages
+        .into_iter()
+        .filter_map(|(n, v)| v.map(|v| (n, v)))
+        .collect()
+}
+
+pub(crate) fn parse_uv_lock(
+    content: &str,
+    exempt: &std::collections::HashSet<String>,
+) -> Result<Vec<(String, String)>, String> {
+    python_lock(
+        content,
+        exempt,
+        &["package"],
+        uv_source,
+        plain_version,
+        true,
+    )
+    .map(with_versions)
+}
+
+pub(crate) fn parse_poetry_lock(
+    content: &str,
+    exempt: &std::collections::HashSet<String>,
+) -> Result<Vec<(String, String)>, String> {
+    python_lock(
+        content,
+        exempt,
+        &["package"],
+        poetry_source,
+        plain_version,
+        true,
+    )
+    .map(with_versions)
+}
+
+/// Packages of a `pylock.toml`, which may list `[[packages]]` (PEP 751) or `[[package]]`. An
+/// entry without a version is returned without one (scanned at the latest version).
+pub(crate) fn parse_pylock(
+    content: &str,
+    exempt: &std::collections::HashSet<String>,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    python_lock(
+        content,
+        exempt,
+        &["packages", "package"],
+        pylock_source,
+        pylock_version,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn parse_uv_lock_packages_from_content(content: &str) -> Vec<(String, String)> {
+    parse_uv_lock(content, &Default::default()).unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(crate) fn parse_poetry_lock_packages_from_content(content: &str) -> Vec<(String, String)> {
+    parse_poetry_lock(content, &Default::default()).unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(crate) fn parse_pylock_packages_from_content(content: &str) -> Vec<(String, Option<String>)> {
+    parse_pylock(content, &Default::default()).unwrap_or_default()
 }
 
 /// Strips PEP 508 extras (`requests[security]` -> `requests`) from a package
@@ -1125,15 +1236,21 @@ pub(crate) fn parse_npm_install_targets_with(
         ));
     }
 
+    // A flag that turns the lockfile off is refused now, not after the scan.
+    freeze_lockfile_install(manager, args)?;
+
     let lockfiles: &[&str] = if manager == "pnpm" {
         &["pnpm-lock.yaml"]
     } else {
         &["npm-shrinkwrap.json", "package-lock.json"]
     };
-    let Some((file, content)) = lockfiles
+    // npm 11 reads `npm-shrinkwrap.json` in preference to `package-lock.json` and npm 12 reads only
+    // `package-lock.json`, so with both present every entry of both is scanned.
+    let found: Vec<(&str, String)> = lockfiles
         .iter()
-        .find_map(|f| read_input(f).ok().map(|c| (*f, c)))
-    else {
+        .filter_map(|f| read_input(f).ok().map(|c| (*f, c)))
+        .collect();
+    if found.is_empty() {
         let make_one = if manager == "pnpm" {
             "pnpm install --lockfile-only"
         } else {
@@ -1144,16 +1261,23 @@ pub(crate) fn parse_npm_install_targets_with(
             lockfiles.join(" or "),
             command.unwrap_or("install"),
         ));
-    };
-    let packages = if manager == "pnpm" {
-        parse_pnpm_lock(&content, exempt)
-    } else {
-        parse_npm_lock(&content, exempt)
     }
-    .map_err(|e| format!("{file}: {e}. Failing closed."))?;
+    let mut packages = std::collections::BTreeSet::new();
+    for (file, content) in &found {
+        let parsed = if manager == "pnpm" {
+            parse_pnpm_lock(content, exempt)
+        } else {
+            parse_npm_lock(content, exempt)
+        }
+        .map_err(|e| format!("{file}: {e}. Failing closed."))?;
+        packages.extend(parsed);
+    }
+    let packages: Vec<_> = packages.into_iter().collect();
     if packages.is_empty() {
+        let files: Vec<&str> = found.iter().map(|(f, _)| *f).collect();
         return Err(format!(
-            "{file} lists no registry packages to scan. Failing closed."
+            "{} lists no registry packages to scan. Failing closed.",
+            files.join(" and ")
         ));
     }
     Ok(ParsedTargets {
@@ -1178,7 +1302,7 @@ enum LockSource {
     Remote(String),
 }
 
-fn lock_url_source(url: &str) -> LockSource {
+fn lock_url_source(url: &str, registry_hosts: &[&str]) -> LockSource {
     let url = url.trim();
     if let Some(rest) = url
         .strip_prefix("https://")
@@ -1193,7 +1317,7 @@ fn lock_url_source(url: &str) -> LockSource {
             .next()
             .unwrap_or("")
             .to_ascii_lowercase();
-        return if NPM_REGISTRY_HOSTS.contains(&host.as_str()) {
+        return if registry_hosts.contains(&host.as_str()) {
             LockSource::Registry
         } else {
             LockSource::Remote(host)
@@ -1206,22 +1330,64 @@ fn lock_url_source(url: &str) -> LockSource {
     LockSource::Remote(url.split(['/', '#']).next().unwrap_or(url).to_string())
 }
 
-fn remote_lock_error(remote: &[String]) -> String {
-    let shown = remote
-        .iter()
-        .take(5)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
+/// The file name of a download URL, without query or fragment.
+fn url_file_name(url: &str) -> &str {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// True if an npm tarball URL on the registry is the one for `name@version`
+/// (`/<name>/-/<unscoped>-<version>.tgz`). The host check alone would accept a tarball of any
+/// other package on the same registry, so the scan would describe something else.
+fn npm_tarball_matches(url: &str, name: &str, version: &str) -> bool {
+    let url = url.split(['?', '#']).next().unwrap_or(url);
+    let Some((_, path)) = url.split_once("://").and_then(|(_, r)| r.split_once('/')) else {
+        return false;
+    };
+    let unscoped = name.rsplit('/').next().unwrap_or(name);
+    path == format!("{name}/-/{unscoped}-{version}.tgz")
+}
+
+/// Replaces every `scheme://…` in `text` with `scheme://host/…/file`: a lockfile URL can carry
+/// credentials (`user:token@host`) or a token in its query, and the refusal ends up in CI logs.
+fn redact_urls(text: &str) -> String {
+    let url = regex::Regex::new(r"[A-Za-z][A-Za-z0-9+.\-]*://[^\s,)]+").expect("valid pattern");
+    url.replace_all(text, |caps: &regex::Captures| {
+        let (scheme, rest) = caps[0].split_once("://").unwrap_or(("", &caps[0]));
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        let host = authority.rsplit('@').next().unwrap_or(authority);
+        let path = rest[authority.len()..]
+            .split(['?', '#'])
+            .next()
+            .unwrap_or("");
+        match path.trim_end_matches('/').rsplit('/').next() {
+            Some(file) if !file.is_empty() && path.matches('/').count() > 0 => {
+                format!("{scheme}://{host}/…/{file}")
+            }
+            _ => format!("{scheme}://{host}"),
+        }
+    })
+    .into_owned()
+}
+
+fn remote_lock_error(remote: &[String], registry: &str, hosts: &[&str]) -> String {
+    let shown = redact_urls(
+        &remote
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
     let more = remote.len().saturating_sub(5);
     format!(
-        "{shown}{} do not come from the npm registry ({}). gyrseek scans the public registry package of the same name and version, which would not describe what the lockfile installs. If these are your own private packages add them to internal_package_exemptions; otherwise fix the lockfile",
+        "{shown}{} do not come from {registry} ({}). gyrseek scans the public registry package of the same name and version, which would not describe what the lockfile installs. If these are your own private packages add them to internal_package_exemptions; otherwise fix the lockfile",
         if more > 0 {
             format!(" and {more} more")
         } else {
             String::new()
         },
-        NPM_REGISTRY_HOSTS.join(", ")
+        hosts.join(", ")
     )
 }
 
@@ -1257,7 +1423,15 @@ pub(crate) fn parse_npm_lock(
             // npm fetches an entry with no `resolved` from the registry, so scan it.
             LockSource::Registry
         } else {
-            lock_url_source(resolved)
+            lock_url_source(resolved, NPM_REGISTRY_HOSTS)
+        };
+        let source = match source {
+            LockSource::Registry
+                if !resolved.is_empty() && !npm_tarball_matches(resolved, name, version) =>
+            {
+                LockSource::Remote(format!("a tarball of another package: {resolved}"))
+            }
+            other => other,
         };
         match source {
             LockSource::Local => {}
@@ -1301,7 +1475,11 @@ pub(crate) fn parse_npm_lock(
         }
     }
     if !remote.is_empty() {
-        return Err(remote_lock_error(&remote));
+        return Err(remote_lock_error(
+            &remote,
+            "the npm registry",
+            NPM_REGISTRY_HOSTS,
+        ));
     }
     Ok(found.into_iter().map(|(n, v)| (n, Some(v))).collect())
 }
@@ -1345,7 +1523,7 @@ pub(crate) fn parse_pnpm_lock(
             .and_then(|r| r.get("tarball"))
             .and_then(|t| t.as_str());
         let source = match tarball {
-            Some(url) => lock_url_source(url),
+            Some(url) => lock_url_source(url, NPM_REGISTRY_HOSTS),
             None if has("type") || has("repo") || has("commit") => {
                 LockSource::Remote("a git repository".to_string())
             }
@@ -1353,6 +1531,12 @@ pub(crate) fn parse_pnpm_lock(
         };
         let name_version =
             parsed.filter(|(n, v)| semver::Version::parse(v).is_ok() && is_valid_npm_name(n));
+        let source = match (source, tarball, name_version) {
+            (LockSource::Registry, Some(url), Some((n, v))) if !npm_tarball_matches(url, n, v) => {
+                LockSource::Remote(format!("a tarball of another package: {url}"))
+            }
+            (source, ..) => source,
+        };
         match (source, name_version) {
             (LockSource::Local, _) => {}
             (LockSource::Registry, Some((n, v))) => {
@@ -1369,7 +1553,11 @@ pub(crate) fn parse_pnpm_lock(
         }
     }
     if !remote.is_empty() {
-        return Err(remote_lock_error(&remote));
+        return Err(remote_lock_error(
+            &remote,
+            "the npm registry",
+            NPM_REGISTRY_HOSTS,
+        ));
     }
     Ok(found.into_iter().map(|(n, v)| (n, Some(v))).collect())
 }
@@ -3502,7 +3690,7 @@ version = "2.31.0"
             "node_modules/@s/scoped":{"version":"3.0.0","resolved":"https://registry.npmjs.org/@s/scoped/-/scoped-3.0.0.tgz"},
             "node_modules/dup":{"version":"1.0.0","resolved":"https://registry.npmjs.org/dup/-/dup-1.0.0.tgz"},
             "node_modules/x/node_modules/dup":{"version":"1.0.0","resolved":"https://registry.npmjs.org/dup/-/dup-1.0.0.tgz"},
-            "node_modules/prerelease":{"version":"1.0.0-rc.1","resolved":"https://registry.npmjs.org/p/-/p.tgz"}}}"#;
+            "node_modules/prerelease":{"version":"1.0.0-rc.1","resolved":"https://registry.npmjs.org/prerelease/-/prerelease-1.0.0-rc.1.tgz"}}}"#;
         assert_eq!(
             npm_lock(lock),
             [
@@ -3724,6 +3912,541 @@ version = "2.31.0"
         let missing = dir.path().join("nope.txt").to_string_lossy().to_string();
         assert!(read_input(&missing).is_err());
         assert!(!changed(&missing));
+    }
+
+    fn uv_entry(source: &str) -> String {
+        format!(
+            "version = 1\n\n[[package]]\nname = \"pkg\"\nversion = \"1.0.0\"\nsource = {source}\n"
+        )
+    }
+
+    #[test]
+    fn uv_lock_entries_not_from_pypi_fail_closed() {
+        for source in [
+            r#"{ registry = "https://nexus.corp.example/simple" }"#,
+            r#"{ registry = "https://pypi.org.evil.example/simple" }"#,
+            r#"{ registry = "https://pypi.org@evil.example/simple" }"#,
+            r#"{ git = "https://github.com/x/y?rev=abc#0123" }"#,
+            r#"{ url = "https://evil.example/pkg-1.0.0.tar.gz" }"#,
+            r#"{ something = "new" }"#,
+        ] {
+            let err = parse_uv_lock(&uv_entry(source), &exempt(&[])).expect_err(source);
+            assert!(
+                err.contains("pkg@1.0.0")
+                    && err.contains("do not come from PyPI")
+                    && err.contains("internal_package_exemptions"),
+                "{source}: {err}"
+            );
+        }
+        for source in [
+            r#"{ registry = "https://pypi.org/simple" }"#,
+            r#"{ registry = "https://PyPI.org/simple" }"#,
+        ] {
+            assert_eq!(
+                pkgs_py(parse_uv_lock(&uv_entry(source), &exempt(&[])).unwrap()),
+                ["pkg@1.0.0"],
+                "{source}"
+            );
+        }
+        // The user's own code is left out, however it is spelled.
+        for source in [
+            r#"{ editable = "." }"#,
+            r#"{ virtual = "." }"#,
+            r#"{ directory = "../lib" }"#,
+            r#"{ path = "wheels/pkg-1.0.0-py3-none-any.whl" }"#,
+            "{ workspace = true }",
+        ] {
+            assert!(
+                parse_uv_lock(&uv_entry(source), &exempt(&[]))
+                    .unwrap()
+                    .is_empty(),
+                "{source}"
+            );
+        }
+        // An exempt package passes, another name does not help, and every offender is named.
+        let private = uv_entry(r#"{ registry = "https://nexus.corp.example/simple" }"#);
+        assert_eq!(
+            pkgs_py(parse_uv_lock(&private, &exempt(&["pkg"])).unwrap()),
+            ["pkg@1.0.0"]
+        );
+        assert!(parse_uv_lock(&private, &exempt(&["other"])).is_err());
+        let two = format!(
+            "{private}\n[[package]]\nname = \"b\"\nversion = \"2.0.0\"\nsource = {{ git = \"https://g.example/b\" }}\n"
+        );
+        let err = parse_uv_lock(&two, &exempt(&[])).unwrap_err();
+        assert!(
+            err.contains("pkg@1.0.0") && err.contains("b@2.0.0"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn uv_lock_download_urls_must_be_on_pypi_too() {
+        let entry = |artifacts: &str| {
+            format!(
+                "[[package]]\nname = \"pkg\"\nversion = \"1.0.0\"\nsource = {{ registry = \"https://pypi.org/simple\" }}\n{artifacts}\n"
+            )
+        };
+        for artifacts in [
+            "sdist = { url = \"https://evil.example/pkg-1.0.0.tar.gz\", hash = \"sha256:aa\" }",
+            "wheels = [{ url = \"https://evil.example/pkg-1.0.0-py3-none-any.whl\", hash = \"sha256:aa\" }]",
+            "wheels = [\n  { url = \"https://files.pythonhosted.org/a.whl\" },\n  { url = \"https://files.pythonhosted.org.evil.example/b.whl\" },\n]",
+            "[package.sdist]\nurl = \"https://evil.example/x.tar.gz\"",
+        ] {
+            let err = parse_uv_lock(&entry(artifacts), &exempt(&[])).expect_err(artifacts);
+            assert!(
+                err.contains("pkg@1.0.0") && err.contains("do not come from PyPI"),
+                "{artifacts}: {err}"
+            );
+        }
+        for artifacts in [
+            "",
+            "sdist = { url = \"https://files.pythonhosted.org/packages/pkg-1.0.0.tar.gz\", hash = \"sha256:aa\" }\nwheels = [{ url = \"https://files.pythonhosted.org/packages/pkg-1.0.0-py3-none-any.whl\" }]",
+            "wheels = [{ path = \"wheels/a.whl\" }]",
+        ] {
+            assert_eq!(
+                pkgs_py(parse_uv_lock(&entry(artifacts), &exempt(&[])).unwrap()),
+                ["pkg@1.0.0"],
+                "{artifacts}"
+            );
+        }
+        let evil = entry("sdist = { url = \"https://evil.example/x.tar.gz\" }");
+        assert_eq!(
+            pkgs_py(parse_uv_lock(&evil, &exempt(&["pkg"])).unwrap()),
+            ["pkg@1.0.0"]
+        );
+    }
+
+    #[test]
+    fn the_real_npm_and_pylock_fixtures_are_still_accepted() {
+        // Only tracked fixtures: tests/pnpm/pnpm-lock.yaml is generated by the e2e run and ignored.
+        let npm =
+            parse_npm_lock(include_str!("../tests/npm/package-lock.json"), &exempt(&[])).unwrap();
+        assert!(!npm.is_empty());
+        let pylock = parse_pylock(include_str!("../tests/uv/pylock.toml"), &exempt(&[])).unwrap();
+        assert!(!pylock.is_empty());
+    }
+
+    #[test]
+    fn the_real_uv_and_poetry_fixtures_are_still_accepted() {
+        let uv = parse_uv_lock(include_str!("../tests/uv/uv.lock"), &exempt(&[])).unwrap();
+        assert!(
+            uv.len() > 5 && uv.iter().all(|(n, _)| n != "uv-test"),
+            "{uv:?}"
+        );
+        let poetry =
+            parse_poetry_lock(include_str!("../tests/poetry/poetry.lock"), &exempt(&[])).unwrap();
+        assert!(!poetry.is_empty());
+    }
+
+    #[test]
+    fn a_download_must_be_the_file_of_the_package_it_is_listed_under() {
+        // npm: right host, but the tarball of another package (or version).
+        let npm = |name: &str, resolved: &str| {
+            format!(
+                r#"{{"packages":{{"node_modules/{name}":{{"version":"4.17.21","resolved":"{resolved}"}}}}}}"#
+            )
+        };
+        for (name, resolved) in [
+            ("lodash", "https://registry.npmjs.org/evil/-/evil-1.0.0.tgz"),
+            (
+                "lodash",
+                "https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz",
+            ),
+            (
+                "lodash",
+                "https://registry.npmjs.org/lodash/-/other-4.17.21.tgz",
+            ),
+            (
+                "@s/pkg",
+                "https://registry.npmjs.org/@s/other/-/other-4.17.21.tgz",
+            ),
+        ] {
+            let err = parse_npm_lock(&npm(name, resolved), &exempt(&[])).expect_err(resolved);
+            assert!(
+                err.contains("a tarball of another package"),
+                "{resolved}: {err}"
+            );
+        }
+        for (name, resolved) in [
+            (
+                "lodash",
+                "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+            ),
+            (
+                "lodash",
+                "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz?cache=1#sha1-abc",
+            ),
+            (
+                "@s/pkg",
+                "https://registry.npmjs.org/@s/pkg/-/pkg-4.17.21.tgz",
+            ),
+        ] {
+            assert_eq!(npm_lock(&npm(name, resolved)).len(), 1, "{resolved}");
+        }
+        assert!(
+            parse_npm_lock(
+                &npm("lodash", "https://registry.npmjs.org/evil/-/evil-1.0.0.tgz"),
+                &exempt(&["lodash"])
+            )
+            .is_ok()
+        );
+        let pnpm = |tarball: &str| {
+            format!(
+                "lockfileVersion: '9.0'\npackages:\n  lodash@4.17.21:\n    resolution: {{tarball: '{tarball}'}}\nsnapshots: {{}}\n"
+            )
+        };
+        assert!(
+            parse_pnpm_lock(
+                &pnpm("https://registry.npmjs.org/evil/-/evil-1.0.0.tgz"),
+                &exempt(&[])
+            )
+            .is_err()
+        );
+        assert!(
+            parse_pnpm_lock(
+                &pnpm("https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"),
+                &exempt(&[])
+            )
+            .is_ok()
+        );
+
+        // Python: files of another project on a PyPI host.
+        let uv = |url: &str| {
+            format!(
+                "[[package]]\nname = \"Typing_Extensions\"\nversion = \"4.12.2\"\nsource = {{ registry = \"https://pypi.org/simple\" }}\nwheels = [{{ url = \"{url}\" }}]\n"
+            )
+        };
+        for url in [
+            "https://files.pythonhosted.org/packages/x/evil-1.0.0-py3-none-any.whl",
+            "https://files.pythonhosted.org/packages/x/typing_extensions-4.12.3-py3-none-any.whl",
+            "https://files.pythonhosted.org/packages/x/typing_extensions.txt",
+        ] {
+            let err = parse_uv_lock(&uv(url), &exempt(&[])).expect_err(url);
+            assert!(err.contains("a file of another package"), "{url}: {err}");
+        }
+        for url in [
+            "https://files.pythonhosted.org/packages/x/typing_extensions-4.12.2-py3-none-any.whl",
+            "https://files.pythonhosted.org/packages/x/typing-extensions-4.12.2.tar.gz?x=1",
+        ] {
+            assert_eq!(
+                parse_uv_lock(&uv(url), &exempt(&[])).unwrap().len(),
+                1,
+                "{url}"
+            );
+        }
+        // A version spelled differently (1.0 vs 1.0.0) is the same version.
+        let uv = "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\nsdist = { url = \"https://files.pythonhosted.org/p-1.0.tar.gz\" }\n";
+        assert_eq!(parse_uv_lock(uv, &exempt(&[])).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn python_index_and_url_fields_need_a_scheme() {
+        let poetry = |url: &str| {
+            format!(
+                "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\n\n[package.source]\ntype = \"legacy\"\nurl = \"{url}\"\n"
+            )
+        };
+        assert!(parse_poetry_lock(&poetry("evil.example/simple"), &exempt(&[])).is_err());
+        assert!(parse_poetry_lock(&poetry("https://pypi.org/simple"), &exempt(&[])).is_ok());
+        let uv = |index: &str| {
+            format!(
+                "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\nsource = {{ registry = \"{index}\" }}\n"
+            )
+        };
+        assert!(parse_uv_lock(&uv("evil.example/simple"), &exempt(&[])).is_err());
+        // A local flat index is the user's own.
+        for local in ["../my-index", "./index", "/srv/index", "file:///srv/index"] {
+            assert!(
+                parse_uv_lock(&uv(local), &exempt(&[])).unwrap().is_empty(),
+                "{local}"
+            );
+        }
+    }
+
+    #[test]
+    fn refusals_never_print_credentials_or_query_tokens_from_lockfile_urls() {
+        let secret = "s3cr3t-token";
+        let npm = format!(
+            r#"{{"packages":{{"node_modules/a":{{"version":"1.0.0","resolved":"https://user:{secret}@evil.example/a/-/a-1.0.0.tgz?auth={secret}"}},"node_modules/b":{{"version":"1.0.0","resolved":"https://registry.npmjs.org/other/-/other-1.0.0.tgz?auth={secret}"}}}}}}"#
+        );
+        let uv = format!(
+            "[[package]]\nname = \"a\"\nversion = \"1.0.0\"\nsource = {{ git = \"https://user:{secret}@github.com/x/y?token={secret}#abc\" }}\n\n[[package]]\nname = \"b\"\nversion = \"1.0.0\"\nsource = {{ registry = \"https://pypi.org/simple\" }}\nwheels = [{{ url = \"https://files.pythonhosted.org/p/q/evil-1.0.0-py3-none-any.whl?sig={secret}\" }}]\n\n[[package]]\nname = \"c\"\nversion = \"1.0.0\"\nsource = {{ registry = \"evil.example/simple?token={secret}\" }}\n"
+        );
+        let errs = [
+            parse_npm_lock(&npm, &exempt(&[])).unwrap_err(),
+            parse_uv_lock(&uv, &exempt(&[])).unwrap_err(),
+        ];
+        for err in errs {
+            assert!(!err.contains(secret), "{err}");
+        }
+        let err = parse_npm_lock(&npm, &exempt(&[])).unwrap_err();
+        assert!(
+            err.contains("a@1.0.0")
+                && err.contains("evil.example")
+                && err.contains("other-1.0.0.tgz"),
+            "{err}"
+        );
+        assert_eq!(
+            redact_urls("x (from https://u:p@h.example/a/b/c.whl?q=1#f) y"),
+            "x (from https://h.example/…/c.whl) y"
+        );
+        assert_eq!(
+            redact_urls("git+ssh://git@github.com/x/y.git#abc"),
+            "git+ssh://github.com/…/y.git"
+        );
+        assert_eq!(redact_urls("https://h.example"), "https://h.example");
+        assert_eq!(redact_urls("github:user/repo#abc"), "github:user/repo#abc");
+    }
+
+    #[test]
+    fn a_local_artifact_stays_excluded_when_the_entry_names_an_index() {
+        let lock = "[[packages]]\nname = \"mine\"\nversion = \"1.0.0\"\nindex = \"https://nexus.corp.example/simple\"\n[[packages.wheels]]\npath = \"./dist/mine-1.0.0-py3-none-any.whl\"\n\n[[packages]]\nname = \"six\"\nversion = \"1.16.0\"\nindex = \"https://pypi.org/simple\"\n[[packages.wheels]]\nurl = \"https://files.pythonhosted.org/packages/six-1.16.0-py2.py3-none-any.whl\"\n";
+        assert_eq!(
+            parse_pylock(lock, &exempt(&[])).unwrap(),
+            [("six".to_string(), Some("1.16.0".to_string()))]
+        );
+    }
+
+    #[test]
+    fn a_pylock_entry_without_a_version_takes_it_from_its_files() {
+        let entry = |files: &str| format!("[[packages]]\nname = \"pkg\"\n{files}\n");
+        let wheel = |v: &str| {
+            format!(
+                "[[packages.wheels]]\nurl = \"https://files.pythonhosted.org/p/pkg-{v}-py3-none-any.whl\"\n"
+            )
+        };
+        // The version is read from the files so the scan covers the release that would install.
+        assert_eq!(
+            parse_pylock(&entry(&wheel("1.2.0")), &exempt(&[])).unwrap(),
+            [("pkg".to_string(), Some("1.2.0".to_string()))]
+        );
+        let sdist =
+            "[packages.sdist]\nurl = \"https://files.pythonhosted.org/p/pkg-1.2.0.tar.gz\"\n";
+        assert_eq!(
+            parse_pylock(&entry(&format!("{sdist}{}", wheel("1.2.0"))), &exempt(&[]))
+                .unwrap()
+                .len(),
+            1
+        );
+        // Files of different releases cannot be described by one scan.
+        let err = parse_pylock(
+            &entry(&format!("{}{}", wheel("1.2.0"), wheel("1.1.0"))),
+            &exempt(&[]),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("pkg lists files of different versions"),
+            "{err}"
+        );
+        // No files at all (the old bare shape) stays unversioned, and an explicit version wins.
+        assert_eq!(
+            parse_pylock(&entry(""), &exempt(&[])).unwrap(),
+            [("pkg".to_string(), None)]
+        );
+        let explicit = format!(
+            "[[packages]]\nname = \"pkg\"\nversion = \"2.0.0\"\n{}",
+            wheel("2.0.0")
+        );
+        assert_eq!(
+            parse_pylock(&explicit, &exempt(&[])).unwrap()[0]
+                .1
+                .as_deref(),
+            Some("2.0.0")
+        );
+    }
+
+    #[test]
+    fn poetry_lock_entries_not_from_pypi_fail_closed() {
+        let entry = |source: &str| {
+            format!(
+                "[[package]]\nname = \"pkg\"\nversion = \"1.0.0\"\n\n{source}\n\n[package.dependencies]\nx = \"*\"\n"
+            )
+        };
+        for source in [
+            "[package.source]\ntype = \"legacy\"\nurl = \"https://nexus.corp.example/simple\"\nreference = \"corp\"",
+            "[package.source]\ntype = \"git\"\nurl = \"https://github.com/x/y.git\"\nreference = \"main\"\nresolved_reference = \"abc\"",
+            "[package.source]\ntype = \"url\"\nurl = \"https://evil.example/pkg-1.0.0.tar.gz\"",
+            "[package.source]\ntype = \"file\"\nurl = \"https://evil.example/pkg.whl\"",
+            "[package.source]\ntype = \"legacy\"",
+        ] {
+            let err = parse_poetry_lock(&entry(source), &exempt(&[])).expect_err(source);
+            assert!(
+                err.contains("pkg@1.0.0") && err.contains("do not come from PyPI"),
+                "{source}: {err}"
+            );
+        }
+        for source in [
+            "",
+            "[package.source]\ntype = \"legacy\"\nurl = \"https://pypi.org/simple\"\nreference = \"pypi\"",
+        ] {
+            assert_eq!(
+                pkgs_py(parse_poetry_lock(&entry(source), &exempt(&[])).unwrap()),
+                ["pkg@1.0.0"],
+                "{source}"
+            );
+        }
+        for source in [
+            "[package.source]\ntype = \"directory\"\nurl = \"../lib\"",
+            "[package.source]\ntype = \"directory\"\nurl = \".\"\ndevelop = true",
+            "[package.source]\ntype = \"file\"\nurl = \"dist/pkg-1.0.0.whl\"",
+        ] {
+            assert!(
+                parse_poetry_lock(&entry(source), &exempt(&[]))
+                    .unwrap()
+                    .is_empty(),
+                "{source}"
+            );
+        }
+        let private = entry(
+            "[package.source]\ntype = \"legacy\"\nurl = \"https://nexus.corp.example/simple\"",
+        );
+        assert_eq!(
+            pkgs_py(parse_poetry_lock(&private, &exempt(&["pkg"])).unwrap()),
+            ["pkg@1.0.0"]
+        );
+        // The source of one package never applies to the next.
+        let mixed = format!("{private}\n[[package]]\nname = \"ok\"\nversion = \"2.0.0\"\n");
+        let err = parse_poetry_lock(&mixed, &exempt(&[])).unwrap_err();
+        assert!(
+            err.contains("pkg@1.0.0") && !err.contains("ok@2.0.0"),
+            "{err}"
+        );
+    }
+
+    fn pkgs_py(packages: Vec<(String, String)>) -> Vec<String> {
+        packages
+            .into_iter()
+            .map(|(n, v)| format!("{n}@{v}"))
+            .collect()
+    }
+
+    #[test]
+    fn python_lockfiles_are_read_as_toml_so_no_spelling_hides_a_source() {
+        let evil = "https://evil.example/simple";
+        let uv = [
+            // quoted key, dotted key, sub-table, no spaces, single quotes, indented
+            format!(
+                "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\n\"source\" = {{ registry = \"{evil}\" }}\n"
+            ),
+            format!(
+                "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\nsource.registry = \"{evil}\"\n"
+            ),
+            format!(
+                "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\n[package.source]\nregistry = \"{evil}\"\n"
+            ),
+            format!(
+                "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\nsource={{registry=\"{evil}\"}}\n"
+            ),
+            format!(
+                "  [[package]]\n  name = \"p\"\n  version = \"1.0.0\"\n  source = {{ registry = '{evil}' }}\n"
+            ),
+        ];
+        for lock in &uv {
+            let err = parse_uv_lock(lock, &exempt(&[])).expect_err(lock);
+            assert!(err.contains("p@1.0.0"), "{lock}: {err}");
+        }
+        // Spelling without spaces must not drop the package either.
+        let nospace = "[[package]]\nname=\"p\"\nversion=\"1.0.0\"\nsource={registry=\"https://pypi.org/simple\"}\n";
+        assert_eq!(
+            pkgs_py(parse_uv_lock(nospace, &exempt(&[])).unwrap()),
+            ["p@1.0.0"]
+        );
+        let poetry = [
+            "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\n[[package.extra]]\na = 1\n[package.source]\ntype = \"git\"\nurl = \"https://evil.example/x\"\n",
+            "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\n[package.source]\ntype=\"git\"\nurl=\"https://evil.example/x\"\n",
+            "[[package]]\nname = \"p\"\nversion = \"1.0.0\"\nsource = { type = \"url\", url = \"https://evil.example/x.tgz\" }\n",
+        ];
+        for lock in poetry {
+            let err = parse_poetry_lock(lock, &exempt(&[])).expect_err(lock);
+            assert!(err.contains("p@1.0.0"), "{lock}: {err}");
+        }
+        // Not TOML, a package without a name, and a registry package without a version fail closed.
+        assert!(
+            parse_uv_lock("[[package]\nname =", &exempt(&[]))
+                .unwrap_err()
+                .contains("not valid TOML")
+        );
+        let multiline = "[[package]]\nname = \"p\"\nversion = \"1\"\nsource = {\n registry = \"https://evil.example\" }\n";
+        assert!(
+            parse_uv_lock(multiline, &exempt(&[]))
+                .unwrap_err()
+                .contains("not valid TOML")
+        );
+        assert!(
+            parse_uv_lock("[[package]]\nversion = \"1\"\n", &exempt(&[]))
+                .unwrap_err()
+                .contains("no name")
+        );
+        assert!(
+            parse_uv_lock("[[package]]\nname = \"p\"\n", &exempt(&[]))
+                .unwrap_err()
+                .contains("no locked version")
+        );
+        // A local project without a version (a dynamic version) is simply left out.
+        assert!(
+            parse_uv_lock(
+                "[[package]]\nname = \"me\"\nsource = { virtual = \".\" }\n",
+                &exempt(&[])
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn pylock_entries_not_from_pypi_fail_closed() {
+        let entry = |body: &str| {
+            format!(
+                "lock-version = \"1.0\"\n\n[[packages]]\nname = \"pkg\"\nversion = \"1.0.0\"\n{body}\n"
+            )
+        };
+        for body in [
+            "[packages.vcs]\ntype = \"git\"\nurl = \"https://github.com/x/y\"\ncommit-id = \"abc\"",
+            "[packages.archive]\nurl = \"https://evil.example/pkg.tar.gz\"",
+            "[packages.sdist]\nurl = \"https://evil.example/pkg-1.0.0.tar.gz\"",
+            "[[packages.wheels]]\nurl = \"https://evil.example/pkg-1.0.0-py3-none-any.whl\"",
+            "index = \"https://nexus.corp.example/simple\"",
+            "[[packages.wheels]]\nurl = \"https://files.pythonhosted.org/a.whl\"\n[[packages.wheels]]\nurl = \"https://evil.example/b.whl\"",
+        ] {
+            let err = parse_pylock(&entry(body), &exempt(&[])).expect_err(body);
+            assert!(
+                err.contains("pkg@1.0.0") && err.contains("do not come from PyPI"),
+                "{body}: {err}"
+            );
+        }
+        for body in [
+            "",
+            "index = \"https://pypi.org/simple\"\n[[packages.wheels]]\nurl = \"https://files.pythonhosted.org/packages/pkg-1.0.0-py3-none-any.whl\"",
+            "[packages.sdist]\nurl = \"https://files.pythonhosted.org/packages/pkg-1.0.0.tar.gz\"",
+        ] {
+            assert_eq!(
+                parse_pylock(&entry(body), &exempt(&[])).unwrap(),
+                [("pkg".to_string(), Some("1.0.0".to_string()))],
+                "{body}"
+            );
+        }
+        // The user's own code is left out; the old `[[package]]` spelling and a missing version still work.
+        for body in [
+            "[packages.directory]\npath = \"./lib\"",
+            "[packages.archive]\npath = \"./dist/pkg.whl\"",
+        ] {
+            assert!(
+                parse_pylock(&entry(body), &exempt(&[])).unwrap().is_empty(),
+                "{body}"
+            );
+        }
+        let old = "[[package]]\nname = \"a\"\nversion = \"1\"\n\n[[package]]\nname = \"b\"\n";
+        assert_eq!(
+            parse_pylock(old, &exempt(&[])).unwrap(),
+            [
+                ("a".to_string(), Some("1".to_string())),
+                ("b".to_string(), None)
+            ]
+        );
+        // An exempt package passes.
+        let private = entry("index = \"https://nexus.corp.example/simple\"");
+        assert_eq!(parse_pylock(&private, &exempt(&["pkg"])).unwrap().len(), 1);
     }
 
     #[test]
