@@ -1043,16 +1043,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 434 — Medium | `src/sandbox.rs` | ⚠️ Open
-
-**Summary:** The strace trace (`/out/gyrseek_trace_N.log`), strace's stderr, which also carries the install's own stderr (`/out/gyrseek_err_N.log`), and the artifact inventory all live on the host temp directory bind-mounted into the container. Their size depends on what the package under test does during the probe window (up to `probe_timeout_seconds` per probe). `trace_install_docker_matrix` reads the trace with `read_to_string`, so a package that makes millions of syscalls inflates both host disk and gyrseek's memory. Only the failed-install tail is bounded (64 KiB, FIXED #438).
-
-**Impact:** a denial of service against the scanner host, as a failed or slow scan. It does not hide behaviour, because a trace that cannot be read fails closed.
-
-**Fix direction:** cap the files (`ulimit -f` around the strace command needs care so strace's own trace write is not what hits the limit; a size-limited tmpfs for `/out` is simpler), read with a byte limit, and fail closed with a clear message when a trace exceeds it.
-
----
-
 ### Finding 447 — Medium | `src/sandbox.rs`, `src/parsing.rs` | ⚠️ Open
 
 **Summary:** The scanned artifact can differ from the one the real install uses, for the same package and version.
@@ -1172,13 +1162,57 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 461 — Medium | `src/sandbox.rs` | ⚠️ Open
+### Finding 462 — Low | `src/sandbox.rs` | ⚠️ Open
 
-**Summary:** A payload can fill the host disk through the /out bind mount during a batch.
+**Summary:** Trace data on the host is bounded per probe, not per batch.
 
-**Root cause:** `build_docker_run_args` bind-mounts the whole output directory for the container's lifetime and `--user root` + `strace -u gyrseek` leave `/out` writable for the payload wherever the mount does not enforce ownership. FIXED #411 stops the payload from changing what the scan reads, not from writing there.
+**Root cause:** `read_frames` writes every streamed file to a host temp directory and `collect_probe_traces` reads it later; only a single probe's size is capped.
 
-**Fix direction:** get the logs out without a long-lived writable host mount: run the batch without `-v`, keep the container (no `--rm`) until `docker cp` has copied `/gyrseek-trace`, then remove it; or limit the writable area with a size-limited volume.
+**Fix direction:** extract the signals of each probe as it arrives and discard the raw trace, or cap the total bytes written and fail closed with a message naming `GYRSEEK_TRACE_LIMIT`.
+
+
+---
+
+### Finding 463 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Trace tmpfs memory use and the tools the streaming needs.
+
+**Root cause:** The tmpfs is memory-backed and the matrix script relies on coreutils/BusyBox tools being in the scanner image.
+
+**Fix direction:** derive the trace limit from `GYRSEEK_MEM_LIMIT`; add a `command -v base64 df tr cut` check at the start of the script that exits with a clear message.
+
+
+---
+
+### Finding 464 — Medium | `src/sandbox.rs`, `src/scanning.rs` | ⚠️ Open
+
+**Summary:** Host memory use is bounded by the trace limit, not small.
+
+**Root cause:** FIXED #434 bounds what the container can produce and what `read_frames` writes, but the signal extraction in `scanning.rs` takes a `&str` of the whole trace.
+
+**Fix direction:** make the extractors take a reader and keep only the signals (executables, network endpoints, file reads, git clones) per probe; until then keep the default as small as the heaviest legitimate install allows.
+
+
+---
+
+### Finding 465 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** A flooding probe is blocked late.
+
+**Root cause:** The trace limit is checked once, after the install and its artifact scan, by `gyrseek_publish`.
+
+**Fix direction:** run a small watcher beside the probe that checks `df` every second and, below the threshold, kills the scanner user's processes (the existing `KILL_PAYLOAD_PROCESSES_STEP`) and leaves the limit marker.
+
+
+---
+
+### Finding 466 — Low | `src/lib.rs`, `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Trace limit and probe timeout cannot be set per package.
+
+**Root cause:** `PolicyConfig` carries one `trace_limit` and one `probe_timeout_seconds` for the whole batch, and the matrix script gives every probe the same tmpfs.
+
+**Fix direction:** pass a per-probe limit (the tmpfs is shared by the batch, so size it for the largest configured value and compare each probe's usage with its own limit in `gyrseek_publish`).
 
 
 ---

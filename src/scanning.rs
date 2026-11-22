@@ -39,6 +39,9 @@ pub(crate) struct PolicyConfig {
     pub minimum_release_age_package: Option<usize>,
     /// Wall-clock limit (seconds) for one install probe; a probe that exceeds it blocks the scan.
     pub probe_timeout_seconds: usize,
+    /// Size of the sandbox's trace tmpfs (`512m`); `None` means the default. The
+    /// `GYRSEEK_TRACE_LIMIT` environment variable overrides it.
+    pub trace_limit: Option<String>,
     /// Python minor version (`3.11`) for the Python sandbox image; `None` means use
     /// `.python-version`, then the default.
     pub python_version: Option<String>,
@@ -71,6 +74,7 @@ impl Default for PolicyConfig {
             release_burst_window_hours: 24,
             minimum_release_age_package: None,
             probe_timeout_seconds: crate::sandbox::DEFAULT_PROBE_TIMEOUT_SECS,
+            trace_limit: None,
             python_version: None,
             node_version: None,
             process_exec_allowlist: HashMap::new(),

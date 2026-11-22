@@ -20,21 +20,23 @@ Docker is the sandbox. Host mode, which has no isolation and only detects, must 
 
 ### Unprivileged payload integrity
 
-The traced install payload runs as an unprivileged in-container user (`strace -u gyrseek`). While a batch runs, every per-probe file (the strace log, strace's stderr, the artifact inventory, the exit code and the timeout marker) is written to `/gyrseek-trace`, a directory on the container's own filesystem created with mode 700 and owned by root, so the payload can neither read, write nor delete it (checked on macOS Docker Desktop and, in CI, on Linux; WSL2 is not tested). A shell `EXIT` trap, run as root after the last probe (and also when the script aborts), empties `/out` and copies the files there. Until then nothing is written to the `/out` bind mount, so a payload cannot rewrite its own events, an earlier probe's trace (which would let a candidate forge its baselines) or plant a symlink for the copy to follow. Deleting or truncating a file leaves the empty-trace check to fail closed.
+The traced install payload runs as an unprivileged in-container user (`strace -u gyrseek`). **Nothing from the host is mounted into the container.** While a probe runs, its files (the strace log, strace's stderr, the artifact inventory, the exit code and the timeout marker) are written to `/gyrseek-trace`, a root-only (mode 700) tmpfs of a fixed size (`GYRSEEK_TRACE_LIMIT`, default `1024m`), so the payload can neither read, write nor delete them and cannot fill the host's disk. When the probe is done, root prints each file on the container's stdout (`GYRSEEK-FILE <name>`, base64 lines, `GYRSEEK-END`) and deletes it, so the tmpfs only ever holds the probe that is running; gyrseek reads the stream line by line (no line over 1 KiB inside a frame, no file over the limit, names checked against what the script writes) and writes the files to its own temporary directory. Only root writes to the container's stdout (the payload's stdout goes to `/dev/null` and its stderr to a log), so a payload cannot forge a frame. A frame that does not end, or any malformed data, stops the container and fails the scan.
 
-This replaced writing the logs straight into `/out` (OPEN_FINDINGS #411, now fixed): on Docker Desktop for macOS the bind mount does not enforce in-container ownership, and a payload (uid 1000, no capabilities) appended to and deleted a root-owned trace. `just test-trace-integrity` runs a real container with a payload that tries to write, truncate, delete and symlink over the traces (also an earlier probe's and the trace directory itself) and checks that every trace and marker arrives intact; with the logs put back in `/out` that test fails on macOS. The logs now use the container's writable layer, which a package could fill (OPEN_FINDINGS #434, bounded by the container's disk, not the host's temp directory). The payload can still write to the `/out` bind mount while it runs (OPEN_FINDINGS #461), which no longer affects what the scan reads.
+If a probe fills the tmpfs (under 1% or 16 KiB left), its trace is incomplete: the script prints `GYRSEEK-LIMIT <idx>` instead of its files and that package is blocked on its own, with a message naming `GYRSEEK_TRACE_LIMIT` (the next probe gets an empty tmpfs). The single-probe fallback has no tmpfs; gyrseek reads its stderr up to the same size and blocks the probe if it is exceeded. Traces in practice are a few MB (an npm install) to about 40 MB (a failing source build of a large Python package). The tmpfs counts against the container's memory limit (`GYRSEEK_MEM_LIMIT`).
+
+This replaced writing the logs straight into a bind-mounted `/out` (OPEN_FINDINGS #411, #434 and #461, all fixed): on Docker Desktop for macOS that mount does not enforce in-container ownership, so a payload (uid 1000, no capabilities) deleted and rewrote its trace and an earlier probe's, and could write as much as it liked to the host's disk. `just test-trace-integrity` runs a real container with a payload that tries to write, truncate, delete and symlink over the traces (also an earlier probe's and the directory itself) and to print a forged frame on stdout, next to a failing probe and a timed-out one, and a payload that floods its trace; with the logs put back in a bind mount the first test fails on macOS. It checks every trace and marker arrives intact and that only the flooding probe is blocked.
 
 ### Probe batching
 
 The Docker backend batches multiple package-version probes (current + baselines for each package) into a single container session while preserving per-package, per-version trace attribution.
 
-Each probe writes its own trace, strace stderr and artifact inventory to `/out`. The probes share one container, so `/work` and `/tmp` are wiped after each probe's artifact scan; otherwise a later probe's scan would list files left by earlier ones. The wipe never touches `/out`. Leftover background processes are not killed: `strace -f` waits for the traced process tree, so they show up as a hang, which `probe_timeout_seconds` now turns into a blocked scan (FIXED #413), rather than as noise in a later probe.
+Each probe writes its own trace, strace stderr and artifact inventory to the trace tmpfs and streams them out when it is done. The probes share one container, so `/work` and `/tmp` are wiped after each probe's artifact scan; otherwise a later probe's scan would list files left by earlier ones. The wipe never touches the trace directory. Leftover background processes are not killed: `strace -f` waits for the traced process tree, so they show up as a hang, which `probe_timeout_seconds` now turns into a blocked scan (FIXED #413), rather than as noise in a later probe.
 
 ### strace configuration
 
 - `-s 4096 -v -xx` — long argv strings (git clone URLs, etc.) and socket addresses are not truncated from the default 32 bytes.
 - `-f` — follows child processes (default since a package manager's install step can spawn subprocesses).
-- stderr captured per-probe to `/out/gyrseek_err_N.log` (not discarded).
+- stderr captured per-probe to `gyrseek_err_N.log` in the trace tmpfs and streamed out (not discarded).
 - `|| true` is kept only so one failing baseline install does not abort sibling probes. A genuine attach failure produces a blank trace, which the reader turns into a hard error.
 
 ## Seccomp
@@ -94,7 +96,7 @@ Without these, gyrseek emits a warning and falls back to Docker's default AppArm
 
 - **Outbound networking** (TCP, UDP, IPv4, IPv6, netlink) — package registries and DNS
 - **ptrace** — cross-UID tracing for strace
-- **Filesystem access** — `/work` (install probes), `/out` (trace logs), `/tmp` (temp), `/var` (apt cache), plus standard paths for binaries, libraries, and configuration
+- **Filesystem access** — `/work` (install probes), `/gyrseek-trace` (trace logs, root only), `/tmp` (temp), `/var` (apt cache), plus standard paths for binaries, libraries, and configuration
 
 ### Setup
 
@@ -155,10 +157,10 @@ named the way it is.
 ### Containment — mostly neither profile
 
 The isolation that limits blast radius during a probe comes from the container boundary, not from
-either profile: an ephemeral root filesystem, a tmpfs `/work`, no host mounts except `/out` (written only after the last probe), an unprivileged payload via `strace -u gyrseek`, `no-new-privileges`, and — on macOS and
+either profile: an ephemeral root filesystem, a tmpfs `/work`, no host mounts at all, an unprivileged payload via `strace -u gyrseek`, `no-new-privileges`, and — on macOS and
 WSL2 — an additional VM boundary. AppArmor adds path-based `deny` rules *inside* that already
-ephemeral container, where there is little of value to protect: the one host-visible path is `/out`,
-and that is guarded by root ownership rather than by MAC.
+ephemeral container, where there is little of value to protect: no host path is mounted, and the
+traces are guarded by a root-only tmpfs rather than by MAC.
 
 ### What this means for supply-chain malware
 
@@ -233,7 +235,7 @@ Docker mode is not "weaker on macOS because it lacks seccomp and AppArmor". Secc
 | Seccomp profile (blocks `io_uring`) | Enforced by the host kernel | Enforced by Docker Desktop's Linux VM kernel | Documented |
 | AppArmor | Opt-in (`GYRSEEK_DOCKER_APPARMOR_PROFILE=true`), needs `apparmor-utils` | Unavailable (no host `apparmor_parser`, VM kernel has no AppArmor LSM). Not a coverage gap, since it is off by default on Linux too | Documented |
 | Payload privileges | Unprivileged user, no capabilities, `no-new-privileges` | Same (payload `CapEff` 0, no `docker.sock`) | Measured on macOS, same flags on Linux |
-| Trace integrity | Traces live in a root-only directory in the container and reach `/out` after the last probe | Same (the bind mount is not used while the payload runs) | Measured on macOS (`just test-trace-integrity`); the CI Docker job runs it on Linux |
+| Trace integrity | Traces live in a root-only, size-limited tmpfs and reach the host on stdout, with no host mount | Same | Measured on macOS (`just test-trace-integrity`); the CI Docker job runs it on Linux |
 | Container escape blast radius | The container shares the host kernel, so an escape lands on the host | An escape lands in Docker Desktop's VM first, which is an extra boundary | Documented, not measured |
 | `noexec` on `/work` and `/tmp` | Same | Works there, but a dropped binary can still run from `/home/gyrseek` or `/var/tmp` | Measured on macOS |
 | Network egress during the probe | Open | Open. Private-address reach is unmeasured on both (OPEN_FINDINGS #412) | Measured (open), not tested (private addresses) |
@@ -393,6 +395,7 @@ If scans regress:
 |---|---|---|
 | `GYRSEEK_CONFIG` | `gyrseek.yaml` | Path to the policy file (overridden by `--config`/`-c`). |
 | `GYRSEEK_MEM_LIMIT` | `2g` | Container `--memory` and the size of the `/work` tmpfs. |
+| `GYRSEEK_TRACE_LIMIT` | `1024m` | Overrides `trace_limit` in `gyrseek.yaml`. Size of the root-only tmpfs that holds one probe's logs, and so the largest trace accepted for a probe; a probe that fills it is blocked. Counts against the memory limit. |
 | `GYRSEEK_MAX_PROCESSES` | `256` | Container `--pids-limit`. `GYRSEEK_PIDS_LIMIT` is accepted as a fallback. |
 | `GYRSEEK_DOCKER_SECCOMP_PROFILE` | — | Deprecated and ignored (a warning is printed). Use `--danger-disable-seccomp`. |
 | `GYRSEEK_DOCKER_APPARMOR_PROFILE` | `false` | Boolean toggle for embedded AppArmor profile. Requires `apparmor-utils` + prebuilt scanner image on Linux. Defaults to `false` because prerequisites are not always met. |
