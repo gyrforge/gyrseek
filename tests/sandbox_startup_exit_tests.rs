@@ -1,10 +1,12 @@
 //! A sandbox that cannot start must stop gyrseek with exit code 1 and a message naming the
 //! cause, before any registry lookup. These run the real binary with a fake `docker` script, so they need no Docker installed.
 
+mod common;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 /// Writes an executable `#!/bin/sh` script `name` with `body` into `dir`.
 fn fake_exe(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
@@ -15,7 +17,7 @@ fn fake_exe(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
 }
 
 fn run_gyrseek(envs: &[(&str, &Path)]) -> (Output, String) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_gyrseek"));
+    let mut cmd = common::gyrseek();
     cmd.args(["pip", "install", "six"]);
     for (key, value) in envs {
         cmd.env(key, value);
@@ -57,7 +59,7 @@ fn docker_daemon_not_running_exits_1_with_a_hint() {
 fn unscanned_passthrough_does_not_initialize_the_sandbox() {
     let dir = tempfile::tempdir().unwrap();
     fake_exe(dir.path(), "uv", "exit 0");
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["uv", "venv"])
         .env("PATH", dir.path())
         .output()
@@ -75,7 +77,7 @@ fn unscanned_passthrough_does_not_initialize_the_sandbox() {
 #[test]
 fn gyrseek_sandbox_env_var_is_ignored() {
     let empty_path = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["pip", "install", "six"])
         .env("GYRSEEK_SANDBOX", "host")
         .env("PATH", empty_path.path())

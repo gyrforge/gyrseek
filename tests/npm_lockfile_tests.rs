@@ -1,9 +1,10 @@
+mod common;
+
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 fn run(dir: &Path, args: &[&str]) -> (Option<i32>, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(args)
         .current_dir(dir)
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
@@ -208,7 +209,7 @@ fn empty_or_unparseable_lockfiles_fail_closed_instead_of_scanning_nothing() {
 }
 
 fn run_with_stderr(dir: &Path, args: &[&str]) -> (Option<i32>, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(args)
         .current_dir(dir)
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")

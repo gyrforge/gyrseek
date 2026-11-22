@@ -1,7 +1,8 @@
+mod common;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 
 /// Creates a fake executable at `dir/name` that exits with `exit_code`.
 fn fake_binary(dir: &Path, name: &str, exit_code: u8) {
@@ -27,7 +28,7 @@ fn prepend_path(dir: &Path) -> String {
 fn forwarding_a_missing_host_binary_fails_closed() {
     let dir = tempfile::tempdir().unwrap();
     // Restrict PATH to only the empty temp dir so no real `uv` is reachable.
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["uv", "venv"])
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
         .env("PATH", dir.path())
@@ -55,7 +56,7 @@ fn forwarding_propagates_host_nonzero_exit_status() {
     let dir = tempfile::tempdir().unwrap();
     fake_binary(dir.path(), "uv", 42);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["uv", "venv"])
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
         .env("PATH", prepend_path(dir.path()))
@@ -76,7 +77,7 @@ fn forwarding_preserves_host_success_exit_status() {
     let dir = tempfile::tempdir().unwrap();
     fake_binary(dir.path(), "uv", 0);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["uv", "venv"])
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
         .env("PATH", prepend_path(dir.path()))

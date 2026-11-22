@@ -1928,3 +1928,15 @@ only.
 ### Finding 446: Download URL checked by host, not by package
 - **Root Cause**: `lock_url_source` accepted any URL on a registry host, so a lockfile entry could name one package and download the file of another from the same trusted host. Python index and URL fields without a `://` were classed as local paths.
 - **Fix**: `npm_tarball_matches` and `python_artifact_matches` compare the URL's file to the entry; `python_url_source` requires a scheme unless the value is clearly a path. Covered by unit tests and `tests/lockfile-guards.sh`.
+
+### Finding 449: `uv sync` not frozen to the scanned lockfile
+- **Root Cause**: `forward_pinned_command` froze only npm and pnpm lockfile installs. `uv sync` re-locks when `uv.lock` is out of date with `pyproject.toml`, and `--upgrade` flags choose new versions, so the install could differ from the lockfile gyrseek scanned. Poetry already errors on a stale lockfile.
+- **Fix**: `freeze_uv_sync` adds `--locked` (uv then fails rather than re-locking) unless `--locked` or `--frozen` was typed, and refuses upgrade flags before the scan. The new `tests/frozen_forward_tests.rs` also covers the first end-to-end check of what is forwarded for `npm ci` and `pnpm --frozen-lockfile`.
+
+### Finding 430: Flag values read as packages
+- **Root Cause**: `npm_positional_indexed` treated every non-flag argument as a package, including the value of `--workspace`, `--registry` and similar flags.
+- **Fix**: per-manager lists of flags that always take a value (`NPM_VALUE_FLAGS`, `PNPM_VALUE_FLAGS`); a boolean flag must never be added to them. Found while testing #445: `npm ci --registry https://x/` was forwarded without being scanned.
+
+### Finding 445: Index and registry redirects
+- **Root Cause**: The sandbox always probes the public package, while the forwarded install follows the user's own package-manager configuration, which can name another index.
+- **Fix**: `index_settings::refusal` (see AGENTS.md) refuses a redirect to any host that is not public or listed in `trusted_index_hosts`, before anything is scanned. The project `.npmrc` is found from the project root when gyrseek runs in a subdirectory, and the direct-forward path for only non-registry specs is checked too.

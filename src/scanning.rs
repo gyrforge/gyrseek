@@ -31,6 +31,9 @@ pub(crate) struct PolicyConfig {
     /// served from a private index (e.g. Nexus) that gyrseek's open-source
     /// registry lookups cannot resolve, so scanning them only produces noise.
     pub internal_package_exemptions: HashSet<String>,
+    /// Hosts, besides the public registry, that a package-manager index or registry setting may
+    /// point at (a mirror of the public registry that the operator trusts).
+    pub trusted_index_hosts: HashSet<String>,
     pub release_burst_threshold: Option<usize>,
     pub release_burst_window_hours: usize,
     pub minimum_release_age_package: Option<usize>,
@@ -63,6 +66,7 @@ impl Default for PolicyConfig {
             min_baseline_age_hours_by_package: HashMap::new(),
             new_package_exemptions: HashMap::new(),
             internal_package_exemptions: HashSet::new(),
+            trusted_index_hosts: HashSet::new(),
             release_burst_threshold: None,
             release_burst_window_hours: 24,
             minimum_release_age_package: None,

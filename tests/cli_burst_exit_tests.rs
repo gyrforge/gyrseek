@@ -1,5 +1,6 @@
+mod common;
+
 use std::io::Write;
-use std::process::Command;
 
 use tempfile::NamedTempFile;
 
@@ -7,7 +8,7 @@ fn run_with_config(config_yaml: &str) -> std::process::Output {
     let mut cfg = NamedTempFile::new().expect("temp config should be created");
     write!(cfg, "{}", config_yaml).expect("config write should succeed");
 
-    Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    common::gyrseek()
         .arg("npm")
         .arg("install")
         .arg("left-pad")
@@ -22,7 +23,7 @@ fn run_with_config_and_env(config_yaml: &str, extra_env: &[(&str, &str)]) -> std
     let mut cfg = NamedTempFile::new().expect("temp config should be created");
     write!(cfg, "{}", config_yaml).expect("config write should succeed");
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_gyrseek"));
+    let mut cmd = common::gyrseek();
     cmd.arg("npm")
         .arg("install")
         .arg("left-pad")
@@ -95,7 +96,7 @@ fn new_package_exemptions_map_format_loaded_successfully() {
     write!(cfg, "new_package_exemptions:\n  left-pad: \"1.0.0\"\n")
         .expect("config write should succeed");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .arg("npm")
         .arg("install")
         .arg("left-pad")
@@ -125,7 +126,7 @@ fn new_package_exemptions_list_format_rejected_with_hard_error() {
     let mut cfg = NamedTempFile::new().expect("temp config should be created");
     write!(cfg, "new_package_exemptions:\n  - left-pad\n").expect("config write should succeed");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .arg("npm")
         .arg("install")
         .arg("left-pad")

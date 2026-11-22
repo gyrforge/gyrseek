@@ -113,6 +113,11 @@ version = "1.16.0"
 type = "git"
 url = "https://github.com/x/y"' pip sync pylock.toml
 
+refused "npm: --registry <url> is not read as a package" "trusted_index_hosts" npm package-lock.json \
+  "$(npm_lock left-pad 1.3.0 https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz)" ci --registry https://nexus.corp.example/npm/
+refused "pip: index on another host" "trusted_index_hosts" pip unused.txt "x" \
+  install six==1.16.0 --index-url https://nexus.corp.example/simple
+
 # What the frozen forward relies on: npm itself refuses a lockfile that disagrees with package.json
 # (and says why), and accepts one that agrees, so a failure for another reason is not mistaken for
 # the refusal. A local `file:` dependency keeps both runs offline.

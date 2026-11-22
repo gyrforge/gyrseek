@@ -1,7 +1,7 @@
-use std::process::Command;
+mod common;
 
 fn run(args: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(args)
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
         .env("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0")

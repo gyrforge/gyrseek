@@ -1,8 +1,11 @@
-use std::fs;
+mod common;
+
 use std::process::Command;
 
+use std::fs;
+
 fn pnpm_command(args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_gyrseek"));
+    let mut command = common::gyrseek();
     command
         .args(args)
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
