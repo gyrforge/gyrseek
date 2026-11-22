@@ -298,7 +298,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The advisory database fetch is the usual flake, so a failed audit is retried twice
+      # (three attempts in all). A step cannot loop over an action, hence the copies.
       - name: Audit dependencies
+        id: audit1
+        continue-on-error: true
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ github.token }}
+
+      - name: Audit dependencies (retry 1)
+        id: audit2
+        if: steps.audit1.outcome == 'failure'
+        continue-on-error: true
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ github.token }}
+
+      - name: Audit dependencies (retry 2)
+        if: steps.audit1.outcome == 'failure' && steps.audit2.outcome == 'failure'
         uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ github.token }}

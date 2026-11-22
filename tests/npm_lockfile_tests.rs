@@ -207,24 +207,72 @@ fn empty_or_unparseable_lockfiles_fail_closed_instead_of_scanning_nothing() {
     assert!(out.contains("lists no registry packages"), "{out}");
 }
 
+fn run_with_stderr(dir: &Path, args: &[&str]) -> (Option<i32>, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+        .args(args)
+        .current_dir(dir)
+        .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
+        .env("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0")
+        .output()
+        .expect("gyrseek process should run");
+    (
+        output.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ),
+    )
+}
+
+const V1_LOCK_WITH_GIT: &str = r#"{"lockfileVersion":1,"dependencies":{
+    "left-pad":{"version":"1.3.0","resolved":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"},
+    "is-odd":{"version":"3.0.1","resolved":"https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz","dependencies":{
+        "is-number":{"version":"6.0.0","resolved":"https://registry.npmjs.org/is-number/-/is-number-6.0.0.tgz"}}},
+    "from-git":{"version":"github:user/repo#abc"}}}"#;
+
 #[test]
-fn an_old_v1_lockfile_and_a_lockfile_with_git_sources_are_counted_correctly() {
+fn a_lockfile_entry_that_is_not_from_the_npm_registry_fails_closed() {
     let dir = tempfile::tempdir().expect("temp dir");
+    fs::write(dir.path().join("package-lock.json"), V1_LOCK_WITH_GIT).unwrap();
+    let (code, out) = run_with_stderr(dir.path(), &["npm", "ci"]);
+    assert_eq!(code, Some(1));
+    assert!(
+        out.contains("from-git@github:user/repo#abc")
+            && out.contains("internal_package_exemptions"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("Testing"),
+        "nothing is scanned when the lockfile is refused: {out}"
+    );
+
+    // A look-alike host is refused as well.
     fs::write(
         dir.path().join("package-lock.json"),
-        r#"{"lockfileVersion":1,"dependencies":{
-            "left-pad":{"version":"1.3.0","resolved":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"},
-            "is-odd":{"version":"3.0.1","resolved":"https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz","dependencies":{
-                "is-number":{"version":"6.0.0","resolved":"https://registry.npmjs.org/is-number/-/is-number-6.0.0.tgz"}}},
-            "from-git":{"version":"github:user/repo#abc"}}}"#,
+        r#"{"lockfileVersion":3,"packages":{"node_modules/x":{"version":"1.0.0","resolved":"https://registry.npmjs.org@evil.example/x/-/x-1.0.0.tgz"}}}"#,
+    )
+    .unwrap();
+    let (code, out) = run_with_stderr(dir.path(), &["npm", "install"]);
+    assert_eq!(code, Some(1));
+    assert!(
+        out.contains("x@1.0.0") && out.contains("do not come from the npm registry"),
+        "{out}"
+    );
+}
+
+#[test]
+fn an_exempt_package_lets_an_old_v1_lockfile_with_a_git_source_be_scanned() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    fs::write(dir.path().join("package-lock.json"), V1_LOCK_WITH_GIT).unwrap();
+    fs::write(
+        dir.path().join("gyrseek.yaml"),
+        "internal_package_exemptions:\n  - from-git\n",
     )
     .unwrap();
     let (code, out) = run(dir.path(), &["npm", "ci"]);
-    assert_eq!(code, Some(1));
-    assert!(
-        out.contains("Testing 3 package(s)"),
-        "git source skipped, the rest counted: {out}"
-    );
+    assert_eq!(code, Some(1), "no Docker, so the scan itself fails closed");
+    assert!(out.contains("Testing 4 package(s)"), "{out}");
 }
 
 #[test]

@@ -643,18 +643,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 269 — High | `parsing.rs:346-348,506-507` | ⚠️ Open
-
-**Summary:** TOCTOU: requirements files and package.json are read eagerly at parse time; the sandbox and forwarded command use the live filesystem.
-
-**Root cause:** `parse_pip_install_packages_from_args` reads `-r` requirement files at parse time; `parse_npm_install_packages_from_args` reads `package.json` at parse time. The sandbox probe and the forwarded install command execute later against the live filesystem. A file swap between parse and install causes the scanned package list to differ from what actually gets installed.
-
-**Failure scenario:** An attacker with write access to the working directory swaps `requirements.txt` after gyrseek reads it but before the forwarded `pip install` runs, causing an unscanned package to be installed.
-
-**Fix direction:** Either snapshot the file contents at parse time and pass them to the sandbox and forwarder, or re-read the files immediately before forwarding and compare against the parsed snapshot, failing closed on any diff.
-
----
-
 ### Finding 270 — Medium | `scanning.rs:1291-1555` | ⚠️ Open
 
 **Summary:** Symlink traversal bypasses sensitive-file-read detection: `open("innocent")` where "innocent" is a symlink to `~/.aws/credentials` is not flagged.
@@ -931,18 +919,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 393 — Medium | `src/scanning.rs` | ⚠️ Open
-
-**Summary:** `filter_allowlisted_git_clone_signatures` matches only the URL component of a git clone signature, silently discarding all flags. A git clone allowlist entry for `https://github.com/legit/repo.git` also permits the same URL cloned with `--recurse-submodules` (pulls a malicious submodule), `--config core.gitProxy=/evil/proxy` (routes traffic through an attacker-controlled proxy), `--branch malicious`, or `--depth 1` variants.
-
-**Root cause:** The filter splits the signature on `|`, takes only index 0 (the URL via `.split('|').next()`), trims and lowercases it, then checks membership in the normalized allowlist. The remainder of the signature — the pipe-separated flags captured by `extract_git_clone_signatures` — is discarded before comparison.
-
-**Failure scenario:** An operator adds `git_clone_allowlist: { evil-pkg: ["https://github.com/legit/repo.git"] }` after reviewing a baseline that clones without flags. A compromised new version clones the same URL with `--recurse-submodules` pointing to a malicious submodule. The allowlist matches (URL is identical), the clone proceeds, and the malicious submodule is pulled without triggering an anomaly.
-
-**Fix direction:** Either (a) require exact signature match (URL + all flags must match the stored allowlist entry, requiring operators to specify full signatures like `"https://github.com/legit/repo.git|--recurse-submodules"`), or (b) treat any flag change as a new signature requiring explicit re-allowlisting. Option (a) is more operator-friendly for known-good flag combinations; option (b) is stricter and fail-closed.
-
----
-
 ### Finding 388 — Medium | `src/lib.rs` | ⚠️ Open
 
 **Summary:** An empty per-package IP or domain value list (`- my-pkg: []`) silently creates a dead `HashSet` entry in `ip_allowlist` or `domain_allowlist`. The operator believes protection is active for that package but no entries are stored.
@@ -1079,26 +1055,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 431 — High | `src/parsing.rs` | ⚠️ Open
-
-**Summary:** For a no-argument `npm install`/`npm i`/`pnpm install`, gyrseek scans the exact versions in the lockfile, but the forwarded command is not frozen. npm re-resolves any direct dependency whose locked version no longer satisfies `package.json`, and may rewrite the lockfile. Reproduced with npm 11.20: with `package-lock.json` pinning `is-odd 2.0.0` and `package.json` requiring `^3.0.1`, `npm install --dry-run` reports `add is-odd 3.0.1`, a version gyrseek never scanned. `npm ci` fails instead of re-resolving, so it is not affected. Found in the PR #65 review (CodeRabbit).
-
-**Impact:** a lockfile edited, or left stale, so that it disagrees with the manifest makes the scan cover versions other than the installed ones. An attacker who can change `package.json` in a pull request can pick the installed version while the lockfile keeps showing a clean one.
-
-**Fix direction:** check each direct dependency's locked version against its `package.json` range (the `semver` crate is available) and fail closed on any mismatch with a message pointing at `npm install --package-lock-only` first; or forward a frozen install (`pnpm install --frozen-lockfile`, `npm ci`) so a mismatch is an error instead of a silent re-resolve.
-
----
-
-### Finding 432 — High | `src/parsing.rs` | ⚠️ Open
-
-**Summary:** `parse_npm_lock_packages_from_content` treats an entry as a registry download when `resolved` is empty or starts with `http`, then returns only `(name, version)`. The sandbox scans the public registry's package of that name and version, but `npm ci` installs the lockfile's `resolved` URL, checked against the lockfile's own `integrity`. A pull request that changes one entry to `https://attacker.example/x.tgz` (with a matching integrity hash) installs attacker code that was never scanned. For `pnpm-lock.yaml`, entries whose `resolution` has `tarball`, `type`, `repo` or `commit` are skipped silently, so those sources install unscanned. Found in the PR #65 review (CodeRabbit).
-
-**Impact:** this is the classic lockfile-injection attack, and the new lockfile scanning makes a clean report look authoritative for it.
-
-**Fix direction:** accept only the registry host(s) that were scanned (`registry.npmjs.org`), and fail closed on any entry resolved from elsewhere or from a git/tarball source, naming the entries. `internal_package_exemptions` is the natural escape for private registries, applied before the failure.
-
----
-
 ### Finding 433 — Medium | `src/sandbox.rs` | ⚠️ Open
 
 **Summary:** In host mode the probe is `timeout -k 5 N strace … ` with stderr piped back to `Command::output()`. GNU `timeout` returns when `strace` exits, so its SIGKILL timer does not reach descendants that `strace` detached on SIGTERM, and a descendant that keeps the stderr pipe open keeps `output()` waiting for end-of-file indefinitely. Docker mode is not affected: the container is the process boundary and the cleanup loop covers survivors. Not reproduced here because macOS has no `strace`.
@@ -1116,5 +1072,17 @@ if next.starts_with('-') {
 **Impact:** a denial of service against the scanner host, as a failed or slow scan. It does not hide behaviour, because a trace that cannot be read fails closed.
 
 **Fix direction:** cap the files (`ulimit -f` around the strace command needs care so strace's own trace write is not what hits the limit; a size-limited tmpfs for `/out` is simpler), read with a byte limit, and fail closed with a clear message when a trace exceeds it.
+
+---
+
+---
+
+### Finding 442 — High | `src/parsing.rs` | ⚠️ Open
+
+**Summary:** Python lockfile entries from a non-PyPI source are scanned as the PyPI package of the same name.
+
+**Root cause:** `parse_uv_lock_packages_from_content` and the poetry parser only exclude local/editable sources; a `source = { registry = "https://other" }`, `git` or `url` entry is treated as a PyPI package.
+
+**Fix direction:** mirror the npm rule from #432: accept only the PyPI index, fail closed naming each other entry, allow it only for packages in `internal_package_exemptions`.
 
 ---

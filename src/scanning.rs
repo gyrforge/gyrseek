@@ -1209,6 +1209,101 @@ fn executable_basename(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase()
 }
 
+/// `git clone` options that take a separate value. Their value must not be mistaken for the
+/// repository (`git clone --branch main URL`).
+const GIT_CLONE_VALUE_OPTIONS: &[&str] = &[
+    "-b",
+    "--branch",
+    "-o",
+    "--origin",
+    "-c",
+    "--config",
+    "-u",
+    "--upload-pack",
+    "-j",
+    "--jobs",
+    "--depth",
+    "--shallow-since",
+    "--shallow-exclude",
+    "--filter",
+    "--reference",
+    "--reference-if-able",
+    "--template",
+    "--separate-git-dir",
+    "--server-option",
+    "--bundle-uri",
+    "--ref-format",
+    "--revision",
+];
+
+/// Long `git clone` options that make a clone run something or read something from elsewhere:
+/// `--config` can set `core.sshCommand`, `core.fsmonitor` or a proxy, `--upload-pack` runs a
+/// command, `--template` brings hooks, `--reference` borrows objects from a path. They are part of
+/// the signature, so a version that starts using one is a new behaviour, and a plain URL allowlist
+/// entry does not cover them. Short forms: `-c` is `--config`, `-u` is `--upload-pack`.
+fn git_clone_risky_long(name: &str) -> Option<&'static str> {
+    [
+        "config",
+        "upload-pack",
+        "template",
+        "reference-if-able",
+        "reference",
+    ]
+    .into_iter()
+    .find(|risky| name.strip_prefix("--") == Some(risky))
+}
+
+/// What a clone argument contributes: a risky option and its value, the repository, or nothing.
+/// `tokens` is advanced past a separate value, so `--branch main URL` finds `URL`, and `-ccore.x=y`
+/// (an attached short value, possibly in a cluster such as `-qc k=v`) is read like `-c core.x=y`.
+fn git_clone_argument(
+    token: &str,
+    tokens: &mut std::slice::Iter<'_, String>,
+) -> (Option<String>, Option<String>) {
+    let value_of = |inline: Option<&str>, tokens: &mut std::slice::Iter<'_, String>| {
+        inline
+            .map(str::to_string)
+            .or_else(|| tokens.next().cloned())
+            .unwrap_or_default()
+    };
+    if let Some(long) = token.strip_prefix("--") {
+        let (name, inline) = match long.split_once('=') {
+            Some((n, v)) => (n, Some(v)),
+            None => (long, None),
+        };
+        if let Some(risky) = git_clone_risky_long(&format!("--{name}")) {
+            return (Some(format!("{risky}:{}", value_of(inline, tokens))), None);
+        }
+        if inline.is_none() && GIT_CLONE_VALUE_OPTIONS.contains(&token) {
+            tokens.next(); // its value
+        }
+        return (None, None);
+    }
+    if token.len() > 1 && token.starts_with('-') {
+        // A cluster of short options; the first one that takes a value ends it.
+        for (at, flag) in token.char_indices().skip(1) {
+            let rest = &token[at + flag.len_utf8()..];
+            let inline = (!rest.is_empty()).then_some(rest);
+            match flag {
+                'c' => return (Some(format!("config:{}", value_of(inline, tokens))), None),
+                'u' => {
+                    return (
+                        Some(format!("upload-pack:{}", value_of(inline, tokens))),
+                        None,
+                    );
+                }
+                'b' | 'o' | 'j' => {
+                    value_of(inline, tokens);
+                    return (None, None);
+                }
+                _ => {}
+            }
+        }
+        return (None, None);
+    }
+    (None, Some(token.to_string()))
+}
+
 fn extract_git_clone_signatures(trace: &str) -> HashSet<String> {
     let mut signatures = HashSet::new();
 
@@ -1226,25 +1321,53 @@ fn extract_git_clone_signatures(trace: &str) -> HashSet<String> {
             continue;
         };
 
+        // Kept in the order given: for a repeated option the last one wins, so a different order
+        // is a different clone.
+        let mut risky: Vec<String> = Vec::new();
+        // `git -c core.sshCommand=… clone URL`: options before the subcommand.
+        let mut before = args[..clone_pos].iter();
+        while let Some(token) = before.next() {
+            if token == "-c" || token == "--config-env" {
+                if let Some(value) = before.next() {
+                    risky.push(format!("config:{value}"));
+                }
+            } else if let Some(value) = token.strip_prefix("--config-env=") {
+                risky.push(format!("config:{value}"));
+            }
+        }
+
         let post_clone = &args[(clone_pos + 1)..];
         let mut target: Option<String> = None;
-        for token in post_clone {
-            if token.starts_with('-') {
-                continue;
+        let mut tokens = post_clone.iter();
+        while let Some(token) = tokens.next() {
+            let (option, repository) = git_clone_argument(token, &mut tokens);
+            risky.extend(option);
+            if target.is_none() {
+                target = repository;
             }
-            target = Some(token.to_string());
-            break;
         }
 
         let recursive = post_clone
             .iter()
             .any(|a| a == "--recursive" || a == "--recurse-submodules");
         let target = target.unwrap_or_else(|| "unknown-target".to_string());
-        let signature = if recursive {
-            format!("{}|recursive", target)
-        } else {
-            format!("{}|non-recursive", target)
-        };
+        let mut signature = format!(
+            "{}|{}",
+            target,
+            if recursive {
+                "recursive"
+            } else {
+                "non-recursive"
+            }
+        );
+        let mut last: Option<&String> = None;
+        for r in &risky {
+            if last != Some(r) {
+                signature.push('|');
+                signature.push_str(r);
+            }
+            last = Some(r);
+        }
         signatures.insert(signature);
     }
 
@@ -1866,6 +1989,18 @@ fn filter_allowlisted_artifact_findings(
     })
 }
 
+/// Lowercases the repository (URLs are matched case-insensitively) but not the options after it:
+/// a `--template` or `--reference` path is case-sensitive on Linux, so `/tmp/Trusted` and
+/// `/tmp/trusted` are different directories. Used for config entries and for the signatures
+/// compared against them.
+pub(crate) fn normalize_git_clone_entry(entry: &str) -> String {
+    let entry = entry.trim();
+    match entry.split_once('|') {
+        Some((repository, options)) => format!("{}|{options}", repository.to_ascii_lowercase()),
+        None => entry.to_ascii_lowercase(),
+    }
+}
+
 fn filter_allowlisted_git_clone_signatures(
     package_name: &str,
     signatures: Vec<String>,
@@ -1880,14 +2015,18 @@ fn filter_allowlisted_git_clone_signatures(
         .collect();
 
     signatures.into_iter().partition(|signature| {
-        let target = signature
-            .split('|')
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_ascii_lowercase();
-
-        target.is_empty() || !normalized_allowlist.contains(target.as_str())
+        let lowered = normalize_git_clone_entry(signature);
+        // The whole signature, for a clone that uses options such as `--config`.
+        if normalized_allowlist.contains(lowered.as_str()) {
+            return false;
+        }
+        // The repository alone covers a plain clone (with or without submodules), but not one
+        // that also sets `--config`, `--upload-pack`, `--template` or `--reference`: those
+        // are only allowed by listing the full signature.
+        let mut parts = lowered.split('|');
+        let target = parts.next().unwrap_or("").trim();
+        let has_risky_option = parts.nth(1).is_some();
+        target.is_empty() || has_risky_option || !normalized_allowlist.contains(target)
     })
 }
 
@@ -5519,6 +5658,236 @@ read(6, "\x00\x44\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x03\x66\x6f\x6
     }
 
     // --- gap #13: filter_allowlisted_git_clone_signatures — recursive suffix stripped before match ---
+
+    fn clone_sigs(argv: &str) -> Vec<String> {
+        let trace = format!("execve(\"/usr/bin/git\", [{argv}], 0x7ff) = 0\n");
+        let mut v: Vec<_> = extract_git_clone_signatures(&trace).into_iter().collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn git_clone_signatures_name_the_repository_and_the_risky_options() {
+        let url = "https://github.com/acme/repo.git";
+        let cases: &[(&str, &str)] = &[
+            (r#""git", "clone", "URL""#, "URL|non-recursive"),
+            (r#""git", "clone", "--recursive", "URL""#, "URL|recursive"),
+            // A value option must not be mistaken for the repository.
+            (
+                r#""git", "clone", "--branch", "main", "URL""#,
+                "URL|non-recursive",
+            ),
+            (
+                r#""git", "clone", "--depth", "1", "URL", "dir""#,
+                "URL|non-recursive",
+            ),
+            (
+                r#""git", "clone", "-b", "v1", "--depth=1", "URL""#,
+                "URL|non-recursive",
+            ),
+            // Options that run or read something else are part of the signature.
+            (
+                r#""git", "clone", "-c", "core.sshCommand=evil", "URL""#,
+                "URL|non-recursive|config:core.sshCommand=evil",
+            ),
+            (
+                r#""git", "clone", "--config=core.fsmonitor=x", "URL""#,
+                "URL|non-recursive|config:core.fsmonitor=x",
+            ),
+            (
+                r#""git", "clone", "--config", "a=b", "URL""#,
+                "URL|non-recursive|config:a=b",
+            ),
+            (
+                r#""git", "-c", "http.proxy=evil", "clone", "URL""#,
+                "URL|non-recursive|config:http.proxy=evil",
+            ),
+            (
+                r#""git", "--config-env=core.x=VAR", "clone", "URL""#,
+                "URL|non-recursive|config:core.x=VAR",
+            ),
+            (
+                r#""git", "clone", "--upload-pack", "/tmp/x", "URL""#,
+                "URL|non-recursive|upload-pack:/tmp/x",
+            ),
+            (
+                r#""git", "clone", "-u", "/tmp/x", "URL""#,
+                "URL|non-recursive|upload-pack:/tmp/x",
+            ),
+            (
+                r#""git", "clone", "--template=/tmp/t", "URL""#,
+                "URL|non-recursive|template:/tmp/t",
+            ),
+            (
+                r#""git", "clone", "--reference", "/tmp/r", "URL""#,
+                "URL|non-recursive|reference:/tmp/r",
+            ),
+            (
+                r#""git", "clone", "--reference-if-able=/r", "URL""#,
+                "URL|non-recursive|reference-if-able:/r",
+            ),
+            // Order is kept (the last of a repeated option wins); only a direct repeat collapses.
+            (
+                r#""git", "clone", "-c", "b=1", "-c", "a=1", "-c", "b=1", "URL""#,
+                "URL|non-recursive|config:b=1|config:a=1|config:b=1",
+            ),
+            (
+                r#""git", "clone", "--template=/a", "--template=/a", "URL""#,
+                "URL|non-recursive|template:/a",
+            ),
+            // Attached short values, clusters, and the separate --config-env form.
+            (
+                r#""git", "clone", "-ccore.sshCommand=x", "URL""#,
+                "URL|non-recursive|config:core.sshCommand=x",
+            ),
+            (
+                r#""git", "clone", "-u/tmp/helper", "URL""#,
+                "URL|non-recursive|upload-pack:/tmp/helper",
+            ),
+            (
+                r#""git", "clone", "-qc", "core.x=y", "URL""#,
+                "URL|non-recursive|config:core.x=y",
+            ),
+            (
+                r#""git", "clone", "-bmain", "-ocorp", "-j4", "URL""#,
+                "URL|non-recursive",
+            ),
+            (r#""git", "clone", "-q", "-v", "URL""#, "URL|non-recursive"),
+            (
+                r#""git", "--config-env", "core.sshCommand=HELPER", "clone", "URL""#,
+                "URL|non-recursive|config:core.sshCommand=HELPER",
+            ),
+            // A trailing option without a value does not panic.
+            (
+                r#""git", "clone", "URL", "--template""#,
+                "URL|non-recursive|template:",
+            ),
+        ];
+        for (argv, expected) in cases {
+            let argv = argv.replace("URL", url);
+            assert_eq!(
+                clone_sigs(&argv),
+                vec![expected.replace("URL", url)],
+                "{argv}"
+            );
+        }
+        assert_eq!(
+            clone_sigs(r#""git", "clone""#),
+            ["unknown-target|non-recursive"]
+        );
+        assert!(clone_sigs(r#""git", "fetch", "origin""#).is_empty());
+    }
+
+    #[test]
+    fn a_url_allowlist_entry_does_not_cover_risky_clone_options() {
+        let url = "https://github.com/acme/repo.git";
+        let plain = format!("{url}|non-recursive");
+        let risky = format!("{url}|non-recursive|config:core.sshCommand=evil");
+        let upload = format!("{url}|recursive|upload-pack:/tmp/x");
+        let allow = |entries: &[&str]| {
+            HashMap::from([(
+                "pkg".to_string(),
+                entries
+                    .iter()
+                    .map(|e| e.to_string())
+                    .collect::<HashSet<_>>(),
+            )])
+        };
+        // A URL entry covers the plain and recursive clone only.
+        let (left, ok) = filter_allowlisted_git_clone_signatures(
+            "pkg",
+            vec![
+                plain.clone(),
+                format!("{url}|recursive"),
+                risky.clone(),
+                upload.clone(),
+            ],
+            &allow(&[url]),
+        );
+        assert_eq!(ok.len(), 2);
+        assert_eq!(left, vec![risky.clone(), upload.clone()]);
+        // The full signature (config entries are lowercased on load) is how a risky clone is allowed, for that exact set only.
+        let (left, ok) = filter_allowlisted_git_clone_signatures(
+            "pkg",
+            vec![risky.clone(), upload.clone()],
+            &allow(&[&risky]),
+        );
+        assert_eq!(ok, vec![risky]);
+        assert_eq!(left, vec![upload]);
+        // Another package's entry never applies.
+        let (left, _) =
+            filter_allowlisted_git_clone_signatures("other", vec![plain.clone()], &allow(&[url]));
+        assert_eq!(left, vec![plain]);
+    }
+
+    #[test]
+    fn a_different_order_of_a_repeated_option_is_a_different_clone() {
+        let url = "https://github.com/acme/repo.git";
+        let sig = |a: &str, b: &str| {
+            clone_sigs(&format!(
+                r#""git", "clone", "--template={a}", "--template={b}", "{url}""#
+            ))
+        };
+        assert_ne!(
+            sig("/tmp/untrusted", "/tmp/trusted"),
+            sig("/tmp/trusted", "/tmp/untrusted")
+        );
+        assert_eq!(sig("/tmp/a", "/tmp/b"), sig("/tmp/a", "/tmp/b"));
+    }
+
+    #[test]
+    fn option_values_keep_their_case_but_the_repository_does_not() {
+        let allow = |e: &str| {
+            HashMap::from([(
+                "pkg".to_string(),
+                HashSet::from([super::normalize_git_clone_entry(e)]),
+            )])
+        };
+        let signature = "https://github.com/acme/repo.git|non-recursive|template:/tmp/Trusted";
+        let run = |sig: &str, entry: &str| {
+            filter_allowlisted_git_clone_signatures("pkg", vec![sig.to_string()], &allow(entry)).0
+        };
+        // The exact entry (repository in any case) allows it; another spelling of the path does not.
+        assert!(
+            run(
+                signature,
+                "HTTPS://GitHub.com/Acme/Repo.git|non-recursive|template:/tmp/Trusted"
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            run(
+                "https://github.com/acme/repo.git|non-recursive|template:/tmp/trusted",
+                "https://github.com/acme/repo.git|non-recursive|template:/tmp/Trusted"
+            )
+            .len(),
+            1
+        );
+        assert_eq!(
+            super::normalize_git_clone_entry(" HTTPS://X/Y|Non-Recursive|template:/A "),
+            "https://x/y|Non-Recursive|template:/A"
+        );
+        assert_eq!(
+            super::normalize_git_clone_entry("HTTPS://X/Y"),
+            "https://x/y"
+        );
+    }
+
+    #[test]
+    fn a_version_that_adds_a_risky_clone_option_is_new_behaviour() {
+        let url = "https://github.com/acme/repo.git";
+        let old = extract_git_clone_signatures(&format!(
+            "execve(\"/usr/bin/git\", [\"git\", \"clone\", \"{url}\"], 0x7ff) = 0\n"
+        ));
+        let new = extract_git_clone_signatures(&format!(
+            "execve(\"/usr/bin/git\", [\"git\", \"clone\", \"-c\", \"core.sshCommand=x\", \"{url}\"], 0x7ff) = 0\n"
+        ));
+        assert_eq!(
+            super::find_new_items(&new, &old),
+            vec![format!("{url}|non-recursive|config:core.sshCommand=x")]
+        );
+        assert!(super::find_new_items(&old, &old).is_empty());
+    }
 
     #[test]
     fn git_clone_allowlist_matches_recursive_clone_of_allowed_url() {
