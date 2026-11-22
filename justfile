@@ -81,6 +81,10 @@ test-redirects-poetry +args='': (test-redirects "poetry" args)
 
 test-redirects-uv +args='': (test-redirects "uv" args)
 
+# A payload cannot rewrite its own or an earlier probe's trace (needs Docker and the network)
+test-trace-integrity:
+    cargo test --lib --locked a_payload_cannot_tamper_with_its_own_or_another_probes_trace -- --ignored
+
 # Run all Docker end-to-end tests
 test-docker: test-npm test-pnpm test-pip test-poetry test-uv test-redirects-npm test-redirects-pnpm test-redirects-pip test-redirects-poetry test-redirects-uv
 

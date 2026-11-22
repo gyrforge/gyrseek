@@ -145,6 +145,8 @@ profile gyrseek-tracing flags=(attach_disconnected,mediate_deleted) {
   /work/** rwixk,
   /out/ rw,
   /out/** rwk,
+  /gyrseek-trace/ rw,
+  /gyrseek-trace/** rwk,
   /tmp/ rw,
   /tmp/** rwixk,
   /var/** r,
@@ -639,7 +641,7 @@ fn trace_install_docker_single(
 const SCANNER_USER: &str = "gyrseek";
 
 /// Reads the exit code the matrix script saved for a probe whose install failed
-/// (`/out/gyrseek_rc_N.log` exists only then) plus the tail of its error output.
+/// (`gyrseek_rc_N.log` exists only then) plus the tail of its error output.
 fn read_install_failure(out_dir: &std::path::Path, idx: usize) -> Option<InstallFailure> {
     let rc = std::fs::read_to_string(out_dir.join(format!("gyrseek_rc_{idx}.log"))).ok()?;
     let output = read_file_tail(&out_dir.join(format!("gyrseek_err_{idx}.log")))
@@ -776,6 +778,16 @@ fn strace_install_command(
     out_log: Option<&str>,
     timeout_secs: usize,
 ) -> String {
+    strace_command(
+        &install_invocation(manager, pkg_spec),
+        out_log,
+        timeout_secs,
+    )
+}
+
+/// `install` (a shell command) run under strace, dropped to the scanner user and bounded by the
+/// probe timeout.
+fn strace_command(install: &str, out_log: Option<&str>, timeout_secs: usize) -> String {
     let mut cmd = format!(
         "timeout -k {TIMEOUT_KILL_AFTER_SECS} {timeout_secs} strace -f -s 4096 -v -xx -u {u} -e trace={STRACE_SYSCALL_FILTER}",
         u = SCANNER_USER
@@ -783,7 +795,7 @@ fn strace_install_command(
     if let Some(path) = out_log {
         cmd.push_str(&format!(" -o {}", path));
     }
-    format!("{} {}", cmd, install_invocation(manager, pkg_spec))
+    format!("{cmd} {install}")
 }
 
 /// Shared image-setup steps (install strace/ca-certs and, for Python, uv) used
@@ -816,7 +828,7 @@ fn image_setup_steps(manager: &str, prebuilt: bool) -> Vec<String> {
 /// runtime binaries (bun/deno), and other suspicious artifacts. The scan is
 /// per-probe so faulty findings are attributed to a specific package-version.
 fn build_artifact_scan_steps(idx: usize) -> Vec<String> {
-    let out = format!("/out/gyrseek_artifacts_{}.log", idx);
+    let out = probe_file("artifacts", idx);
     vec![
         // Initialize/clear the artifact log for this probe.
         format!("true > {}", out),
@@ -837,6 +849,34 @@ fn build_artifact_scan_steps(idx: usize) -> Vec<String> {
     ]
 }
 
+/// Where the matrix script keeps what each probe leaves behind (strace log, strace stderr,
+/// artifact inventory, exit code, timeout marker) while the batch runs: a directory on the
+/// container's own filesystem that only root can enter. The payload runs as the scanner user, so
+/// it cannot read, change or delete it, on any platform. The bind-mounted `/out` is not used for
+/// this: on Docker Desktop for macOS it does not enforce the in-container ownership, and a
+/// payload could erase or rewrite its own earlier events, or a baseline's trace, there
+/// (FIXED #411). `/out` is written only after the last probe, by `PUBLISH_TRACES_STEP`.
+const TRACE_DIR: &str = "/gyrseek-trace";
+
+/// `/gyrseek-trace/gyrseek_<kind>_<idx>.log`; the host reads the same name from `/out`.
+fn probe_file(kind: &str, idx: usize) -> String {
+    format!("{TRACE_DIR}/gyrseek_{kind}_{idx}.log")
+}
+
+/// Run as root when the script exits (also when it aborts): empties `/out`, which the payload may
+/// have written to on a platform where the bind mount does not protect it (a planted symlink
+/// would otherwise be followed by the copy), then copies the logs there. Never fails the script.
+const PUBLISH_TRACES_STEP: &str =
+    "find /out -mindepth 1 -delete 2>/dev/null; cp /gyrseek-trace/* /out/ 2>/dev/null; true";
+
+/// Creates the root-only trace directory and arranges for it to be published on exit.
+fn trace_dir_setup_steps() -> Vec<String> {
+    vec![
+        format!("rm -rf {TRACE_DIR}; mkdir -m 700 {TRACE_DIR}"),
+        format!("trap '{PUBLISH_TRACES_STEP}' EXIT"),
+    ]
+}
+
 /// Empties the shared install tree (and `/tmp`) between probes. Traces and
 /// artifact inventories live in `/out`, so they are untouched. The trailing
 /// `|| true` is needed because the script runs under `set -e` and a failed
@@ -853,21 +893,39 @@ const WORK_RESET_STEP: &str =
 const KILL_PAYLOAD_PROCESSES_STEP: &str = "n=1; for _ in 1 2 3 4 5 6 7 8 9 10; do n=0; for p in /proc/[0-9]*; do [ \"$(stat -c %U \"$p\" 2>/dev/null)\" = gyrseek ] || continue; case \"$(sed -n 's/^State:[[:space:]]*//p' \"$p/status\" 2>/dev/null)\" in Z*) continue;; esac; kill -9 \"${p#/proc/}\" 2>/dev/null || true; n=1; done; [ $n -eq 0 ] && break; done; [ $n -eq 0 ] || exit 124";
 
 /// Builds the full `sh -lc` script for the matrix (multi-probe) run: per-probe
-/// strace logs written to /out, payload dropped to the scanner user, followed
-/// by a targeted artifact scan of the installed file tree.
+/// strace logs kept in the root-only `TRACE_DIR`, payload dropped to the scanner
+/// user, followed by a targeted artifact scan of the installed file tree. The logs
+/// reach `/out` only when the script exits.
 fn build_matrix_script(
     manager: &str,
     probes: &[(String, String)],
     prebuilt: bool,
     timeout_secs: usize,
 ) -> String {
+    build_matrix_script_with(manager, probes, prebuilt, timeout_secs, &|spec| {
+        install_invocation(manager, spec)
+    })
+}
+
+/// `build_matrix_script` with the install command of each probe supplied by the caller (the
+/// trace-integrity test runs a payload that tries to tamper with its trace).
+fn build_matrix_script_with(
+    manager: &str,
+    probes: &[(String, String)],
+    prebuilt: bool,
+    timeout_secs: usize,
+    install: &dyn Fn(&str) -> String,
+) -> String {
     let mut steps = image_setup_steps(manager, prebuilt);
     steps.extend(scanner_user_setup_steps());
+    steps.extend(trace_dir_setup_steps());
 
     for (idx, (package, version)) in probes.iter().enumerate() {
         let spec = package_spec(manager, package, version);
-        let log = format!("/out/gyrseek_trace_{}.log", idx);
-        let err = format!("/out/gyrseek_err_{}.log", idx);
+        let log = probe_file("trace", idx);
+        let err = probe_file("err", idx);
+        let timeout_marker = probe_file("timeout", idx);
+        let rc_file = probe_file("rc", idx);
         // Drop the install's own stdout, but capture strace's stderr to a per-probe
         // file instead of discarding it with `>/dev/null 2>&1`. Only a timeout aborts
         // the script, so a single failing install (e.g. a yanked baseline) cannot abort
@@ -879,9 +937,8 @@ fn build_matrix_script(
         // non-zero exit is a failed install: its exit code is saved for the host, which
         // blocks the package and shows the install's own error output.
         steps.push(format!(
-            "{} >/dev/null 2>{} || {{ rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then : > /out/gyrseek_timeout_{idx}.log; {KILL_PAYLOAD_PROCESSES_STEP}; else echo $rc > /out/gyrseek_rc_{idx}.log; fi; true; }}",
-            strace_install_command(manager, &spec, Some(&log), timeout_secs),
-            err
+            "{} >/dev/null 2>{err} || {{ rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then : > {timeout_marker}; {KILL_PAYLOAD_PROCESSES_STEP}; else echo $rc > {rc_file}; fi; true; }}",
+            strace_command(&install(&spec), Some(&log), timeout_secs),
         ));
         // After each install, scan the installed tree for suspicious artifacts.
         steps.extend(build_artifact_scan_steps(idx));
@@ -911,7 +968,7 @@ fn build_single_script(
 }
 
 /// Builds the `docker run` argument vector. When `out_dir_path` is non-empty it
-/// is bind-mounted at /out (root-owned) to receive trace logs.
+/// is bind-mounted at /out, where the matrix script publishes the trace logs when it exits.
 fn build_docker_run_args(
     image: &str,
     out_dir_path: &str,
@@ -1232,8 +1289,8 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, is_timeout_exit,
-        read_file_tail,
+        DockerRunner, INSTALL_OUTPUT_READ_BYTES, PUBLISH_TRACES_STEP, collect_probe_traces,
+        is_timeout_exit, read_file_tail,
     };
     use super::{
         EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
@@ -1617,7 +1674,7 @@ mod tests {
         // strace's stderr must land in a per-probe error log so an attach
         // failure is diagnosable, never silently routed to /dev/null.
         assert!(
-            script.contains("2>/out/gyrseek_err_0.log"),
+            script.contains("2>/gyrseek-trace/gyrseek_err_0.log"),
             "strace stderr must be captured to a log: {script}"
         );
         // The strace install step specifically must not merge its stderr away.
@@ -1690,8 +1747,8 @@ mod tests {
     fn artifact_scan_steps_output_to_correct_log() {
         let steps0 = build_artifact_scan_steps(0);
         let steps1 = build_artifact_scan_steps(1);
-        assert!(steps0[1].contains("/out/gyrseek_artifacts_0.log"));
-        assert!(steps1[1].contains("/out/gyrseek_artifacts_1.log"));
+        assert!(steps0[1].contains("/gyrseek-trace/gyrseek_artifacts_0.log"));
+        assert!(steps1[1].contains("/gyrseek-trace/gyrseek_artifacts_1.log"));
     }
 
     #[test]
@@ -1759,6 +1816,144 @@ mod tests {
     }
 
     #[test]
+    fn the_matrix_script_keeps_every_probe_log_in_a_root_only_directory_until_it_exits() {
+        let probes = [
+            ("pkg-a".to_string(), "1.0.0".to_string()),
+            ("pkg-b".to_string(), "2.0.0".to_string()),
+        ];
+        let script = build_matrix_script("pip", &probes, true, 300);
+        // The directory exists, is only for root and is published on exit, before any payload runs.
+        let mkdir = script
+            .find("mkdir -m 700 /gyrseek-trace")
+            .expect("root-only directory");
+        let trap = script
+            .find(&format!("trap '{PUBLISH_TRACES_STEP}' EXIT"))
+            .expect("publish on exit");
+        let first_payload = script.find("strace").expect("first probe");
+        assert!(mkdir < first_payload && trap < first_payload, "{script}");
+        // The only mention of the bind mount is the publish step: the payload never has a log
+        // there to rewrite, and a probe cannot reach an earlier probe's files.
+        assert!(
+            !script.replace(PUBLISH_TRACES_STEP, "").contains("/out"),
+            "{script}"
+        );
+        // Publishing empties /out first (a payload may have planted a symlink there) and never
+        // fails the script.
+        let wipe = PUBLISH_TRACES_STEP
+            .find("find /out -mindepth 1 -delete")
+            .expect("wipe");
+        let copy = PUBLISH_TRACES_STEP
+            .find("cp /gyrseek-trace/* /out/")
+            .expect("copy");
+        assert!(wipe < copy && PUBLISH_TRACES_STEP.ends_with("; true"));
+        // The AppArmor profile lets root use the directory.
+        assert!(EMBEDDED_APPARMOR_PROFILE_TEXT.contains("/gyrseek-trace/** rwk"));
+    }
+
+    /// A payload that tries every way to rewrite what was recorded: write, truncate, delete and
+    /// replace by a symlink, in the bind mount, in the trace directory and in an earlier probe's file.
+    const TAMPERING_PAYLOAD: &str = r#"sh -c 'echo FORGED >> /out/gyrseek_trace_0.log; echo FORGED > /out/gyrseek_trace_1.log; ln -s /etc/hostname /out/gyrseek_err_1.log; : > /out/gyrseek_artifacts_0.log; rm -f /out/gyrseek_trace_0.log; echo FORGED >> /gyrseek-trace/gyrseek_trace_0.log; : > /gyrseek-trace/gyrseek_trace_1.log; rm -f /gyrseek-trace/gyrseek_trace_0.log; rm -rf /gyrseek-trace; ls /gyrseek-trace; echo tamper-attempted'"#;
+
+    /// Needs Docker and the network (the image's strace comes from apt): run it with
+    /// `just test-trace-integrity`, which CI does in a Docker job. FIXED #411: on Docker Desktop
+    /// for macOS the payload could rewrite or delete a trace kept in the bind mount.
+    #[test]
+    #[ignore = "needs Docker; run with `just test-trace-integrity`"]
+    fn a_payload_cannot_tamper_with_its_own_or_another_probes_trace() {
+        let image =
+            crate::runtime_image::select_for_manager("pip", None, None, std::path::Path::new("."))
+                .image;
+        let probes = vec![
+            ("benign".to_string(), "1.0.0".to_string()),
+            ("evil".to_string(), "1.0.0".to_string()),
+            ("failing".to_string(), "1.0.0".to_string()),
+            ("slow".to_string(), "1.0.0".to_string()),
+        ];
+        // A short limit so the slow probe times out; the others finish well inside it.
+        let script = super::build_matrix_script_with("pip", &probes, false, 10, &|spec| {
+            if spec.contains("evil") {
+                TAMPERING_PAYLOAD.to_string()
+            } else if spec.contains("failing") {
+                "sh -c 'echo boom >&2; exit 7'".to_string()
+            } else if spec.contains("slow") {
+                "sh -c 'sleep 120'".to_string()
+            } else {
+                "sh -c 'echo benign-marker'".to_string()
+            }
+        });
+        let out = tempfile::tempdir().unwrap();
+        let args =
+            super::build_docker_run_args(&image, &out.path().to_string_lossy(), &script, false)
+                .unwrap();
+        let output = std::process::Command::new("docker")
+            .args(&args)
+            .output()
+            .expect("docker");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let read = |name: &str| {
+            std::fs::read_to_string(out.path().join(name)).unwrap_or_else(|e| panic!("{name}: {e}"))
+        };
+        // strace writes every string as `\xNN` escapes (`-xx`), so look for both spellings.
+        let seen = |trace: &str, text: &str| {
+            let hex: String = text.bytes().map(|b| format!("\\x{b:02x}")).collect();
+            trace.contains(text) || trace.contains(&hex)
+        };
+        let benign = read("gyrseek_trace_0.log");
+        assert!(
+            seen(&benign, "benign-marker"),
+            "the benign probe's trace is intact: {benign}"
+        );
+        assert!(
+            !seen(&benign, "FORGED"),
+            "a later payload wrote into an earlier probe's trace: {benign}"
+        );
+        let evil = read("gyrseek_trace_1.log");
+        assert!(
+            !evil.starts_with("FORGED"),
+            "the payload replaced its own trace: {evil}"
+        );
+        assert!(
+            seen(&evil, "tamper-attempted"),
+            "the payload's own actions are recorded: {evil}"
+        );
+        assert!(
+            seen(&evil, "/gyrseek-trace"),
+            "the attempts on the trace directory are recorded: {evil}"
+        );
+        for entry in std::fs::read_dir(out.path()).unwrap() {
+            let entry = entry.unwrap();
+            assert!(
+                !entry.file_type().unwrap().is_symlink(),
+                "{:?} is a symlink the payload planted",
+                entry.file_name()
+            );
+        }
+        assert!(
+            out.path().join("gyrseek_artifacts_0.log").exists(),
+            "every probe's artifact log is published"
+        );
+        // What the other probes left (exit code, timeout marker, trace) travels the same way.
+        assert_eq!(
+            read("gyrseek_rc_2.log").trim(),
+            "7",
+            "a failed install's exit code is published"
+        );
+        assert!(
+            out.path().join("gyrseek_timeout_3.log").exists(),
+            "a timed-out probe's marker is published"
+        );
+        assert!(
+            !out.path().join("gyrseek_rc_0.log").exists(),
+            "a probe whose install succeeded leaves no exit-code file"
+        );
+    }
+
+    #[test]
     fn matrix_script_saves_the_exit_code_of_a_failed_install() {
         let script = build_matrix_script(
             "pip",
@@ -1767,7 +1962,7 @@ mod tests {
             45,
         );
         // Only a non-timeout failure writes the exit-code file the host reads.
-        assert!(script.contains("echo $rc > /out/gyrseek_rc_0.log"));
+        assert!(script.contains("echo $rc > /gyrseek-trace/gyrseek_rc_0.log"));
         assert!(script.contains("; else echo $rc"));
     }
 
@@ -2087,7 +2282,7 @@ mod tests {
                 "gyrseek_timeout",
             ] {
                 assert!(
-                    script.contains(&format!("/out/{stem}_{i}.log")),
+                    script.contains(&format!("/gyrseek-trace/{stem}_{i}.log")),
                     "{stem}_{i}"
                 );
             }
