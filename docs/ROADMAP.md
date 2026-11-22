@@ -56,7 +56,7 @@
 
 ### Reliability & UX
 
-- Resolve Python version ranges (`uv add 'pytest>=9'`, `-r pyproject.toml`) to the highest registry version that satisfies them, scan that version, and pin the forwarded command to it. Ranges currently exit 1 by design; this needs a range-aware target in the scanner and a decision about installs that resolve differently later.
+- Scan the highest version that satisfies a range, not only the latest: ranges typed on the command line are scanned at the latest version today and exit 1 when the latest is outside the range (`npm install lodash@^3` when 4.x is out). Needs a range-aware target in the scanner. Ranges inside `-r` files and `package.json` still need exact pins or a lockfile.
 - Improve baseline selection strategy when fewer historical versions exist.
 - Add structured logging mode for CI and machine parsing.
 - Add configurable timeout and retry controls for registry lookups (probe execution already has `probe_timeout_seconds`).

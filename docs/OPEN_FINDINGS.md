@@ -6,7 +6,6 @@
 
 | #  | File          | Line | Severity | Description                                                           | Status    |
 |----|---------------|------|----------|-----------------------------------------------------------------------|-----------|
-| 14 | `parsing.rs`  | 880  | Low      | Temp file not cleaned up on test assertion failure                    | ⚠️ Open  |
 | 22 | `scanning.rs` | 222  | Medium   | IPv6 ULA (`fc00::/7`) not filtered as local — internal container traffic flagged as exfiltration | ⚠️ Open  |
 | 24 | `sandbox.rs`  | 555  | Medium   | Artifact scan spawns 3 processes per file — O(N) subprocess overhead on large node_modules | ⚠️ Open  |
 | 25 | `README.md` / `sandbox.rs` | 363 / —  | High     | Import-time execution not captured — Telnyx T26 bypasses install-window sandbox entirely | ⚠️ Open  |
@@ -25,13 +24,8 @@
 | 42 | `scanning.rs` | —    | Low      | Test duplication across anomaly-counting tests                         | ⚠️ Open  |
 | 43 | `scanning.rs` | —    | Low      | `lexical_clean_path` reinvents stdlib path normalization               | ⚠️ Open  |
 | 44 | `scanning.rs` | —    | Low      | Test coverage regression: `unescape_trailing_backslash`               | ⚠️ Open  |
-| 45 | `.github/workflows/ci.yml` | — | High | CI prompt injection via unsanitized `review_ledger.md`, skill files, findings files, AGENTS.md, and graphify output | ⚠️ Open  |
 | 46 | `scanning.rs` | —    | Medium   | `is_harness_command` `uv` check coupling with sandbox script           | ⚠️ Open  |
 | 47 | `scanning.rs` | —    | Medium   | `extract_sensitive_file_reads` requires decomposition (includes clone/fork fd-inheritance duplication — see Finding 67) | ⚠️ Open  |
-| 48 | `.github/workflows/ci.yml` | — | Medium | CI `gh run download`, `gh run list`, and fallback `cat` silently swallow errors | ⚠️ Open  |
-| 49 | `.github/workflows/ci.yml` | — | Medium | CI `GH_TOKEN` in environment for consolidation step increases blast radius | ⚠️ Open  |
-| 51 | `.github/workflows/ci.yml` | — | Medium | Ledger delimiter collision can corrupt review history            | ⚠️ Open  |
-| 52 | `.github/workflows/ci.yml` | — | Medium | Review ledger Python capping drops leading newline               | ⚠️ Open  |
 | 53 | `scanning.rs` | —    | Medium   | `clone3` return value ambiguity for TID vs PID                         | ⚠️ Open  |
 | 54 | `scanning.rs` | —    | Medium   | DNS compression pointer 5-hop limit can force fail-to-plain fallback   | ⚠️ Open  |
 | 55 | `scanning.rs` | —    | Low      | `OnceLock` regex `.unwrap()` panics without context                    | ⚠️ Open  |
@@ -43,23 +37,15 @@
 | 62 | `scanning.rs` | —    | Low      | `warn_and_block` unconditionally pushes without deduplication          | ⚠️ Open  |
 | 63 | `scanning.rs` | —    | Low      | `blocked_reasons` fragile string literal comparisons                   | ⚠️ Open  |
 | 64 | `scanning.rs` | —    | Low      | `extract_first_arg_fd` silently returns None on parse failure          | ⚠️ Open  |
-| 65 | `graphify-out`| —    | Low      | `GRAPH_REPORT.md` references stale `docs/FINDINGS.md`                  | ⚠️ Open  |
-| 66 | `.github/workflows/ci.yml` | — | Low | LLM prompt instructs model to suggest holistic fix under attacker influence | ⚠️ Open  |
 | 67 | `scanning.rs` | — | Medium | Clone/fork fd-inheritance block duplicated verbatim in `extract_sensitive_file_reads` | ⚠️ Open  |
-| 68 | `.github/workflows/ci.yml` | — | Medium | `gh run list` and `download` missing `--repo` flag                     | ⚠️ Open  |
-| 72 | `.github/workflows/ci.yml` | — | Low | `PR_HEAD_REF` branch name passed to `gh` without validation            | ⚠️ Open  |
-| 78 | `.github/workflows/ci.yml` | 449 | Medium | `grep -qi "^# consolidated review"` weakens post-consolidation check | ⚠️ Open |
-| 80 | `.github/workflows/ci.yml` | 163 | Low | Symlink path for `.github/skills/` not validated before `cat` | ⚠️ Open |
 | 29 | `scanning.rs` | —    | High     | `/proc/self/fd/N` evasion for sensitive file access                    | ⚠️ Open  |
 | 34 | `scanning.rs` | —    | High     | Cross-PID `/proc/N/fd/` resolution bypass                              | ⚠️ Open  |
 | 40 | `scanning.rs` | —    | High     | `/proc/self/fd/N` relative path traversal bypasses fd resolution       | ⚠️ Open  |
 | 75 | `scanning.rs` | 1312 | High   | Relative path + cwd manipulation bypasses absolute string matches      | ⚠️ Open  |
-| 76 | `scanning.rs` | 1753 | High | Missing integration test for insufficient_baselines fail-closed | ⚠️ Open |
 | 171 | `scanning.rs` | — | High | `close` syscall not tracked — stale fd_table entries create `/proc/fd` bypass window | ⚠️ Open |
 | 172 | `ARCHITECTURE.md` | — | Medium | `process_vm_readv` accepted risk understates inter-process memory read risk | ⚠️ Open |
 | 173 | `ARCHITECTURE.md` | — | Medium | DNS exfiltration risk statement understates query-side data embedding | ⚠️ Open |
 | 170 | `ARCHITECTURE.md` | — | Medium | Import-time execution gap omitted from Threat Model | ⚠️ Open |
-| 177 | `*_DETAILED.md` | — | Low | Duplicate summary tables create a two-source-of-truth maintenance burden | ⚠️ Open |
 | 256 | `scanning.rs` | — | Low | UDP DNS regex only matches `recvfrom`; `recvmsg()` used by glibc ≥2.40, musl, and async Rust resolvers produces no domain→IP mapping, degrading FCrDNS enrichment fallback to plain IP for those responses | ⚠️ Open |
 | 257 | `scanning.rs` | — | Low | DNS interceptor only matches port-53 strace traffic; DoH (port 443) and DoT (port 853) bypass enrichment — C2 IPs still caught fail-closed but without domain context | ⚠️ Open |
 | 258 | `scanning.rs` | — | Low | `insufficient_baselines` error message reports only the count shortfall; does not mention that age-gate filtering (`min_baseline_age_hours`) may have caused the shortage, making the failure opaque to users | ⚠️ Open |
@@ -75,7 +61,6 @@
 | 278 | `sandbox.rs` | — | Low | `SandboxEnvVarGuard::set` does not save/restore the pre-existing env var value; Drop always calls `remove_var` unconditionally, losing any value that was set before the guard — test isolation concern | ⚠️ Open |
 | 281 | `scanning.rs` | — | Medium | Domain planting: DNS interceptor fallback checks `baseline_domains` membership but verifies IP presence in the **current** trace's DNS map, not the baseline's — an attacker whose domain appeared in any baseline can route new C2 IPs through it and have them silently treated as benign CDN edge rotations | ⚠️ Open |
 | 282 | `scanning.rs` | — | Low | `baseline_count: 1` silently overridden to 2 via `.max(2)` with no warning; config parser warns on 0 but not 1, inconsistent handling | ⚠️ Open |
-| 283 | `lib.rs` | — | Low | `release_burst_threshold` and `minimum_release_age_package` match blocks have redundant `None => None` arms — `Some(v) => Some(v), None => None` is identical to `v => v` | ⚠️ Open |
 | 284 | `scanning.rs` | — | Low | `filter_override_version` and `check_override_ages` use `&std::collections::HashMap<...>` despite `HashMap` being imported at line 2 | ⚠️ Open |
 | 285 | `scanning.rs` | — | Low | `matches!(filtered_overrides, Some((Some(_), _)) \| Some((_, Some(_))))` re-derives whether any override survived age-filtering, duplicating logic already computed by `check_override_ages` | ⚠️ Open |
 | 286 | `scanning.rs` | — | Low | `GYRSEEK_TEST_FORCE_BASELINE_AGES_HOURS` parse failures silently drop all entries via `filter_map(\|s\| s.parse().ok())`, returning zero candidates with no diagnostic (test-only code path) | ⚠️ Open |
@@ -104,7 +89,6 @@
 | 381 | `src/lib.rs`, `src/scanning.rs` | — | Medium | Per-package allowlists are permanent trust anchors with no version-pinning — an allowlist entry granted for a legitimate version applies unchanged to any future compromised version of the same package. Fix: Add optional version-scoping to per-package allowlist entries | ⚠️ Open |
 | 382 | `src/lib.rs` | — | Low | `sensitive_file_access_allowlist_all_values_filtered_drops_key` test only exercises `"*"` and `"/"` guards; `"*/"` and `"/*"` patterns are not tested — a regression removing either guard passes CI undetected. Fix: Add test cases for `"*/"` and `"/*"` in the all-values-filtered scenario | ⚠️ Open |
 | 383 | `AGENTS.md`, `docs/ARCHITECTURE.md` | — | Low | `validate_allowlist_pkg_key`, `parse_list_map`, and `option_zero_to_none` are documented in full detail in both AGENTS.md and ARCHITECTURE.md — dual-source-of-truth drift risk; a future change to one is likely to leave the other stale. Fix: Make AGENTS.md the authoritative source; reduce ARCHITECTURE.md to a brief description with a cross-reference | ⚠️ Open |
-| 387 | `src/scanning.rs` | — | Low | No test for `domain_is_allowlisted` when FCrDNS returns a trailing-dot hostname (e.g. `"example.com."`) — `normalize_domain` strips it but the path is untested; a regression removing the strip silently produces miss. Fix: Add unit test with trailing-dot input to `domain_is_allowlisted` | ⚠️ Open |
 | 388 | `src/lib.rs` | — | Medium | Empty per-package IP/domain value list (`- my-pkg: []`) silently creates a dead `HashSet` entry — ip/domain PerPackage branches use `entry(pkg).or_default()` before iterating items; FIXED #363 warning only covers `parse_list_map`-based allowlists. Fix: Add post-loop empty-set check with warning in ip and domain PerPackage branches, consistent with FIXED #363 | ⚠️ Open |
 | 389 | `src/scanning.rs` | — | Medium | `find_new_items` is used inconsistently — artifact diff uses inline `.difference().cloned().collect()` without the sort that `find_new_items` provides; three patterns exist for set-difference across the codebase. Fix: Use `find_new_items` (or an equivalent sorted helper) at the artifact diff site for consistency | ⚠️ Open |
 | 390 | `src/scanning.rs` | — | Low | Triple `reverse_dns_domain` resolution per network endpoint — called in `find_new_connections_domain_aware`, again in `filter_domain_allowlisted_new_connections_with`, and again in the enrichment display loop; redundant PTR lookups per scan. Fix: Cache results in a `HashMap<String, Option<String>>` in the caller and pass it to all three sites | ⚠️ Open |
