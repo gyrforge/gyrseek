@@ -1045,16 +1045,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 430 — Medium | `src/parsing.rs` | ⚠️ Open
-
-**Summary:** `parse_npm_install_packages_from_args` treats every argument that does not start with `-` as a package spec. Flags that take a separate value (`-w`/`--workspace`, `--prefix`, `--registry`, `--tag`, `--omit`, `--include`, `--filter` for pnpm and similar) therefore turn their value into a package name. The Python parsers avoid this with per-command lists of value flags (`PIP_VALUE_FLAGS` and friends); the npm/pnpm parser has none.
-
-**Impact:** `npm install -w mypkg lodash` looks up `mypkg` on the registry. If an unrelated package of that name exists it is scanned and cleared (the same shape as the old `uv pip install -r ./pyproject.toml` behaviour, FIXED #426), and if not, the scan fails closed with a misleading registry error. The real packages after the flag are still scanned, so this is mostly a false block or a pointless scan rather than a bypass.
-
-**Fix direction:** add per-command lists of npm and pnpm flags that always take a value, applied the same way as the Python lists (never list a boolean flag, because that would drop the next package).
-
----
-
 ### Finding 433 — Medium | `src/sandbox.rs` | ⚠️ Open
 
 **Summary:** In host mode the probe is `timeout -k 5 N strace … ` with stderr piped back to `Command::output()`. GNU `timeout` returns when `strace` exits, so its SIGKILL timer does not reach descendants that `strace` detached on SIGTERM, and a descendant that keeps the stderr pipe open keeps `output()` waiting for end-of-file indefinitely. Docker mode is not affected: the container is the process boundary and the cleanup loop covers survivors. Not reproduced here because macOS has no `strace`.
@@ -1075,22 +1065,6 @@ if next.starts_with('-') {
 
 ---
 
----
-
----
-
-### Finding 445 — High | `src/lib.rs`, `src/parsing.rs` | ⚠️ Open
-
-**Summary:** The forwarded install follows the user's own package-manager configuration, which can name a different index than the public one gyrseek scanned.
-
-**Root cause:** the scan always resolves and probes the public registry package; the forwarded command is run as typed, so index settings from flags, environment variables, `pip.conf`, `pyproject.toml` or `.npmrc` apply to it only.
-
-**Fix direction:** detect index and registry settings per manager (flags, env vars, config files, requirements-file options) and exit 1 naming the setting, unless every named package is in `internal_package_exemptions`.
-
----
-
----
-
 ### Finding 447 — Medium | `src/sandbox.rs`, `src/parsing.rs` | ⚠️ Open
 
 **Summary:** The scanned artifact can differ from the one the real install uses, for the same package and version.
@@ -1101,14 +1075,89 @@ if next.starts_with('-') {
 
 ---
 
+### Finding 450 — Medium | `src/index_settings.rs` | ⚠️ Open
+
+**Summary:** Some package-manager settings that redirect an install are not read.
+
+**Root cause:** `index_settings` reads the common locations (flags, requirements files, environment, `pip.conf`, `uv.toml`/`pyproject.toml`, Poetry sources, `.npmrc`). `[tool.uv.sources]`, npm's global and built-in config, pip config under the interpreter prefix, `--config-file`, `-c` constraints files and pnpm workspace settings are not.
+
+**Fix direction:** add those sources, or have the package manager report its effective index (`pip config list`, `npm config get registry`).
+
 ---
 
-### Finding 449 — Medium | `src/lib.rs` | ⚠️ Open
+### Finding 451 — Low | `src/index_settings.rs` | ⚠️ Open
 
-**Summary:** `uv sync` is not frozen to the lockfile gyrseek scanned.
+**Summary:** A scoped registry refuses the whole command.
 
-**Root cause:** `forward_pinned_command` freezes only npm and pnpm lockfile installs. `uv sync` updates `uv.lock` when it is out of date with `pyproject.toml`, so the install can differ from the scanned lockfile.
+**Root cause:** `node_redirects` returns every `registry` and `@scope:registry` setting and `refusal` runs in `LazyRunner::get()` before the package list is known, so the scope cannot be compared with the packages.
 
-**Fix direction:** forward `uv sync` with `--locked` (uv then fails instead of re-locking) and reject flags that disable it, as `freeze_lockfile_install` does for npm and pnpm; Poetry already errors on a stale lockfile.
+**Fix direction:** pass the packages (named on the command line or from the lockfile) to the check and drop scoped redirects whose scope matches none of them; keep the default `registry` unconditional.
+
+
+---
+
+### Finding 452 — Medium | `src/index_settings.rs` | ⚠️ Open
+
+**Summary:** A trusted host is assumed to mirror the public registry.
+
+**Root cause:** FIXED #445 refuses redirects to hosts that are not public or trusted, but for a trusted host it only removes the refusal. The sandbox probe still installs the public package, so nothing checks that the mirror serves the same file.
+
+**Fix direction:** record the expected host per package (or per index) and verify the downloaded artifact's hash against the public registry's for the scanned version when the install goes through a trusted host.
+
+
+---
+
+### Finding 453 — Medium | `src/parsing.rs` | ⚠️ Open
+
+**Summary:** npm/pnpm value-flag lists are maintained by hand.
+
+**Root cause:** `npm_positional_indexed` skips the argument after a listed flag and treats every other non-flag argument as a package. The lists were written from the documentation, with no test that compares them with what the installed npm and pnpm accept.
+
+**Fix direction:** add a CI test that reads the flag tables of the installed npm and pnpm and compares them with the lists, and refuse (rather than guess) an unknown flag followed by a non-flag argument.
+
+
+---
+
+### Finding 454 — Low | `src/index_settings.rs` | ⚠️ Open
+
+**Summary:** Project-root discovery for .npmrc is unverified against real npm and pnpm.
+
+**Root cause:** `project_npmrcs` stops at the first directory with a `package.json` (npm) or `pnpm-workspace.yaml` (pnpm). Real npm also treats a directory with `node_modules` as a root and pnpm has its own workspace rules; only the documented behaviour was implemented.
+
+**Fix direction:** compare with `npm config get registry` and `pnpm config get registry` run from nested directories in a CI test, and read every candidate root when the tools disagree.
+
+
+---
+
+### Finding 455 — Low | `src/index_settings.rs` | ⚠️ Open
+
+**Summary:** Redirect check ignores scheme and port.
+
+**Root cause:** `host_of` drops the scheme and port before the comparison with `trusted_index_hosts`.
+
+**Fix direction:** require https for trusted hosts, optionally with a port in the config entry.
+
+
+---
+
+### Finding 456 — Low | `src/index_settings.rs` | ⚠️ Open
+
+**Summary:** Switches that disable settings are not honoured.
+
+**Root cause:** `python_redirects` always reads `pip.conf` locations and `PIP_*` variables; pip skips them with `--isolated` and when `PIP_CONFIG_FILE` points at the null device, and uv with `--no-config`.
+
+**Fix direction:** detect those switches and skip the config and environment sources they disable (never the command-line flags).
+
+
+---
+
+### Finding 457 — Medium | `.github/workflows/ci.yml`, `justfile` | ⚠️ Open
+
+**Summary:** No real end-to-end check of the new guards.
+
+**Root cause:** The existing `just test-*` recipes install clean projects only; the new refusal and forwarding behaviour is exercised with stand-in managers.
+
+**Fix direction:** add e2e recipes with a local registry mirror and a deliberately drifted lockfile for each manager and run them in the Docker jobs.
+
 
 ---

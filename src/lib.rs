@@ -1,3 +1,4 @@
+mod index_settings;
 mod parsing;
 mod runtime_image;
 mod sandbox;
@@ -14,8 +15,8 @@ use serde::{Deserialize, Deserializer};
 
 use parsing::{
     RangeRequest, changed_inputs, check_ranges_against_scanned, freeze_lockfile_install,
-    has_only_non_registry_npm_specs, is_lockfile_only_command, parse_npm_install_targets_with,
-    parse_poetry_lock, parse_pylock, parse_python_install_targets,
+    freeze_uv_sync, has_only_non_registry_npm_specs, is_lockfile_only_command,
+    parse_npm_install_targets_with, parse_poetry_lock, parse_pylock, parse_python_install_targets,
     parse_requirements_packages_from_content, parse_uv_lock,
     parse_uv_lock_upgrade_packages_from_args, read_input, rewrite_args_at,
 };
@@ -86,6 +87,8 @@ struct GyrseekConfig {
     new_package_exemptions: HashMap<String, String>,
     #[serde(default)]
     internal_package_exemptions: Vec<String>,
+    #[serde(default)]
+    trusted_index_hosts: Vec<String>,
     #[serde(default)]
     release_burst_threshold: Option<usize>,
     #[serde(default)]
@@ -451,6 +454,20 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         })
         .collect();
     let internal_package_exemptions = parse_list(cfg.internal_package_exemptions, false);
+    let trusted_index_hosts: HashSet<String> = cfg
+        .trusted_index_hosts
+        .iter()
+        .map(|h| index_settings::normalize_trusted_host(h))
+        .filter(|h| {
+            let valid = !h.is_empty() && !h.contains(['*', ' ', '/']);
+            if !valid {
+                println!(
+                    "⚠️ [gyrseek] Ignoring trusted_index_hosts entry '{h}': it must be one host name such as nexus.corp.example (no wildcards; hosts are matched exactly)."
+                );
+            }
+            valid
+        })
+        .collect();
 
     let release_burst_threshold = option_zero_to_none(
         cfg.release_burst_threshold,
@@ -558,6 +575,7 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         min_baseline_age_hours_by_package: min_baseline_age_hours,
         new_package_exemptions,
         internal_package_exemptions,
+        trusted_index_hosts,
         release_burst_threshold,
         release_burst_window_hours,
         minimum_release_age_package,
@@ -1724,10 +1742,21 @@ struct LazyRunner {
     no_sandbox: bool,
     probe_timeout_secs: usize,
     image: ImageChoice,
+    /// Set when a package-manager setting sends the install to a registry gyrseek did not scan.
+    /// Checked on the first scan, so an unscanned passthrough is never refused for it.
+    index_refusal: Option<String>,
 }
 
 impl LazyRunner {
+    /// Exits 1 if a setting sends this install to a registry that was not scanned.
+    fn check_index_settings(&self) {
+        if let Some(reason) = &self.index_refusal {
+            exit_with(reason);
+        }
+    }
+
     fn get(&self) -> &dyn SandboxRunner {
+        self.check_index_settings();
         self.runner
             .get_or_init(|| {
                 if env::var("GYRSEEK_TEST_BYPASS_RUNNER_INIT").ok().as_deref() == Some("1") {
@@ -2193,6 +2222,12 @@ pub async fn run(args: Vec<String>) {
         no_sandbox,
         probe_timeout_secs: policy.probe_timeout_seconds,
         image,
+        index_refusal: index_settings::refusal(
+            &eye.manager,
+            &eye.passthrough_args,
+            &index_settings::Settings::from_process(),
+            &policy.trusted_index_hosts,
+        ),
     };
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("lock") {
@@ -2370,6 +2405,8 @@ pub async fn run(args: Vec<String>) {
     }
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("sync") {
+        // Refused now, not after the scan.
+        let frozen = freeze_uv_sync(&eye.passthrough_args).unwrap_or_else(|e| exit_with(&e));
         let lock_packages = eye.parse_uv_lock_packages(&policy.internal_package_exemptions);
         if lock_packages.is_empty() {
             exit_with("'uv sync' detected but no packages found in uv.lock. Failing closed.");
@@ -2393,7 +2430,13 @@ pub async fn run(args: Vec<String>) {
         println!(
             "\n✅ [gyrseek] Clear behavioral report for all locked packages. Forwarding command safely..."
         );
-        eye.forward_original_command();
+        if frozen != eye.passthrough_args {
+            println!(
+                "ℹ️ [gyrseek] Installing exactly what was scanned: forwarding `{}` so uv cannot re-lock anything the scan did not see.",
+                frozen.join(" ")
+            );
+        }
+        eye.forward_args(&frozen);
         return;
     }
 
@@ -2459,6 +2502,9 @@ pub async fn run(args: Vec<String>) {
         }
 
         if has_only_non_registry_npm_specs(&eye.passthrough_args) {
+            // Nothing is scanned on this path, but the package's own dependencies would still
+            // come from a redirected registry.
+            runner.check_index_settings();
             println!(
                 "ℹ️ [gyrseek] Only non-registry package specifications detected. Forwarding command directly..."
             );

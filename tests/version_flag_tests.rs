@@ -1,4 +1,4 @@
-use std::process::Command;
+mod common;
 
 /// `gyrseek --version` / `-V` prints the crate version and exits 0, without
 /// needing a config file, Docker, or a recognized manager subcommand. The
@@ -6,7 +6,7 @@ use std::process::Command;
 #[test]
 fn version_flag_prints_crate_version_and_exits_zero() {
     for flag in ["--version", "-V"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+        let output = common::gyrseek()
             .arg(flag)
             .output()
             .expect("gyrseek process should run");
@@ -33,7 +33,7 @@ fn version_flag_prints_crate_version_and_exits_zero() {
 /// did not print its own version and bail out.
 #[test]
 fn version_flag_after_manager_is_not_intercepted() {
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["pip", "install", "requests", "--version"])
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
         .output()

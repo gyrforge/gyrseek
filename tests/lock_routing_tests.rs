@@ -1,4 +1,4 @@
-use std::process::Command;
+mod common;
 
 /// These tests pin the routing decision for bare `poetry lock` and `uv lock`:
 /// both must reach the lockfile-scanning branch rather than being forwarded
@@ -13,7 +13,7 @@ use std::process::Command;
 #[test]
 fn poetry_lock_is_routed_to_lockfile_scan() {
     let dir = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["poetry", "lock"])
         .current_dir(dir.path())
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
@@ -37,7 +37,7 @@ fn poetry_lock_is_routed_to_lockfile_scan() {
 #[test]
 fn bare_uv_lock_is_routed_to_lockfile_scan() {
     let dir = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["uv", "lock"])
         .current_dir(dir.path())
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
@@ -64,7 +64,7 @@ fn bare_uv_lock_is_routed_to_lockfile_scan() {
 #[test]
 fn uv_venv_stays_unscanned_passthrough() {
     let dir = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["uv", "venv"])
         .current_dir(dir.path())
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
@@ -89,7 +89,7 @@ fn uv_venv_stays_unscanned_passthrough() {
 #[test]
 fn pnpm_install_is_routed_to_package_scan() {
     let dir = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(["pnpm", "install"])
         .current_dir(dir.path())
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")
@@ -110,7 +110,7 @@ fn pnpm_install_is_routed_to_package_scan() {
 }
 
 fn run_in(dir: &std::path::Path, args: &[&str]) -> (Option<i32>, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_gyrseek"))
+    let output = common::gyrseek()
         .args(args)
         .current_dir(dir)
         .env("GYRSEEK_TEST_BYPASS_RUNNER_INIT", "1")

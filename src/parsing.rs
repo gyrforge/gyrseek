@@ -635,6 +635,28 @@ pub(crate) fn freeze_lockfile_install(
     Ok(out)
 }
 
+/// How the forwarded `uv sync` is frozen to the `uv.lock` that was scanned. A plain `uv sync`
+/// re-locks when `pyproject.toml` no longer agrees with the lockfile, and `--upgrade` /
+/// `--upgrade-package` pick new versions, which would install versions the scan never saw.
+/// `--locked` makes uv fail instead of re-locking; `--frozen` (already typed) uses the lockfile
+/// as it is and is kept. An upgrade flag is an error.
+pub(crate) fn freeze_uv_sync(args: &[String]) -> Result<Vec<String>, String> {
+    let upgrade = |a: &String| {
+        matches!(a.as_str(), "--upgrade" | "-U" | "--upgrade-package" | "-P")
+            || a.starts_with("--upgrade-package=")
+            || (a.starts_with("-P") && !a.starts_with("--"))
+            || (a.starts_with("-U") && !a.starts_with("--"))
+    };
+    if args.iter().any(upgrade) {
+        return Err("gyrseek installs from the uv.lock it scanned, so `uv sync --upgrade` / `--upgrade-package` (which pick new versions) cannot be used. Run `uv lock --upgrade` through gyrseek first, then `uv sync`. Failing closed.".to_string());
+    }
+    let mut out = args.to_vec();
+    if !args.iter().any(|a| a == "--locked" || a == "--frozen") && out.len() >= 2 {
+        out.insert(2, "--locked".to_string());
+    }
+    Ok(out)
+}
+
 /// A version range typed on the command line (`pytest>=9`, `lodash@^4`). gyrseek scans the
 /// latest version for it, checks that the latest version satisfies the range, and pins the
 /// forwarded command to the version that was scanned.
@@ -1085,16 +1107,78 @@ fn npm_positional_args(args: &[String]) -> Vec<&str> {
         .collect()
 }
 
-/// Like `npm_positional_args`, with each argument's position on the command line.
+/// npm flags that always take a separate value. A boolean flag must never be added here: it would
+/// silently drop the package that follows it.
+const NPM_VALUE_FLAGS: &[&str] = &[
+    "--registry",
+    "--prefix",
+    "-C",
+    "--cache",
+    "--userconfig",
+    "--globalconfig",
+    "--tag",
+    "--otp",
+    "--workspace",
+    "-w",
+    "--scope",
+    "--loglevel",
+    "--omit",
+    "--include",
+    "--install-strategy",
+    "--before",
+    "--proxy",
+    "--https-proxy",
+    "--noproxy",
+    "--cafile",
+    "--audit-level",
+    "--save-prefix",
+    "--script-shell",
+];
+
+/// pnpm flags that always take a separate value (`-w` is `--workspace-root`, a boolean, in pnpm).
+const PNPM_VALUE_FLAGS: &[&str] = &[
+    "--registry",
+    "--dir",
+    "-C",
+    "--filter",
+    "-F",
+    "--filter-prod",
+    "--store-dir",
+    "--virtual-store-dir",
+    "--modules-dir",
+    "--lockfile-dir",
+    "--reporter",
+    "--loglevel",
+    "--use-node-version",
+    "--node-linker",
+    "--package-import-method",
+    "--save-prefix",
+    "--network-concurrency",
+    "--child-concurrency",
+    "--workspace-concurrency",
+    "--resolution-mode",
+    "--hoist-pattern",
+    "--public-hoist-pattern",
+    "--pnpmfile",
+];
+
+/// Like `npm_positional_args`, with each argument's position on the command line. The value of a
+/// flag such as `--registry URL` or `--workspace app` is not a package.
 fn npm_positional_indexed(args: &[String]) -> Vec<(usize, &str)> {
+    let value_flags = if args.first().map(String::as_str) == Some("pnpm") {
+        PNPM_VALUE_FLAGS
+    } else {
+        NPM_VALUE_FLAGS
+    };
     args.iter()
         .enumerate()
         .skip(2)
         .filter(|(i, arg)| {
-            let after_flag = args
-                .get(i - 1)
-                .is_some_and(|prev| LOCKFILE_ONLY_FLAGS.contains(&prev.as_str()));
-            !arg.starts_with('-') && !(after_flag && matches!(arg.as_str(), "true" | "false"))
+            let prev = args.get(i - 1).map(String::as_str).unwrap_or_default();
+            let after_flag = LOCKFILE_ONLY_FLAGS.contains(&prev);
+            !arg.starts_with('-')
+                && !(after_flag && matches!(arg.as_str(), "true" | "false"))
+                && !value_flags.contains(&prev)
         })
         .map(|(i, arg)| (i, arg.as_str()))
         .collect()
@@ -3884,6 +3968,107 @@ version = "2.31.0"
                 err.contains("Failing closed") && err.contains("lockfile it scanned"),
                 "{args:?}: {err}"
             );
+        }
+    }
+
+    #[test]
+    fn uv_sync_is_frozen_to_the_scanned_lockfile() {
+        let frozen = |a: &[&str]| freeze_uv_sync(&strings(a));
+        assert_eq!(
+            frozen(&["uv", "sync"]).unwrap(),
+            strings(&["uv", "sync", "--locked"])
+        );
+        assert_eq!(
+            frozen(&["uv", "sync", "--all-extras", "--no-dev"]).unwrap(),
+            strings(&["uv", "sync", "--locked", "--all-extras", "--no-dev"])
+        );
+        // Already pinned to the lockfile: left as typed.
+        for a in [&["uv", "sync", "--locked"][..], &["uv", "sync", "--frozen"]] {
+            assert_eq!(frozen(a).unwrap(), strings(a));
+        }
+        // Flags that pick new versions defeat the scan.
+        for a in [
+            &["uv", "sync", "--upgrade"][..],
+            &["uv", "sync", "-U"],
+            &["uv", "sync", "--upgrade-package", "six"],
+            &["uv", "sync", "--upgrade-package=six"],
+            &["uv", "sync", "-P", "six"],
+            &["uv", "sync", "-Psix"],
+            &["uv", "sync", "--no-dev", "--upgrade"],
+        ] {
+            let err = frozen(a).expect_err(&format!("{a:?}"));
+            assert!(
+                err.contains("Failing closed") && err.contains("uv.lock it scanned"),
+                "{a:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_value_of_a_flag_is_not_a_package() {
+        let names = |a: &[&str]| -> Vec<String> {
+            parse_npm_install_targets(&strings(a))
+                .map(|t| t.packages.into_iter().map(|(n, _)| n).collect())
+                .unwrap_or_default()
+        };
+        // npm: --workspace/-w and --registry take a value, so `app` and the URL are not packages.
+        assert_eq!(
+            names(&["npm", "install", "-w", "app", "left-pad@1.3.0"]),
+            ["left-pad"]
+        );
+        assert_eq!(
+            names(&["npm", "install", "--workspace", "app", "left-pad@1.3.0"]),
+            ["left-pad"]
+        );
+        assert_eq!(
+            names(&[
+                "npm",
+                "install",
+                "left-pad@1.3.0",
+                "--registry",
+                "https://x.example/"
+            ]),
+            ["left-pad"]
+        );
+        assert_eq!(
+            names(&["npm", "install", "--tag", "next", "left-pad@1.3.0"]),
+            ["left-pad"]
+        );
+        // pnpm: --filter takes a value, `-w` (workspace root) does not.
+        assert_eq!(
+            names(&["pnpm", "add", "--filter", "app", "left-pad@1.3.0"]),
+            ["left-pad"]
+        );
+        assert_eq!(
+            names(&["pnpm", "add", "-w", "left-pad@1.3.0"]),
+            ["left-pad"]
+        );
+        assert_eq!(
+            names(&["pnpm", "add", "-D", "left-pad@1.3.0", "-w"]),
+            ["left-pad"]
+        );
+        // A boolean flag never hides the package after it.
+        assert_eq!(
+            names(&["npm", "install", "--save-exact", "left-pad@1.3.0"]),
+            ["left-pad"]
+        );
+        assert_eq!(
+            names(&["npm", "install", "--legacy-peer-deps", "left-pad@1.3.0"]),
+            ["left-pad"]
+        );
+        // With only flag values and no package, the command is a lockfile install, not "no registry spec".
+        for a in [
+            &["npm", "ci", "--registry", "https://x.example/"][..],
+            &["npm", "install", "-w", "app"],
+            &["pnpm", "install", "--filter", "app"],
+        ] {
+            let t = parse_npm_install_targets(&strings(a));
+            assert!(
+                t.as_ref()
+                    .map_or(true, |t| t.packages.is_empty() || t.from_lockfile),
+                "{a:?}: {t:?}"
+            );
+            assert!(!has_only_non_registry_npm_specs(&strings(a)), "{a:?}");
         }
     }
 
