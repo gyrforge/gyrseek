@@ -1912,3 +1912,19 @@ only.
 ### Finding 393: git-clone allowlist matched the URL only
 - **Root Cause**: `filter_allowlisted_git_clone_signatures` compared the URL only, so allowlisting a URL also permitted the same clone with `--config core.sshCommand=…`, `--upload-pack`, `--template` or `--reference`.
 - **Fix**: Those options (and `git -c k=v clone`, `--config-env=`) are now part of the signature (`url|recursive|config:k=v`), so a new one is a new behaviour; a URL entry covers only plain/recursive clones and a risky clone needs its full signature in `git_clone_allowlist`. Attached short values (`-ccore.x=y`, `-u/path`, clusters), `--config-env NAME=VAR`, option order and the case of option values are all part of the comparison (review of PR #67).
+
+### Finding 442: Python lockfile entries from other sources scanned as PyPI packages
+- **Root Cause**: The `uv.lock` and `poetry.lock` parsers excluded only local sources, so an entry from a private index, a git repository or a URL was scanned as the PyPI package of the same name and version.
+- **Fix**: `uv_source`/`poetry_source` classify each entry and `python_lock_packages` fails closed on anything but PyPI, naming each entry, unless the package is in `internal_package_exemptions`. Related gap recorded as #443 (`pylock.toml`). A follow-up check also covers the `url` of each `sdist` and wheel in `uv.lock`, because uv downloads from those, not from the index in `source`.
+
+### Finding 443: `pylock.toml` entries from other sources scanned as PyPI packages
+- **Root Cause**: `parse_pylock_packages_from_content` read only `name` and `version` and ignored `vcs`, `archive`, `sdist`, `wheels` and `index`.
+- **Fix**: `parse_pylock`/`pylock_source` check every URL and index against the PyPI hosts and treat `vcs` as remote; exempt packages pass.
+
+### Finding 444: Line-based Python lockfile parsers could be bypassed
+- **Root Cause**: The parsers matched literal text such as `source = {` and `name = "` line by line. Valid TOML spelled differently (quoted or dotted keys, a sub-table, no spaces, an array-of-tables header between name and source) either hid a non-PyPI source or dropped the package from the scan. Found while reviewing the #442 change by feeding such spellings to the parser.
+- **Fix**: Parse with the `toml` crate and read the `package`/`packages` tables; regression tests feed each spelling.
+
+### Finding 446: Download URL checked by host, not by package
+- **Root Cause**: `lock_url_source` accepted any URL on a registry host, so a lockfile entry could name one package and download the file of another from the same trusted host. Python index and URL fields without a `://` were classed as local paths.
+- **Fix**: `npm_tarball_matches` and `python_artifact_matches` compare the URL's file to the entry; `python_url_source` requires a scheme unless the value is clearly a path. Covered by unit tests and `tests/lockfile-guards.sh`.

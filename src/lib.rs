@@ -15,10 +15,9 @@ use serde::{Deserialize, Deserializer};
 use parsing::{
     RangeRequest, changed_inputs, check_ranges_against_scanned, freeze_lockfile_install,
     has_only_non_registry_npm_specs, is_lockfile_only_command, parse_npm_install_targets_with,
-    parse_poetry_lock_packages_from_content, parse_pylock_packages_from_content,
-    parse_python_install_targets, parse_requirements_packages_from_content,
-    parse_uv_lock_packages_from_content, parse_uv_lock_upgrade_packages_from_args, read_input,
-    rewrite_args_at,
+    parse_poetry_lock, parse_pylock, parse_python_install_targets,
+    parse_requirements_packages_from_content, parse_uv_lock,
+    parse_uv_lock_upgrade_packages_from_args, read_input, rewrite_args_at,
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
 use runtime_image::{
@@ -1856,25 +1855,26 @@ impl GyrSeek {
         }
     }
 
-    fn parse_uv_lock_packages(&self) -> Vec<(String, String)> {
-        let lock_content = match read_input("uv.lock") {
-            Ok(content) => content,
-            Err(_) => return Vec::new(),
+    fn parse_uv_lock_packages(&self, exempt: &HashSet<String>) -> Vec<(String, String)> {
+        let Ok(content) = read_input("uv.lock") else {
+            return Vec::new();
         };
-
-        parse_uv_lock_packages_from_content(&lock_content)
+        parse_uv_lock(&content, exempt)
+            .unwrap_or_else(|e| exit_with(&format!("uv.lock: {e}. Failing closed.")))
     }
 
-    fn parse_poetry_lock_packages(&self) -> Vec<(String, String)> {
-        let lock_content = match read_input("poetry.lock") {
-            Ok(content) => content,
-            Err(_) => return Vec::new(),
+    fn parse_poetry_lock_packages(&self, exempt: &HashSet<String>) -> Vec<(String, String)> {
+        let Ok(content) = read_input("poetry.lock") else {
+            return Vec::new();
         };
-
-        parse_poetry_lock_packages_from_content(&lock_content)
+        parse_poetry_lock(&content, exempt)
+            .unwrap_or_else(|e| exit_with(&format!("poetry.lock: {e}. Failing closed.")))
     }
 
-    fn parse_uv_pip_sync_packages(&self) -> Vec<(String, Option<String>)> {
+    fn parse_uv_pip_sync_packages(
+        &self,
+        exempt: &HashSet<String>,
+    ) -> Vec<(String, Option<String>)> {
         let mut packages = Vec::new();
         for arg in self.passthrough_args.iter().skip(3) {
             if arg.starts_with('-') {
@@ -1887,7 +1887,10 @@ impl GyrSeek {
 
             if let Ok(content) = read_input(arg) {
                 if arg.ends_with("pylock.toml") {
-                    packages.extend(parse_pylock_packages_from_content(&content));
+                    packages
+                        .extend(parse_pylock(&content, exempt).unwrap_or_else(|e| {
+                            exit_with(&format!("{arg}: {e}. Failing closed."))
+                        }));
                 } else {
                     packages.extend(parse_requirements_packages_from_content(&content));
                 }
@@ -2227,7 +2230,7 @@ pub async fn run(args: Vec<String>) {
             return;
         }
 
-        let lock_packages = eye.parse_uv_lock_packages();
+        let lock_packages = eye.parse_uv_lock_packages(&policy.internal_package_exemptions);
         if lock_packages.is_empty() {
             exit_with("'uv lock' detected but no packages found in uv.lock. Failing closed.");
         }
@@ -2272,7 +2275,7 @@ pub async fn run(args: Vec<String>) {
             .get(1)
             .map(String::as_str)
             .unwrap_or("install");
-        let lock_packages = eye.parse_poetry_lock_packages();
+        let lock_packages = eye.parse_poetry_lock_packages(&policy.internal_package_exemptions);
         if lock_packages.is_empty() {
             exit_with(&format!(
                 "'poetry {}' detected but no packages found in poetry.lock. Failing closed.",
@@ -2355,7 +2358,7 @@ pub async fn run(args: Vec<String>) {
         && eye.passthrough_args.get(2).map(String::as_str) == Some("sync")
     {
         bulk_scan!(
-            eye.parse_uv_pip_sync_packages(),
+            eye.parse_uv_pip_sync_packages(&policy.internal_package_exemptions),
             Original,
             "sync",
             "'uv pip sync' detected but no parseable package entries were found. Failing closed.",
@@ -2367,7 +2370,7 @@ pub async fn run(args: Vec<String>) {
     }
 
     if eye.manager == "uv" && eye.passthrough_args.get(1).map(String::as_str) == Some("sync") {
-        let lock_packages = eye.parse_uv_lock_packages();
+        let lock_packages = eye.parse_uv_lock_packages(&policy.internal_package_exemptions);
         if lock_packages.is_empty() {
             exit_with("'uv sync' detected but no packages found in uv.lock. Failing closed.");
         }

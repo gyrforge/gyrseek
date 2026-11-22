@@ -77,8 +77,8 @@ fn without_a_lockfile_the_install_fails_closed_and_says_how_to_create_one() {
 }
 
 #[test]
-fn npm_shrinkwrap_takes_precedence_over_package_lock() {
-    let dir = project_with_lock(); // package-lock.json lists 2 packages
+fn with_both_npm_lockfiles_a_package_in_either_is_scanned_once() {
+    let dir = project_with_lock(); // package-lock.json lists left-pad 1.3.0 and is-odd 3.0.1
     fs::write(
         dir.path().join("npm-shrinkwrap.json"),
         r#"{"lockfileVersion":3,"packages":{"":{"name":"app"},
@@ -87,8 +87,8 @@ fn npm_shrinkwrap_takes_precedence_over_package_lock() {
     .unwrap();
     let (_, out) = run(dir.path(), &["npm", "ci"]);
     assert!(
-        out.contains("'ci' detected. Testing 1 package(s)"),
-        "npm uses npm-shrinkwrap.json when both exist, got: {out}"
+        out.contains("'ci' detected. Testing 2 package(s)"),
+        "the shrinkwrap's left-pad is the same as the lockfile's, is-odd is only in the lockfile: {out}"
     );
 }
 
@@ -306,4 +306,49 @@ fn pnpm_install_and_i_with_frozen_lockfile_flags_scan_the_lockfile() {
         assert_eq!(code, Some(1), "{args:?}");
         assert!(out.contains("Testing 1 package(s)"), "{args:?}: {out}");
     }
+}
+
+#[test]
+fn a_flag_that_turns_the_lockfile_off_is_refused_before_anything_is_scanned() {
+    let dir = project_with_lock();
+    for args in [
+        &["npm", "install", "--no-package-lock"][..],
+        &["npm", "ci", "--package-lock=false"],
+    ] {
+        let (code, out) = run_with_stderr(dir.path(), args);
+        assert_eq!(code, Some(1), "{args:?}");
+        assert!(out.contains("lockfile it scanned"), "{args:?}: {out}");
+        assert!(
+            !out.contains("Testing"),
+            "{args:?}: refused before the scan: {out}"
+        );
+    }
+    fs::write(
+        dir.path().join("pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\npackages:\n  left-pad@1.3.0:\n    resolution: {integrity: sha512-a}\nsnapshots: {}\n",
+    )
+    .unwrap();
+    let (code, out) = run_with_stderr(dir.path(), &["pnpm", "install", "--no-frozen-lockfile"]);
+    assert_eq!(code, Some(1));
+    assert!(
+        out.contains("lockfile it scanned") && !out.contains("Testing"),
+        "{out}"
+    );
+}
+
+/// npm 11 reads `npm-shrinkwrap.json` in preference to `package-lock.json`, npm 12 reads only
+/// `package-lock.json`: with both present, both are scanned.
+#[test]
+fn both_npm_lockfiles_are_scanned_because_npm_versions_pick_different_ones() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let lock = |v: &str| {
+        format!(
+            r#"{{"lockfileVersion":3,"packages":{{"node_modules/left-pad":{{"version":"{v}","resolved":"https://registry.npmjs.org/left-pad/-/left-pad-{v}.tgz"}}}}}}"#
+        )
+    };
+    fs::write(dir.path().join("npm-shrinkwrap.json"), lock("1.3.0")).unwrap();
+    fs::write(dir.path().join("package-lock.json"), lock("1.2.0")).unwrap();
+    let (code, out) = run(dir.path(), &["npm", "ci"]);
+    assert_eq!(code, Some(1), "no Docker, so the scan itself fails closed");
+    assert!(out.contains("Testing 2 package(s)"), "{out}");
 }

@@ -1077,12 +1077,38 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 442 — High | `src/parsing.rs` | ⚠️ Open
+---
 
-**Summary:** Python lockfile entries from a non-PyPI source are scanned as the PyPI package of the same name.
+### Finding 445 — High | `src/lib.rs`, `src/parsing.rs` | ⚠️ Open
 
-**Root cause:** `parse_uv_lock_packages_from_content` and the poetry parser only exclude local/editable sources; a `source = { registry = "https://other" }`, `git` or `url` entry is treated as a PyPI package.
+**Summary:** The forwarded install follows the user's own package-manager configuration, which can name a different index than the public one gyrseek scanned.
 
-**Fix direction:** mirror the npm rule from #432: accept only the PyPI index, fail closed naming each other entry, allow it only for packages in `internal_package_exemptions`.
+**Root cause:** the scan always resolves and probes the public registry package; the forwarded command is run as typed, so index settings from flags, environment variables, `pip.conf`, `pyproject.toml` or `.npmrc` apply to it only.
+
+**Fix direction:** detect index and registry settings per manager (flags, env vars, config files, requirements-file options) and exit 1 naming the setting, unless every named package is in `internal_package_exemptions`.
+
+---
+
+---
+
+### Finding 447 — Medium | `src/sandbox.rs`, `src/parsing.rs` | ⚠️ Open
+
+**Summary:** The scanned artifact can differ from the one the real install uses, for the same package and version.
+
+**Root cause:** the probe runs `pip`/`uv`/`npm` with `name==version` in the sandbox, so the package manager chooses the artifact (a compatible wheel if there is one). The forwarded install from a lockfile uses the artifact the lockfile pins, which can be an sdist (built from source on install) or a wheel for another platform. #446 makes sure both are files of the same package and version, but not that they are the same file.
+
+**Fix direction:** record which artifact each lockfile entry pins and flag entries that pin an sdist only, or a file other than the one the probe installed; the complete fix is to probe the lockfile's exact artifact (for uv, `--no-binary`/`--only-binary` and a pinned URL).
+
+---
+
+---
+
+### Finding 449 — Medium | `src/lib.rs` | ⚠️ Open
+
+**Summary:** `uv sync` is not frozen to the lockfile gyrseek scanned.
+
+**Root cause:** `forward_pinned_command` freezes only npm and pnpm lockfile installs. `uv sync` updates `uv.lock` when it is out of date with `pyproject.toml`, so the install can differ from the scanned lockfile.
+
+**Fix direction:** forward `uv sync` with `--locked` (uv then fails instead of re-locking) and reject flags that disable it, as `freeze_lockfile_install` does for npm and pnpm; Poetry already errors on a stale lockfile.
 
 ---
