@@ -995,7 +995,7 @@ fn extract_artifact_findings(full: &str) -> HashSet<String> {
 ///   - `unexpected_runtime|path|type` — bun/deno binary (subset of binary)
 ///   - `suspicious_pth|path|content`  — .pth with executable import/call patterns
 ///   - `large_file|path|size`        — file >10 MB
-fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> {
+pub(crate) fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> {
     let mut findings = HashSet::new();
     for line in raw {
         let parts: Vec<&str> = line.splitn(4, '\x00').collect();

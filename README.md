@@ -307,7 +307,7 @@ If `gyrseek` blocked sensitive file reads unconditionally, almost every `npm ins
 
 ### Post-Install Artifact Behavior Detection
 
-`gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, file type, first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
+`gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, executable format and, for `.pth` files, the first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
 
 The classifier emits four signal categories:
 
@@ -316,7 +316,7 @@ The classifier emits four signal categories:
 3. **`unexpected_runtime`** — bun/deno runtime binaries (identified by filename and binary type). Emitted in addition to the `binary` finding for the same file. Catches download-and-execute attacks that leave a runtime behind.
 4. **`large_file`** — any file >10 MB in the install tree. Catches data exfiltration staging and large payload drops.
 
-**How it works** — after each per-probe install step in the Docker matrix script, a single `find /work -type f` pipeline inventories every installed file, capturing size via `stat`, type via `file -b`, and a 300-byte content prefix via `head -c`. The raw inventory is written to `gyrseek_artifacts_N.log` (in the root-only trace tmpfs, then streamed to the host), embedded in the probe trace, and classified by `classify_inventory_lines` in scanning.rs before entering the diff pipeline.
+**How it works** — after each per-probe install step in the Docker matrix script, one `find /work -type f` and one interpreter process inventory every installed file (a `node_modules` of 10,000 files takes milliseconds, not the minutes of a process per file), capturing the size, the executable format (ELF, Mach-O or PE, recognised from the file's own first bytes, since the scanner images have no `file` command) and, for `.pth` files, the first 300 bytes of content. The interpreter is the one the package manager needs anyway: Python for pip, uv and poetry, Node for npm and pnpm. A custom scanner image (`GYRSEEK_PY_SCANNER_IMAGE`, `GYRSEEK_NPM_SCANNER_IMAGE`) therefore has it too; if it does not, or it fails, the scan stops with a message instead of continuing with an empty inventory. The raw inventory is written to `gyrseek_artifacts_N.log` (in the root-only trace tmpfs, then streamed to the host), embedded in the probe trace, and classified by `classify_inventory_lines` in scanning.rs before entering the diff pipeline.
 
 **Diff-based verdict** — like all of gyrseek's detection signals, artifact findings are compared across versions. A finding present in a baseline version is expected; a finding newly appearing in the current version (absent from all baselines) is **fail-closed**:
 
