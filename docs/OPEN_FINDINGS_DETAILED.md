@@ -27,22 +27,6 @@ v6.is_loopback() || is_link_local || is_ula
 
 ---
 
-### Finding 25 — High | `README.md:363` / `sandbox.rs` | ⚠️ Open
-
-**Summary:** gyrseek's sandbox only monitors behavior during `pip install`. A Python package that places malicious code at module scope (e.g. Telnyx T26's `_client.py` with `FetchAudio()` / `setup()` calls) executes entirely on `import <pkg>` — after the sandbox exits — and is never observed.
-
-**Root cause:** The containerized scan pipeline (`sandbox.rs:build_matrix_script`) runs only the install command and the post-install artifact `find` pipeline. There is no post-install import trigger step that forces Python to load the installed package while strace is still attached. Module-scope code in `__init__.py` or deeply nested SDK files fires outside the sandbox window.
-
-**Failure scenario:** `gyrseek pip install telnyx==2.0.0` installs normally inside the sandbox. The malicious `_client.py` sits dormant during install. gyrseek reports a clear scan (no anomalous execve, no anomalous network, no artifact findings — the code is in a legitimate `.py` file, not a `.pth` or binary). The host command is forwarded. On the developer's machine, `import telnyx` triggers credential exfiltration via AES-256-CBC + RSA-4096 to `83.142.209.203:8080`.
-
-**Fix direction:** Add a post-install import trigger step for Python managers. After the install probe completes, run:
-```sh
-su -s /bin/sh gyrseek -c "python3 -c 'import $(basename $pkg)'"
-```
-inside the same container with strace still attached. Any execve or connect that fires during import is captured by the existing trace pipeline and diffed against baselines. The package name-to-top-level-module mapping (handling namespace packages, dashes-to-underscores, etc.) must be resolved accurately to avoid false negatives or false-positive import errors.
-
----
-
 ### Finding 26 — Medium | `lib.rs:588` | ⚠️ Open
 
 **Summary:** The forwarding code in `GyrSeek::forward_args` uses `Command::new(&self.manager)` with no PATH validation, making it vulnerable to relative-path hijacking when run inside an untrusted directory containing a malicious `./pip` or `./npm` script.
@@ -1281,5 +1265,127 @@ if next.starts_with('-') {
 
 **Root cause:** PyPI is expected to redirect non-normalised names and versions; this was not measured, and an npm alias relies on the `name` field of the entry.
 
+
+---
+
+---
+
+### Finding 488 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The import step loads what the package's metadata lists as top-level modules, one package at a time, and nothing else.
+
+**Root cause:** `IMPORT_PYTHON` imports the distribution's own modules (from its recorded files) and `IMPORT_NODE` loads the package root. Code that runs only when a submodule the package never imports itself is loaded, when a function is called, when an environment variable, CI marker or date is right, or only when two packages are present together (T4) does not run in the sandbox. The sandbox also has no credentials or network identity a gated payload might look for. A module that ends the process (`os._exit`) stops the modules sorted after it from loading, in the candidate only if it was added there.
+
+**Fix direction:** import every module of the distribution (the installed file list gives them), with a time budget; compare how much more that finds on real packages before making it the default. Environment gating cannot be closed by tracing and needs the static pass (#491).
+
+---
+
+### Finding 489 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** A `.pth` file is not executed by the import step.
+
+**Root cause:** The import runs with `PYTHONPATH=/work`, which puts the directory on `sys.path` but does not process `.pth` files; only `site.addsitedir` or a directory of `site` does. T1b (a `.pth` that downloads and runs a payload at the next interpreter start) is therefore still judged only by the artifact classifier's patterns.
+
+**Fix direction:** call `site.addsitedir("/work")` first in `IMPORT_PYTHON` so `.pth` execution happens under strace, as the earlier prototype (PR #19) did.
+
+---
+
+### Finding 490 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Host mode has no import-time scan.
+
+**Root cause:** `HostRunner` runs only the package manager under strace, in a temporary directory it does not keep, with no inventory. Loading the package on the host would run its code in the user's environment (host mode already runs the install there).
+
+**Fix direction:** none planned; host mode is for disposable environments, and a warning says the step is skipped.
+
+---
+
+### Finding 491 — Medium | `src/scanning.rs` | ⚠️ Open
+
+**Summary:** Only traced behaviour counts; the source is never read.
+
+**Root cause:** GuardDog-style static analysis of the installed files (decoded blobs, `exec` of constructed strings, known IoCs) is not part of gyrseek. A payload that loads without a traced system call (waits on a timer, stages a decoded blob for a later call) is invisible to the diff.
+
+**Fix direction:** a static diff of the installed source against the baselines (the ROADMAP's "static diff scoring" phase).
+
+---
+
+### Finding 492 — Low | `src/scanning.rs`, `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** A failed load is judged by comparison, and some cases cannot be compared.
+
+**Root cause:** A load can fail for reasons that are not the package's fault (a system library the slim image lacks, an optional dependency, an old baseline that no longer imports on the sandbox's Python). The rule is: the same failure everywhere warns; the candidate failing alone, or any load timing out, blocks. A candidate that loads when no baseline could has no import baseline, so its load is not compared. A candidate that fails alone blocks with no exemption, and the user's only ways out are a custom scanner image or `--no-import-scan`.
+
+**Fix direction:** measure how often this happens on popular packages; if it is common, add a per-package way to accept a known failure.
+
+---
+
+### Finding 493 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Node packages are loaded through one root entry only.
+
+**Root cause:** `IMPORT_NODE` uses `import(name)` and falls back to `require(name)` only when the package exports no `import` entry (`ERR_PACKAGE_PATH_NOT_EXPORTED`), so an ESM entry that throws is reported rather than rescued by the CommonJS entry. The other direction is the gap: a package whose `import` and `require` conditions resolve to different root files runs only the `import` file, so a payload that exists only in the `require` file is not executed. A payload in a subpath export (`pkg/lib/x`) or a `bin` script is not run either. The process ends with `process.exit` as soon as the load settles, so a handle kept open by the package does not hold it, but a load that never settles runs into `import_timeout_seconds` and blocks.
+
+**Fix direction:** also load the `require` entry when it differs from the `import` entry, and the `exports` map entries, with the same time budget as #488.
+
+---
+
+### Finding 495 — Medium | `src/scanning.rs` | ⚠️ Open
+
+**Summary:** A candidate that loads has nothing to be compared with when no baseline did.
+
+**Root cause:** `check_import` compares a clean candidate only with baselines that loaded cleanly. Old releases often cannot load on the sandbox's Python or without a system library, and then the candidate's import-time behaviour is not diffed at all; a warning is printed and the package is allowed. Install-time checks still apply.
+
+**Fix direction:** try the next older eligible baseline that loads, or compare against an empty baseline for a package with no clean one and let the allowlists absorb the known noise. Measure how often this happens before choosing.
+
+---
+
+### Finding 496 — Medium | `src/scanning.rs`, `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** A candidate that fails to load alone blocks with no exemption.
+
+**Root cause:** `IMPORT_PYTHON` loads every module the installation recorded, and an optional module that needs an extra (`blackd` needs aiohttp) fails everywhere it exists. When a release adds such a module, only the candidate fails, and `check_import` blocks it as `import_failed`. As with `install_failed` there is no exemption key; the user's ways out are a custom scanner image or `--no-import-scan`. Packages that already have such a module warn on every scan.
+
+**Fix direction:** judge failures per module instead of per package (a module that is new in the candidate and fails on a missing optional import is a warning, any other new failure blocks), or add a per-package exemption.
+
+---
+
+### Finding 497 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Stray Python files in a wheel are imported.
+
+**Root cause:** Since the namespace fix the import program derives modules from every recorded `.py`, `.so` and `.pyd` file that is not under a regular package, so `docs/conf.py` or `examples/demo.py` shipped in a wheel is imported as `docs.conf`. It can fail the load or run unrelated code. Not seen on real packages yet.
+
+**Fix direction:** skip directories that are not importable packages (`docs`, `examples`, `tests`, `scripts`) unless they hold an `__init__.py`, or only import namespace parents that contain a package.
+
+---
+
+### Finding 498 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Splitting a big batch changes failure and cost.
+
+**Root cause:** `trace_install_docker_matrix` runs the chunks of `probe_chunks` in sequence and returns the first error, so one container that fails (every probe in it timed out, a frame that cannot be trusted) fails the whole scan, where one big container would have blocked only the packages that timed out. An image that is not prebuilt also repeats `apt-get` and user setup in each container.
+
+**Fix direction:** turn a failed container into `sandbox_execution_failed` for its own packages only, and run the containers in parallel up to a small limit.
+
+---
+
+### Finding 499 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Dependencies installed together with a package are not loaded.
+
+**Root cause:** `IMPORT_PYTHON` and `IMPORT_NODE` load the one package that is being scanned. Its dependencies are installed (and traced during the install) but their modules are executed only if the package imports them. For lockfile and bulk scans each dependency is its own probe, so it is loaded; for `npm install pkg` or `pip install pkg` a new dependency that a candidate adds, whose payload runs at import in a module the package never imports, is not seen at import time.
+
+**Fix direction:** load every distribution that the install added (the same metadata walk, for each distribution found in `/work`), compared with the baselines' set; or scan the dependencies as targets of their own.
+
+---
+
+### Finding 500 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The import step uses the same trace budget as the install.
+
+**Root cause:** Every per-probe file (`trace`, `err`, `artifacts`, `itrace`, `ierr`, `iartifacts`, exit codes) is kept in the root-only tmpfs sized by `trace_limit` until `gyrseek_publish` streams and deletes it after the probe. The import adds a second strace log and a second inventory to that, so a package whose install already produces most of the limit now crosses it (`GYRSEEK-LIMIT`) and is blocked as over the limit where it passed before. The default is 1024m, so this needs a large install.
+
+**Fix direction:** publish the install's files before the import step starts, so the budget is per step.
 
 ---

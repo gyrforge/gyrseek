@@ -167,9 +167,13 @@ traces are guarded by a root-only tmpfs rather than by MAC.
 The dominant risks in the attack classes gyrseek is built to catch are not container escapes, and
 neither profile addresses them:
 
-- **Execution outside the install window** — a PyPI `*-setup.pth` or import-time hook that fires on
-  the next interpreter start rather than during the probe (Open Finding 25; waves T26 and T32). The
-  package simply never misbehaves while it is being watched.
+- **Execution outside the install window** — a PyPI `*-setup.pth` that fires on the next interpreter
+  start (Open Finding 489), or code that runs only when something nobody loads during the probe is
+  loaded (Open Finding 488). Import-time hooks (waves T26 and T32) are covered since FIXED #25: each
+  probe loads the installed package under the same strace and unprivileged user (the import step),
+  inside the same container, so it has the same isolation and `/work` mounts as the install, with its own time limit (`import_timeout_seconds`, separate from `probe_timeout_seconds`).
+  A package that is never loaded in the sandbox in a way that triggers its payload simply never
+  misbehaves while it is being watched.
 - **Open egress during the probe** — in Docker mode the container reaches the network so package
   managers can resolve dependencies, so a probe-time exfiltration packet does reach the internet even
   though gyrseek then blocks the host install.

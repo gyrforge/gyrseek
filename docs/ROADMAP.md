@@ -42,8 +42,9 @@
 ### Detection & Analysis
 
 - **Post-install interpreter trigger** — exercise the package's import/startup path inside the sandbox to catch deferred payloads. Covers two patterns:
-  - `.pth`-based (Hades/Miasma T1, LiteLLM T25): `*-setup.pth` auto-executes on next Python interpreter startup
-  - Module-scope code (Telnyx T26): `FetchAudio()` / `setup()` calls at `_client.py` module scope fire on `import telnyx` — no postinstall hook, no `.pth` file, just base64 blobs embedded in a legitimate SDK source file
+  - Module-scope code (Telnyx T26, `mistralai` T32): **done** (FIXED #25, `import_scan`): the package's top-level modules are loaded after the install and diffed against the baselines' loads, for Python and Node.
+  - `.pth`-based (Hades/Miasma T1, LiteLLM T25): `*-setup.pth` auto-executes on next Python interpreter startup. Still open (OPEN #489): call `site.addsitedir` before the import so `.pth` files run under strace.
+  - Further import-time coverage: every submodule of the distribution (OPEN #488, #493), a static diff of the installed source (OPEN #491), host mode (OPEN #490).
 - **Direct git clone runtime interception** — parse `git clone` commands, trace install-time clone behavior, and fail closed on new targets. Phases: command parser support → interception pipeline → baseline model → policy controls → test coverage.
 - **Enhanced generated-file comparison** — layer SHA-256 hashing then semantic-aware diff on top of the current artifact inventory for high-risk file types (shell scripts, JS/TS, Python, lockfiles, manifests). Phases: file inventory diff → content-hash comparison → deterministic normalization → semantic diff → policy controls → integration tests.
 
