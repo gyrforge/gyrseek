@@ -1998,3 +1998,7 @@ only.
 - **Root Cause**: `trusted_index_hosts` only removed the refusal (FIXED #445); the probe still installed the public package.
 - **Fix**: as #447. The package managers enforce the lockfile hash, so a locked hash equal to the public hash makes the install file the public one whichever host serves it. WONT_FIX #448 (hash comparison of the registry's own files) assumed the registry is the source; a mirror breaks that, which is why the lockfile hash is now compared.
 - **Remaining**: command-line installs through a mirror, OPEN #481.
+
+### Finding 483: Requirements files were not hash-checked
+- **Root Cause**: `verify_lockfile_artifacts` handled only lockfiles, so `--hash` values in requirements files were never compared and a trusted mirror could serve other files for them.
+- **Fix**: `requirements_locked` reads `name==version` and `--hash` options of any other recorded input; a hash the registry does not publish is refused, and a line without a hash is refused only with `trusted_index_hosts` configured (`Locked.hash_optional`, `mirror` argument), consistent with WONT_FIX #448. Checked with real six data.

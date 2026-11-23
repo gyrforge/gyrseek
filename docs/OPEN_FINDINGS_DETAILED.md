@@ -1226,7 +1226,7 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 481 — Medium | `src/lock_verify.rs`, `src/index_settings.rs` | ⚠️ Open
+### Finding 481 — Low | `src/lock_verify.rs`, `src/index_settings.rs` | ⚠️ Open
 
 **Summary:** A command-line install through a trusted mirror is not hash-checked.
 
@@ -1245,15 +1245,6 @@ if next.starts_with('-') {
 **Fix direction:** probe the lockfile's wheel for each platform that is in use, or accept a lockfile only when the probe's wheel is the one the install will pick. Related to the native-package normalisation trade-off (#473).
 
 ---
-
----
-
-### Finding 483 — Medium | `src/lock_verify.rs` | ⚠️ Open
-
-**Summary:** Requirements files are not hash-checked.
-
-**Root cause:** `verify_lockfile_artifacts` handles only recorded lockfiles. `uv pip sync` and `pip -r` requirement lines carry `--hash=` values that are never compared, so the #452 mirror gap remains for them.
-
 
 ---
 
