@@ -7,7 +7,9 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::parsing::{pnpm_key_without_peers, pnpm_package_key, pylock_version};
+use crate::parsing::{
+    pnpm_key_without_peers, pnpm_package_key, pylock_version, strip_pep508_extras,
+};
 use crate::sandbox::base64_decode;
 
 type Key = (String, String);
@@ -23,6 +25,9 @@ pub(crate) struct Locked {
     pub sdist: bool,
     /// Some occurrence or file of this version records no hash, whatever the others carry.
     pub unhashed: bool,
+    /// A requirements file may leave out `--hash`: that only matters when a trusted mirror may
+    /// serve other files, so no hash is refused only then (WONT_FIX #448 for the public registry).
+    pub hash_optional: bool,
 }
 
 /// What the public registry publishes for one package version.
@@ -248,6 +253,39 @@ fn pylock_files(pkg: &toml::Table) -> Vec<PyFile> {
     single.chain(wheels).collect()
 }
 
+/// `name==version` lines of a requirements file with their `--hash=alg:hex` options, which may
+/// continue on following lines after a trailing backslash.
+fn requirements_locked(content: &str) -> HashMap<Key, Locked> {
+    let mut out: HashMap<Key, Locked> = HashMap::new();
+    let joined = content.replace("\\\r\n", " ").replace("\\\n", " ");
+    for line in joined.lines() {
+        let mut tokens = line.split_whitespace();
+        let Some((name, version)) = tokens.next().and_then(|t| t.split_once("==")) else {
+            continue;
+        };
+        let version = version.split(';').next().unwrap_or(version);
+        if name.is_empty() || version.is_empty() || name.starts_with('-') {
+            continue;
+        }
+        let mut hashes = Vec::new();
+        let mut rest = tokens.take_while(|t| *t != "#");
+        while let Some(t) = rest.next() {
+            let value = match t.strip_prefix("--hash=") {
+                Some(v) => Some(v),
+                None if t == "--hash" => rest.next(),
+                None => None,
+            };
+            hashes.extend(value.map(py_hash));
+        }
+        let locked = out
+            .entry((strip_pep508_extras(name).to_string(), version.to_string()))
+            .or_default();
+        locked.hash_optional = true;
+        add_py_file(locked, hashes, true);
+    }
+    out
+}
+
 /// The pins of a recorded lockfile, chosen by its file name; `None` for any other input.
 pub(crate) fn locked_files(path: &str, content: &str) -> Option<HashMap<Key, Locked>> {
     let file = path.rsplit('/').next().unwrap_or(path);
@@ -262,7 +300,7 @@ pub(crate) fn locked_files(path: &str, content: &str) -> Option<HashMap<Key, Loc
             pylock_entry_version,
             pylock_files,
         ),
-        _ => return None,
+        _ => requirements_locked(content),
     })
 }
 
@@ -274,14 +312,15 @@ fn sha1_hex(integrity: &str) -> Option<String> {
 
 /// The reason a locked version cannot be shown to be a public file, if there is one.
 pub(crate) fn mismatch(
+    mirror: bool,
     name: &str,
     version: &str,
     locked: &Locked,
     public: &Public,
 ) -> Option<String> {
-    if locked.hashes.is_empty() || locked.unhashed {
+    if (mirror || !locked.hash_optional) && (locked.hashes.is_empty() || locked.unhashed) {
         return Some(format!(
-            "{name}@{version}: the lockfile records no hash for at least one occurrence or file of it"
+            "{name}@{version}: the lockfile or requirements file records no hash for at least one occurrence or file of it"
         ));
     }
     let unknown: Vec<&str> = locked
@@ -295,7 +334,7 @@ pub(crate) fn mismatch(
         .collect();
     if !unknown.is_empty() {
         return Some(format!(
-            "{name}@{version}: the lockfile pins a file the public registry does not publish for this version ({})",
+            "{name}@{version}: the lockfile or requirements file pins a file the public registry does not publish for this version ({})",
             unknown.join(", ")
         ));
     }
@@ -372,6 +411,7 @@ pub(crate) async fn verify_lockfile_artifacts(
     recorded: &[(String, String)],
     targets: &[(String, String)],
     exempt: &HashSet<String>,
+    mirror: bool,
 ) -> Result<(), String> {
     let npm = matches!(manager, "npm" | "pnpm");
     let locks: Vec<HashMap<Key, Locked>> = recorded
@@ -402,9 +442,12 @@ pub(crate) async fn verify_lockfile_artifacts(
                         merged.wheel |= l.wheel;
                         merged.sdist |= l.sdist;
                         merged.unhashed |= l.unhashed;
+                        merged.hash_optional |= l.hash_optional;
                     }
                 }
-                found.then_some((t, merged))
+                // A requirements entry without a hash needs no check unless a mirror is trusted.
+                let skip = merged.hash_optional && merged.hashes.is_empty() && !mirror;
+                (found && !skip).then_some((t, merged))
             })
             .collect()
     };
@@ -417,11 +460,12 @@ pub(crate) async fn verify_lockfile_artifacts(
                 wheel: locked.wheel,
                 sdist: locked.sdist,
                 unhashed: locked.unhashed,
+                hash_optional: locked.hash_optional,
             };
             set.spawn(async move {
                 let public = fetch_public(&client, npm, &name, &version).await;
                 match public {
-                    Some(p) => mismatch(&name, &version, &locked, &p),
+                    Some(p) => mismatch(mirror, &name, &version, &locked, &p),
                     None => Some(format!(
                         "{name}@{version}: the public registry's hashes could not be fetched"
                     )),
@@ -441,7 +485,7 @@ pub(crate) async fn verify_lockfile_artifacts(
     }
     problems.sort();
     Err(format!(
-        "{} locked package(s) cannot be shown to be files the public registry publishes, so the scan would not describe the install:\n  {}\nRegenerate the lockfile from the public registry, or add an internal package to internal_package_exemptions.",
+        "{} pinned package(s) cannot be shown to be files the public registry publishes, so the scan would not describe the install:\n  {}\nRegenerate the lockfile or requirements file from the public registry, or add an internal package to internal_package_exemptions.",
         problems.len(),
         problems.join("\n  ")
     ))
@@ -507,7 +551,6 @@ mod tests {
         let got = &locked_files("sub/pylock.toml", pylock).unwrap()[&key("six", "1.16.0")];
         assert_eq!(got.hashes.len(), 2);
         assert!(got.wheel && got.sdist);
-        assert!(locked_files("requirements.txt", "six==1.16.0").is_none());
     }
 
     #[test]
@@ -517,8 +560,10 @@ mod tests {
             wheel: true,
             sdist: false,
             unhashed: false,
+            hash_optional: false,
         };
         let msg = mismatch(
+            true,
             "six",
             "1.16.0",
             &locked,
@@ -531,9 +576,11 @@ mod tests {
             wheel: true,
             sdist: false,
             unhashed: false,
+            hash_optional: false,
         };
         assert_eq!(
             mismatch(
+                true,
                 "six",
                 "1.16.0",
                 &ok,
@@ -546,6 +593,7 @@ mod tests {
     #[test]
     fn a_lock_entry_without_a_hash_is_refused() {
         let msg = mismatch(
+            true,
             "a",
             "1.0.0",
             &Locked::default(),
@@ -561,8 +609,10 @@ mod tests {
             wheel: false,
             sdist: true,
             unhashed: false,
+            hash_optional: false,
         };
         let msg = mismatch(
+            true,
             "six",
             "1.16.0",
             &locked,
@@ -572,6 +622,7 @@ mod tests {
         // The registry has nothing but the sdist: the probe builds it too.
         assert_eq!(
             mismatch(
+                true,
                 "six",
                 "1.16.0",
                 &locked,
@@ -590,6 +641,7 @@ mod tests {
         };
         assert_eq!(
             mismatch(
+                true,
                 "a",
                 "1.0.0",
                 &locked,
@@ -601,19 +653,40 @@ mod tests {
             ),
             None
         );
-        assert!(mismatch("a", "1.0.0", &locked, &public(&["sha1:00"], false, false)).is_some());
+        assert!(
+            mismatch(
+                true,
+                "a",
+                "1.0.0",
+                &locked,
+                &public(&["sha1:00"], false, false)
+            )
+            .is_some()
+        );
     }
 
     #[test]
     fn one_hashless_occurrence_is_not_hidden_by_a_hashed_one() {
         let lock = r#"{"packages":{"node_modules/a":{"version":"1.0.0","integrity":"sha512-AAA"},"node_modules/x/node_modules/a":{"version":"1.0.0"}}}"#;
         let locked = &npm_locked(lock)[&key("a", "1.0.0")];
-        let msg = mismatch("a", "1.0.0", locked, &public(&["sha512-AAA"], false, false));
+        let msg = mismatch(
+            true,
+            "a",
+            "1.0.0",
+            locked,
+            &public(&["sha512-AAA"], false, false),
+        );
         assert!(msg.unwrap().contains("no hash"));
         let ok = r#"{"packages":{"node_modules/a":{"version":"1.0.0","integrity":"sha512-AAA"},"node_modules/x/node_modules/a":{"version":"1.0.0","integrity":"sha512-AAA"}}}"#;
         let locked = &npm_locked(ok)[&key("a", "1.0.0")];
         assert_eq!(
-            mismatch("a", "1.0.0", locked, &public(&["sha512-AAA"], false, false)),
+            mismatch(
+                true,
+                "a",
+                "1.0.0",
+                locked,
+                &public(&["sha512-AAA"], false, false)
+            ),
             None
         );
     }
@@ -625,6 +698,7 @@ mod tests {
         assert!(locked.unhashed);
         assert!(
             mismatch(
+                true,
                 "six",
                 "1.16.0",
                 locked,
@@ -656,5 +730,48 @@ mod tests {
         let got = npm_locked(lock);
         assert!(!got[&key("a", "1.0.0")].unhashed);
         assert!(!got.contains_key(&key("l", "1.0.0")));
+    }
+
+    #[test]
+    fn requirements_hashes_are_read_across_continuation_lines() {
+        let req = "# pins\nsix[extra]==1.16.0 ; python_version >= \"3\" \\\n    --hash=sha256:AA \\\n    --hash sha256:bb\nattrs==24.2.0\n-r other.txt\n";
+        let got = requirements_locked(req);
+        let six = &got[&key("six", "1.16.0")];
+        assert_eq!(
+            six.hashes,
+            ["sha256:aa", "sha256:bb"].map(String::from).into()
+        );
+        assert!(six.hash_optional);
+        assert!(got[&key("attrs", "24.2.0")].hashes.is_empty());
+    }
+
+    #[test]
+    fn a_requirements_line_without_a_hash_is_refused_only_with_a_trusted_mirror() {
+        let got = requirements_locked("attrs==24.2.0\n");
+        let locked = &got[&key("attrs", "24.2.0")];
+        let public = public(&["sha256:aa"], true, false);
+        assert_eq!(mismatch(false, "attrs", "24.2.0", locked, &public), None);
+        assert!(
+            mismatch(true, "attrs", "24.2.0", locked, &public)
+                .unwrap()
+                .contains("no hash")
+        );
+    }
+
+    #[test]
+    fn a_requirements_hash_the_registry_does_not_publish_is_refused_without_a_mirror_too() {
+        let got = requirements_locked("attrs==24.2.0 --hash=sha256:evil\n");
+        let locked = &got[&key("attrs", "24.2.0")];
+        assert!(
+            mismatch(
+                false,
+                "attrs",
+                "24.2.0",
+                locked,
+                &public(&["sha256:aa"], true, false)
+            )
+            .unwrap()
+            .contains("does not publish")
+        );
     }
 }

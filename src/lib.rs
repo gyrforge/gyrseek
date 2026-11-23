@@ -2111,6 +2111,7 @@ async fn scan_targets(
             &recorded_inputs(),
             &targets,
             &policy.internal_package_exemptions,
+            !policy.trusted_index_hosts.is_empty(),
         )
         .await
     {
