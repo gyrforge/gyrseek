@@ -19,7 +19,10 @@ pub fn gyrseek() -> Command {
             command.env_remove(key);
         }
     }
+    // The lockfile hash check (FIXED #447, #452) asks the public registry; tests of other behaviour
+    // use lockfiles without hashes and must not need the network.
     command
+        .env("GYRSEEK_TEST_SKIP_LOCK_VERIFY", "1")
         .env("HOME", "/nonexistent-gyrseek-test-home")
         .env("XDG_CONFIG_HOME", "/nonexistent-gyrseek-test-home/.config");
     command

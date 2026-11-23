@@ -1,4 +1,5 @@
 mod index_settings;
+mod lock_verify;
 mod parsing;
 mod runtime_image;
 mod sandbox;
@@ -18,7 +19,7 @@ use parsing::{
     freeze_uv_sync, has_only_non_registry_npm_specs, is_lockfile_only_command,
     parse_npm_install_targets_with, parse_poetry_lock, parse_pylock, parse_python_install_targets,
     parse_requirements_packages_from_content, parse_uv_lock,
-    parse_uv_lock_upgrade_packages_from_args, read_input, rewrite_args_at,
+    parse_uv_lock_upgrade_packages_from_args, read_input, recorded_inputs, rewrite_args_at,
 };
 use parsing::{parse_package_details, should_enforce_package_detection};
 use runtime_image::{
@@ -2099,6 +2100,23 @@ async fn scan_targets(
     targets: Vec<(String, String)>,
     policy: &PolicyConfig,
 ) -> Option<HashMap<String, String>> {
+    // The scan describes the public release; a lockfile may pin something else (FIXED #447, #452).
+    #[cfg(any(debug_assertions, test))]
+    let skip_lock_verify = env::var("GYRSEEK_TEST_SKIP_LOCK_VERIFY").is_ok();
+    #[cfg(not(any(debug_assertions, test)))]
+    let skip_lock_verify = false;
+    if !skip_lock_verify
+        && let Err(e) = lock_verify::verify_lockfile_artifacts(
+            manager,
+            &recorded_inputs(),
+            &targets,
+            &policy.internal_package_exemptions,
+        )
+        .await
+    {
+        println!("❌ [gyrseek] {e}");
+        return None;
+    }
     scan_many_with_cache(scan_cache, runner, manager, targets, policy).await
 }
 

@@ -748,7 +748,7 @@ fn read_line_capped(
 }
 
 /// Standard base64 (padding required); `None` on any other character.
-fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
     if !input.len().is_multiple_of(4) {
         return None;
     }

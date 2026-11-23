@@ -1988,3 +1988,13 @@ only.
 ### Finding 425: Native packages could not install in the sandbox
 - **Root Cause**: `build_docker_run_args` mounted `/tmp` `rw,noexec,nosuid,size=128m` and `/work` `rw,noexec,nosuid`. uv extracts a 40 MB wheel into `/tmp` (scipy: `No space left on device`), and npm install scripts such as `node install.js` (esbuild) and `node-gyp-build` (bcrypt) execute a binary under `/work/node_modules` (`Permission denied`, exit 126).
 - **Fix**: `/tmp` is sized like `/work` and stays `noexec`; `/work` is `rw,exec,nosuid,nodev`. Decided with the maintainer after measuring that a `noexec` mount stops a dropped ELF even through the dynamic loader (`failed to map segment`) but also stops legitimate C extensions, and that a failed exec attempt is recorded in the trace like a successful one. The accepted risk and the rejected alternatives are recorded as WONT_FIX #480. A Docker test runs a binary from `/work`, shows `/tmp` blocks one, writes a 300 MB file into `/tmp` and reads the mount flags back; Docker's tmpfs default is `noexec`, which the first version of the change missed until that test failed.
+
+### Finding 447: The lockfile could pin a different artifact than the one the probe ran
+- **Root Cause**: the probe installs `name==version` and takes whatever the package manager picks; a lockfile can pin another file of the same version (an sdist that builds from source, another platform's wheel, or a file that is not on the public registry at all).
+- **Fix**: `lock_verify::verify_lockfile_artifacts` reads the lockfiles recorded by `read_input` (package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, uv.lock, poetry.lock, pylock.toml) and, for every scanned target, fetches the public hashes of that version (npm `dist.integrity`/`shasum`, PyPI `urls[].digests.sha256`). It fails closed when a locked hash is not public, when the entry has no hash, when the public hashes cannot be fetched, and when a Python lock pins only the sdist although wheels exist. `internal_package_exemptions` skip the check. Verified with real lodash and six data.
+- **Remaining**: per-platform wheels, OPEN #482.
+
+### Finding 452: A trusted mirror was assumed to serve the public files
+- **Root Cause**: `trusted_index_hosts` only removed the refusal (FIXED #445); the probe still installed the public package.
+- **Fix**: as #447. The package managers enforce the lockfile hash, so a locked hash equal to the public hash makes the install file the public one whichever host serves it. WONT_FIX #448 (hash comparison of the registry's own files) assumed the registry is the source; a mirror breaks that, which is why the lockfile hash is now compared.
+- **Remaining**: command-line installs through a mirror, OPEN #481.
