@@ -1058,11 +1058,13 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 459 — Low | `tests/e2e/redirects.sh`, `justfile` | ⚠️ Open
+### Finding 459 — Low | `tests/e2e/redirects.sh`, `tests/e2e/import.sh`, `justfile` | ⚠️ Open
 
 **Summary:** e2e redirect checks depend on live registries.
 
 **Root cause:** The script creates fixtures with the real tools against the public registries (`npm install --package-lock-only`, `uv lock`, `poetry lock`) and the sandbox probes the public registry, so it needs network. The machine's own settings, caches and stores are no longer a factor: the run uses its own `HOME`.
+
+`tests/e2e/import.sh` (the import-time scan of heavy packages) has the same dependency on live registries and two more: its ten package versions were picked from registry release dates, not from a scan, because the Docker run was not possible when it was written, so a version that does not clear needs a new pin after the first CI run; and the dependencies of each package resolve on the day it runs (a new release of one of them can add a process or a file and block the package), where only the package itself is pinned. Its two `warn` expectations depend on upstream behaviour that is stable for the pinned versions: black's `blackd` module needs aiohttp, and jest's `@jest/globals` refuses to load outside jest. The script also tells the outcomes apart by grepping gyrseek's own human-readable messages (`could not be loaded in the sandbox`, `could not load some module`), so rewording either message makes it fail until the script is updated.
 
 **Fix direction:** a fixture registry for the lockfile creation, served by the stand-in mirror.
 
@@ -1314,7 +1316,7 @@ if next.starts_with('-') {
 
 **Summary:** A failed load is judged by comparison, and some cases cannot be compared.
 
-**Root cause:** A load can fail for reasons that are not the package's fault (a system library the slim image lacks, an optional dependency, an old baseline that no longer imports on the sandbox's Python). The rule is: the same failure everywhere warns; the candidate failing alone, or any load timing out, blocks. A candidate that loads when no baseline could has no import baseline, so its load is not compared. A candidate that fails alone blocks with no exemption, and the user's only ways out are a custom scanner image or `--no-import-scan`.
+**Root cause:** A load can fail for reasons that are not the package's fault (a system library the slim image lacks, an optional dependency, an old baseline that no longer imports on the sandbox's Python). The rule is: the same failure everywhere warns; the candidate failing alone, or any load timing out, blocks. A candidate that loads when no baseline could has no import baseline, so its load is not compared. A load that times out blocks whichever version it was: an older baseline that needs longer than `import_timeout_seconds` blocks a newer candidate that is not at fault, and nothing in the report separates the two cases. A candidate that fails alone blocks with no exemption, and the user's only ways out are a custom scanner image or `--no-import-scan`.
 
 **Fix direction:** measure how often this happens on popular packages; if it is common, add a per-package way to accept a known failure.
 
@@ -1340,16 +1342,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 496 — Medium | `src/scanning.rs`, `src/sandbox.rs` | ⚠️ Open
-
-**Summary:** A candidate that fails to load alone blocks with no exemption.
-
-**Root cause:** `IMPORT_PYTHON` loads every module the installation recorded, and an optional module that needs an extra (`blackd` needs aiohttp) fails everywhere it exists. When a release adds such a module, only the candidate fails, and `check_import` blocks it as `import_failed`. As with `install_failed` there is no exemption key; the user's ways out are a custom scanner image or `--no-import-scan`. Packages that already have such a module warn on every scan.
-
-**Fix direction:** judge failures per module instead of per package (a module that is new in the candidate and fails on a missing optional import is a warning, any other new failure blocks), or add a per-package exemption.
-
----
-
 ### Finding 497 — Low | `src/sandbox.rs` | ⚠️ Open
 
 **Summary:** Stray Python files in a wheel are imported.
@@ -1370,16 +1362,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 499 — Medium | `src/sandbox.rs` | ⚠️ Open
-
-**Summary:** Dependencies installed together with a package are not loaded.
-
-**Root cause:** `IMPORT_PYTHON` and `IMPORT_NODE` load the one package that is being scanned. Its dependencies are installed (and traced during the install) but their modules are executed only if the package imports them. For lockfile and bulk scans each dependency is its own probe, so it is loaded; for `npm install pkg` or `pip install pkg` a new dependency that a candidate adds, whose payload runs at import in a module the package never imports, is not seen at import time.
-
-**Fix direction:** load every distribution that the install added (the same metadata walk, for each distribution found in `/work`), compared with the baselines' set; or scan the dependencies as targets of their own.
-
----
-
 ### Finding 500 — Low | `src/sandbox.rs` | ⚠️ Open
 
 **Summary:** The import step uses the same trace budget as the install.
@@ -1387,5 +1369,85 @@ if next.starts_with('-') {
 **Root cause:** Every per-probe file (`trace`, `err`, `artifacts`, `itrace`, `ierr`, `iartifacts`, exit codes) is kept in the root-only tmpfs sized by `trace_limit` until `gyrseek_publish` streams and deletes it after the probe. The import adds a second strace log and a second inventory to that, so a package whose install already produces most of the limit now crosses it (`GYRSEEK-LIMIT`) and is blocked as over the limit where it passed before. The default is 1024m, so this needs a large install.
 
 **Fix direction:** publish the install's files before the import step starts, so the budget is per step.
+
+---
+
+### Finding 502 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** pnpm installs do not get dependency loading.
+
+**Root cause:** `IMPORT_NODE` lists `/work/node_modules`. npm puts every dependency there; pnpm links only the direct dependency and keeps the rest in `/work/node_modules/.pnpm/node_modules`, which the program does not read (resolving from there needs a different base path for `require.resolve` and `import()`). So for pnpm a dependency whose payload sits in a module the package never imports is not run (the gap #499 closed for npm and Python).
+
+**Fix direction:** also list `.pnpm/node_modules` and load each package by its resolved file path.
+
+---
+
+### Finding 503 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The import step costs time in proportion to the dependency tree.
+
+**Root cause:** Every dependency is loaded under strace, in every probe (the candidate and each baseline). Measured with the real binary: jest 87 s without the import step and 112 s with it, vite 30 s and 39 s; a package with few dependencies costs about a second (lxml, pillow, requests). Each load is bounded by `import_timeout_seconds` (300 s), so a tree whose load needs longer blocks as `import_failed`.
+
+**Fix direction:** an opt-out per package for the dependency loading, or a time budget shared across the modules of one load.
+
+---
+
+### Finding 504 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The Node import program resolves entries with its own code.
+
+**Root cause:** Before evaluating anything `IMPORT_NODE` reads `package.json` and resolves the root of `exports` (or `main`) itself (`how`, `pick`), because `import()` cannot say whether the root entry is missing or something inside it is. The resolution knows the conditions `node`, `module-sync`, `import`/`require` and `default`, in key order, nothing of the `imports` field, pattern exports (`"./*"`), or other conditions (`browser`, `development`, `worker`, a custom one, `types` is ignored on purpose). A package whose root export matches only an unknown condition is skipped silently, and any case where this reading differs from Node's (array fallbacks, `null` targets, nested conditions) can load the wrong entry or none. The result is a coverage gap that no warning shows.
+
+**Fix direction:** let Node resolve: try `import()` and `require()` and tell "no root entry" from a nested error by the error's own details (the resolved path in `err.url`, `err.path` or the message), or use `module.findPackageJSON` and `import.meta.resolve` where the image's Node has them, and keep this reading only as the fallback.
+
+---
+
+### Finding 505 — Low | `src/sandbox.rs`, `src/scanning.rs` | ⚠️ Open
+
+**Summary:** A deliberate missing-dependency error softens the failed-load block.
+
+**Root cause:** FIXED #496 made a candidate that fails to load only because of a missing dependency (`ModuleNotFoundError`, `ImportError`, `MODULE_NOT_FOUND`, `ERR_MODULE_NOT_FOUND`) a warning where a baseline loaded. A payload that runs and then raises one of those turns `import_failed` into a warning. Its execution is still compared, so a new process, connection, sensitive read or file still blocks; what is lost is only the failed-load signal. The Python program also tells a missing name from a missing module by the English prefix `cannot import name` of CPython's message, which is not part of the exception's API and can change between Python releases (a circular import has the same prefix and blocks).
+
+**Fix direction:** use the exception's attributes (`ModuleNotFoundError`, `ImportError.name`/`.path`) instead of message text, and warn about the softened case in the report with the missing module's name.
+
+---
+
+### Finding 506 — Low | `src/sandbox.rs`, `justfile` | ⚠️ Open
+
+**Summary:** One Docker test is not `#[ignore]`d.
+
+**Root cause:** All other tests that need Docker are `#[ignore]` and run by `just test-trace-integrity` (in CI's Docker jobs), but `docker_enforces_sandbox_constraints` starts a container in the normal test run. Where Docker is not reachable `cargo test` fails with `permission denied while trying to connect to the docker API` although the code is fine, and it is the only failing test.
+
+**Fix direction:** mark it `#[ignore = "needs Docker; run with `just test-trace-integrity`"]` and add it to that recipe, which CI already runs.
+
+---
+
+### Finding 507 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The import step is verified on one Python and one Node only.
+
+**Root cause:** `IMPORT_PYTHON` and `IMPORT_NODE` were run in the Docker sandbox on the default images (Python 3.13, Node 26) and, for the pinned packages, on a developer machine (Python 3.13 and 3.15, Node 26), never on the other supported runtimes: `python_version` allows 3.10–3.14 and `node_version` 20, 22, 24 and 26. The programs lean on behaviour that differs between releases: `importlib.metadata.distributions(path=...)`, `Distribution.files` and `read_text`; for Node the `module-sync` condition (added in 22.12 and 20.19), the codes `import()` raises for a `.node` file (`ERR_UNKNOWN_FILE_EXTENSION`) and for a package without an `import` entry, and `require.resolve` with `paths`. A difference would show as a package skipped without a message, or as a failure in every version (so only a warning). CI also runs on amd64, where a tree installs the linux-x64 platform packages (the native `.node` addons are different files from the arm64 ones used locally).
+
+**Fix direction:** run the import Docker tests (`just test-trace-integrity`) over the oldest and newest supported Python and Node (`python_version`/`node_version`), and `tests/e2e/import.sh` on one non-default runtime.
+
+---
+
+### Finding 508 — Low | `src/lib.rs` | ⚠️ Open
+
+**Summary:** Unknown config keys are dropped silently and the import allowlists are not announced.
+
+**Root cause:** `GyrseekConfig` derives `Deserialize` without `#[serde(deny_unknown_fields)]`, so any key serde does not recognise is skipped. With the import step there are seven new keys (`import_scan`, `import_timeout_seconds` and six `import_*_allowlist` keys), each one easy to misspell or to put in the install-time spelling by mistake. The effect fails safe either way: a misspelled allowlist leaves the package blocked, and a misspelled `import_scan` leaves the scan on. The operator is not told. The install-time allowlists print `Loaded N … allowlist … from <config>` at startup (`run` in `src/lib.rs`); the import ones do not, so a correctly spelled `import_*` key gives no confirmation that it was read either.
+
+**Fix direction:** warn (or fail, for keys that look like gyrseek's own) on an unknown top-level key, ideally with the closest known name, and print the same `Loaded` line for each `import_*` allowlist.
+
+---
+
+### Finding 509 — Medium | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** Deferred work after the load is cut off, which is an easy way past the import step.
+
+**Root cause:** `IMPORT_PYTHON` finishes with `os._exit(rc)` and `IMPORT_NODE` with `process.exit(rc)` as soon as the last module has loaded. This was chosen so that a package which keeps a handle open (a non-daemon thread, a timer, an open socket) cannot hold the probe until `import_timeout_seconds`. The cost: Python skips `atexit` hooks, does not join threads and does not flush buffered file objects the package left open (a file it wrote may be empty or missing in the inventory), and Node drops pending timers, `setImmediate` callbacks and requests in flight. A payload that registers its work with `atexit.register`, starts a `threading.Timer`, or calls `setTimeout` after loading, instead of running at module scope, therefore does nothing in the sandbox and everything on the user's machine. The behaviour diff cannot see what never ran.
+
+**Fix direction:** end the process normally after a short bounded grace period: Python leaves through `sys.exit` so `atexit` hooks run and joins threads for up to a few seconds, Node waits for the event loop to drain for up to a few seconds before `process.exit`. The grace period must stay well below `import_timeout_seconds`, and a package that never goes idle is then stopped by the grace limit instead of the timeout (it still has to be killed, as now). Measure how much it adds on the pinned packages in `tests/e2e/import.sh` before choosing the value.
 
 ---

@@ -186,6 +186,10 @@ pub(crate) struct ImportRun {
     pub failure: Option<InstallFailure>,
     /// The import exceeded `import_timeout_seconds`; its trace is partial.
     pub timed_out: bool,
+    /// Every module that failed did so on a missing dependency (`ModuleNotFoundError`,
+    /// `ImportError`, `MODULE_NOT_FOUND`): an optional extra or a library the image lacks, which
+    /// says little about the package. Read from the program's own error lines.
+    pub missing_dependency_only: bool,
 }
 
 /// A single traced probe.
@@ -998,6 +1002,7 @@ fn read_import_run(
             trace: String::new(),
             failure: None,
             timed_out: true,
+            missing_dependency_only: false,
         });
     }
     // None of the import step's files: it did not run (the install failed, or import scanning is
@@ -1027,11 +1032,42 @@ fn read_import_run(
         .filter(|l| !l.is_empty() && !known.contains(l))
         .collect();
     append_inventory(&mut trace, &created.join("\n"));
+    let missing_dependency_only = failure.is_some() && only_missing_dependencies(&file("ierr"));
     Some(ImportRun {
         trace,
         failure,
         timed_out: false,
+        missing_dependency_only,
     })
+}
+
+/// The kinds of failure that mean a dependency is not there (see `IMPORT_PYTHON`, `IMPORT_NODE`).
+const MISSING_DEPENDENCY_KINDS: [&str; 4] = [
+    "ModuleNotFoundError",
+    "ImportError",
+    "MODULE_NOT_FOUND",
+    "ERR_MODULE_NOT_FOUND",
+];
+
+/// Whether the import program reported failures, and all of them were a missing dependency (a
+/// module or a library that is not there). `ImportError` also covers a name a module lacks
+/// (`from dep import removed`), which the Python program reports as `ImportNameError` so that it
+/// is not counted. The
+/// lines are `gyrseek import error: <module>: <kind>: <message>`; the package can write stderr
+/// too, but it cannot remove a line the program wrote, so another kind among them still counts.
+fn only_missing_dependencies(err_file: &std::path::Path) -> bool {
+    // Only the tail of a big log is read, and an earlier report may have been cut off: a failure
+    // of another kind could be in the part that was not read, so a truncated log never qualifies.
+    if std::fs::metadata(err_file).map_or(true, |m| m.len() > INSTALL_OUTPUT_READ_BYTES) {
+        return false;
+    }
+    let text = read_file_tail(err_file).unwrap_or_default();
+    let kinds: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("gyrseek import error: "))
+        .filter_map(|l| l.split(": ").nth(1))
+        .collect();
+    !kinds.is_empty() && kinds.iter().all(|k| MISSING_DEPENDENCY_KINDS.contains(k))
 }
 
 /// Unprivileged in-container user the untrusted install payload runs as. The
@@ -1444,36 +1480,33 @@ for (const f of names) {
 }
 process.stdout.write(Buffer.concat(parts));"#;
 
-/// Loads the package's own modules, as `python3 -c` with the package name as its argument: the
-/// modules come from the files the installation recorded (`RECORD`), so a name that differs from
-/// the import name (`pyyaml` / `yaml`) works, and under a namespace directory without an
+/// Loads the modules of every distribution the install put in `/work` (the package and the
+/// dependencies it brought), as `python3 -c`; the package name is its argument only so that the
+/// command differs per probe in the trace. The modules come from the files the installation
+/// recorded (`RECORD`), so a name that differs from the import name (`pyyaml` / `yaml`) works, and under a namespace directory without an
 /// `__init__.py` (`acme/widgets/__init__.py`) the first real package or module is imported, not
 /// the empty namespace. `top_level.txt` is the fallback when nothing was recorded. An import error is
 /// printed and makes the exit code 1; the process then ends at once, so a thread the package
 /// started cannot keep it alive. No single quote or apostrophe: the shell wraps it in quotes. It
 /// stays well under strace's 4096-byte string limit, and `is_harness_command` recognises it by
 /// comparing it with this text, so it is not counted as the package's own process.
-pub(crate) const IMPORT_PYTHON: &str = r#"import importlib, importlib.metadata as md, os, re, sys
+pub(crate) const IMPORT_PYTHON: &str = r#"import importlib, importlib.metadata as md, os, sys
 sys.path.insert(0, "/work")
-norm = lambda s: re.sub(r"[-_.]+", "-", s or "").lower()
-want = norm(sys.argv[1])
 mods = set()
 for d in md.distributions(path=["/work"]):
-    if norm(d.metadata["Name"]) != want:
-        continue
     files = [f.parts for f in d.files or [] if f.parts[0] not in ("__pycache__", "bin") and not f.parts[0].endswith(".dist-info") and not f.parts[0].startswith("..")]
+    found = set()
     pk = {p[:-1] for p in files if p[-1] == "__init__.py"}
     for p in files:
         if not p[-1].endswith((".py", ".so", ".pyd")):
             continue
         for i in range(1, len(p)):
             if p[:i] in pk:
-                mods.add(".".join(p[:i]))
+                found.add(".".join(p[:i]))
                 break
         else:
-            mods.add(".".join(p[:-1] + (p[-1].split(".")[0],)))
-    if not mods:
-        mods.update((d.read_text("top_level.txt") or "").split())
+            found.add(".".join(p[:-1] + (p[-1].split(".")[0],)))
+    mods.update(found or (d.read_text("top_level.txt") or "").split())
 rc = 0
 for m in sorted(mods):
     if not all(part.isidentifier() for part in m.split(".")):
@@ -1482,17 +1515,67 @@ for m in sorted(mods):
         importlib.import_module(m)
     except BaseException as e:
         rc = 1
-        print("gyrseek import error: %s: %r" % (m, e), file=sys.stderr)
+        kind = type(e).__name__
+        if kind == "ImportError" and str(e).startswith("cannot import name"):
+            kind = "ImportNameError"
+        print("gyrseek import error: %s: %s: %s" % (m, kind, str(e).split("\n")[0][:200]), file=sys.stderr)
 sys.stderr.flush()
 os._exit(rc)"#;
 
-/// The same for Node, as `node -e` with the package name as its argument. A package with no entry
-/// point (a command-line tool with only a `bin`) has nothing to load. `import()` is used, and
-/// `require()` only when the package exports no `import` entry (`ERR_PACKAGE_PATH_NOT_EXPORTED`):
-/// a package whose `import` entry throws must be reported, not rescued by its `require` entry.
-pub(crate) const IMPORT_NODE: &str = r#"const name = process.argv[1];
-try { require.resolve(name, { paths: ["/work"] }); } catch (e) { if (e.code === "MODULE_NOT_FOUND") process.exit(0); }
-import(name).catch((e) => { if (e.code === "ERR_PACKAGE_PATH_NOT_EXPORTED") return require(name); throw e; }).then(() => process.exit(0), (e) => { console.error("gyrseek import error: " + name + ": " + e); process.exit(1); });"#;
+/// The same for Node, as `node -e`: every package in `/work/node_modules` (npm puts the
+/// dependencies there too; pnpm only the package itself, OPEN #502). Which entry a package has is
+/// decided before anything is evaluated, from its `package.json` (`how`): the root of `exports`
+/// (or `main`) is resolved for the `import` conditions and, failing that, the `require` ones. A
+/// package with neither (a command-line tool with only a `bin`, one that exports only subpaths, a
+/// platform binary) has nothing to load. With an `import` entry `import()` is used and any error
+/// is a failure, also one raised inside the entry by something it imports, so a `require` entry
+/// cannot rescue it; the one exception is a native addon as the package's own entry (`.node`,
+/// `ERR_UNKNOWN_FILE_EXTENSION`), which `import()` refuses and `require()` loads. A package with
+/// only a `require` entry is loaded with `require()`.
+pub(crate) const IMPORT_NODE: &str = r#"const fs = require("fs");
+const names = [];
+let entries = [];
+try { entries = fs.readdirSync("/work/node_modules"); } catch (e) {}
+for (const n of entries) {
+  if (n[0] === ".") continue;
+  if (n[0] === "@") { try { for (const m of fs.readdirSync("/work/node_modules/" + n)) names.push(n + "/" + m); } catch (e) {} }
+  else names.push(n);
+}
+function pick(x, conds) {
+  if (typeof x === "string") return x;
+  if (Array.isArray(x)) { for (const y of x) { const t = pick(y, conds); if (t) return t; } return null; }
+  if (x && typeof x === "object") { for (const k of Object.keys(x)) if (k === "default" || conds.includes(k)) { const t = pick(x[k], conds); if (t) return t; } }
+  return null;
+}
+function how(name) {
+  let pkg;
+  try { pkg = JSON.parse(fs.readFileSync("/work/node_modules/" + name + "/package.json", "utf8")); } catch (e) { return null; }
+  let x = pkg.exports;
+  if (x === undefined || x === null) { try { require.resolve(name, { paths: ["/work"] }); return "import"; } catch (e) { return null; } }
+  if (typeof x === "object" && !Array.isArray(x) && Object.keys(x).some((k) => k[0] === ".")) x = x["."];
+  if (pick(x, ["node", "module-sync", "import"])) return "import";
+  return pick(x, ["node", "module-sync", "require"]) ? "require" : null;
+}
+(async () => {
+  let rc = 0;
+  for (const name of names.sort()) {
+    const via = how(name);
+    if (!via) continue;
+    try {
+      if (via === "require") require(name);
+      else {
+        try { await import(name); } catch (e) {
+          if (e.code !== "ERR_UNKNOWN_FILE_EXTENSION" || !String(e.message).includes("/node_modules/" + name + "/")) throw e;
+          require(name);
+        }
+      }
+    } catch (e) {
+      rc = 1;
+      console.error("gyrseek import error: " + name + ": " + (e.code || e.name) + ": " + String(e.message).split("\n")[0].slice(0, 200));
+    }
+  }
+  process.exit(rc);
+})();"#;
 
 /// The command that loads `package` after it was installed into `/work`, as the scanner user's
 /// `strace` payload. `INTERP` is set by `interpreter`.
@@ -2957,6 +3040,169 @@ mod tests {
 
     /// Runs `script` in a container built like the real one (`limit` is the trace tmpfs size) and
     /// returns the files it streamed out.
+    /// What the Docker tests "install": the files of a made-up package, written by one `sh -c`
+    /// that the probe runs in place of the package manager. A text is written with
+    /// `printf "%s\n" "<text>"`, so it may hold `"` but none of `'`, `$`, a backtick or `\`
+    /// (the command is itself inside single quotes and a shell).
+    #[derive(Default)]
+    struct Fixture {
+        files: Vec<(String, String)>,
+        commands: Vec<String>,
+    }
+
+    impl Fixture {
+        fn file(mut self, path: &str, text: &str) -> Self {
+            assert!(
+                !text.contains(['\'', '`', '$', '\\']),
+                "{text:?} cannot be written by a fixture"
+            );
+            self.files.push((path.to_string(), text.to_string()));
+            self
+        }
+
+        /// A command for what is not text (a copied binary).
+        fn run(mut self, command: &str) -> Self {
+            self.commands.push(command.to_string());
+            self
+        }
+
+        /// A Python distribution: its `METADATA`, and, for `modules` (path under `/work`, source),
+        /// a `RECORD` listing them and the files themselves. With no modules there is no `RECORD`,
+        /// so the program falls back on `top_level.txt` (add it with `file`).
+        fn py_dist(self, name: &str, modules: &[(&str, &str)]) -> Self {
+            let info = format!("/work/{}-1.0.0.dist-info", name.replace('-', "_"));
+            let fixture = self.file(&format!("{info}/METADATA"), &format!("Name: {name}"));
+            let record: Vec<String> = modules
+                .iter()
+                .map(|(path, _)| format!("{path},,"))
+                .collect();
+            let fixture = if record.is_empty() {
+                fixture
+            } else {
+                fixture.file(&format!("{info}/RECORD"), &record.join("\n"))
+            };
+            modules.iter().fold(fixture, |f, (path, source)| {
+                f.file(&format!("/work/{path}"), source)
+            })
+        }
+
+        /// A Node package: its `package.json` and `files` (path inside the package, source).
+        fn node_pkg(self, name: &str, package_json: &str, files: &[(&str, &str)]) -> Self {
+            let dir = format!("/work/node_modules/{name}");
+            files.iter().fold(
+                self.file(&format!("{dir}/package.json"), package_json),
+                |f, (path, source)| f.file(&format!("{dir}/{path}"), source),
+            )
+        }
+
+        fn command(&self) -> String {
+            self.command_in("/work")
+        }
+
+        /// The command with `/work` replaced by `root`, to run it outside a container.
+        fn command_in(&self, root: &str) -> String {
+            let writes: String = self
+                .files
+                .iter()
+                .map(|(path, text)| {
+                    let path = path.replacen("/work", root, 1);
+                    let dir = path.rsplit_once('/').map_or(".", |(dir, _)| dir);
+                    format!(
+                        "mkdir -p {dir}; printf \"%s\\n\" \"{}\" > {path}; ",
+                        text.replace('"', "\\\"")
+                    )
+                })
+                .collect();
+            let commands: String = self
+                .commands
+                .iter()
+                .map(|c| format!("{}; ", c.replace("/work", root)))
+                .collect();
+            format!("sh -c '{writes}{commands}'")
+        }
+    }
+
+    fn written_by(fixture: &Fixture) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let command = fixture.command_in(root.path().to_str().unwrap());
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .status()
+            .unwrap();
+        assert!(status.success(), "{command}");
+        root
+    }
+
+    #[test]
+    fn a_fixture_writes_exactly_the_files_it_is_given() {
+        let source = r#"import subprocess; subprocess.run(["/bin/echo", "x"])"#;
+        let json = r#"{"name":"p","exports":{"import":"./e.mjs","require":"./c.js"}}"#;
+        let root = written_by(
+            &Fixture::default()
+                .py_dist("acme-widgets", &[("acme/widgets/__init__.py", source)])
+                .py_dist("six", &[])
+                .node_pkg("p", json, &[("e.mjs", r#"import "q/private";"#)])
+                .run("echo copied > /work/node_modules/p/copied"),
+        );
+        let read = |path: &str| std::fs::read_to_string(root.path().join(path)).unwrap();
+        let info = "acme_widgets-1.0.0.dist-info";
+        assert_eq!(read(&format!("{info}/METADATA")), "Name: acme-widgets\n");
+        assert_eq!(
+            read(&format!("{info}/RECORD")),
+            "acme/widgets/__init__.py,,\n"
+        );
+        assert_eq!(read("acme/widgets/__init__.py"), format!("{source}\n"));
+        // No modules, no RECORD: the program then falls back on `top_level.txt`.
+        assert!(!root.path().join("six-1.0.0.dist-info/RECORD").exists());
+        assert_eq!(read("six-1.0.0.dist-info/METADATA"), "Name: six\n");
+        // The JSON keeps its quotes and still parses.
+        let package: serde_json::Value =
+            serde_json::from_str(&read("node_modules/p/package.json")).unwrap();
+        assert_eq!(package["exports"]["import"], "./e.mjs");
+        assert_eq!(read("node_modules/p/e.mjs"), "import \"q/private\";\n");
+        assert_eq!(read("node_modules/p/copied"), "copied\n");
+    }
+
+    #[test]
+    fn python_reads_a_fixture_the_way_the_import_program_does() {
+        // The same calls IMPORT_PYTHON makes: `distributions(path=...)`, `Name`, `files`, `top_level.txt`.
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let root = written_by(
+            &Fixture::default()
+                .py_dist("acme-widgets", &[("acme/widgets/__init__.py", "x = 1")])
+                .py_dist("six", &[])
+                .file("/work/six-1.0.0.dist-info/top_level.txt", "nope"),
+        );
+        let program = "import importlib.metadata as md, sys\n\
+            for d in sorted(md.distributions(path=[sys.argv[1]]), key=lambda d: d.metadata['Name']):\n\
+            \x20   print(d.metadata['Name'], [str(f) for f in d.files or []], (d.read_text('top_level.txt') or '').strip())";
+        let out = std::process::Command::new("python3")
+            .args(["-c", program])
+            .arg(root.path())
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.contains("acme-widgets ['acme/widgets/__init__.py']"),
+            "{text}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(text.contains("six [] nope"), "{text}");
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot be written by a fixture")]
+    fn a_fixture_refuses_text_it_cannot_quote() {
+        let _ = Fixture::default().file("/work/a", "it's");
+    }
+
     fn run_in_container(script: &str, limit: &str) -> tempfile::TempDir {
         run_in_container_for("pip", script, limit)
     }
@@ -3475,18 +3721,12 @@ useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u 
     fn a_package_that_cannot_be_loaded_reports_why_and_is_not_a_failed_install() {
         // The install succeeds, but the module its metadata names (`nope`) is not there.
         let probes = vec![("six".to_string(), "1.17.0".to_string())];
-        let script = super::build_matrix_script_core(
-            "pip",
-            &probes,
-            false,
-            120,
-            Some(60),
-            &|spec| {
-                format!(
-                    "sh -c 'echo {spec} >/dev/null; mkdir -p /work/six-1.17.0.dist-info; echo Name: six > /work/six-1.17.0.dist-info/METADATA; echo nope > /work/six-1.17.0.dist-info/top_level.txt'"
-                )
-            },
-        );
+        let script = super::build_matrix_script_core("pip", &probes, false, 120, Some(60), &|_| {
+            Fixture::default()
+                .py_dist("six", &[])
+                .file("/work/six-1.0.0.dist-info/top_level.txt", "nope")
+                .command()
+        });
         let out = run_in_container(&script, "256m");
         let run = read_import_run(out.path(), 0, "").expect("the import step ran");
         let failure = run.failure.expect("the import failed");
@@ -3506,9 +3746,17 @@ useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u 
     fn a_process_started_when_the_package_loads_shows_in_the_import_trace() {
         let probes = vec![("hook".to_string(), "1.0.0".to_string())];
         // The "install" lays down a package whose module runs a harmless program on import.
-        let install = "sh -c 'mkdir -p /work/hook-1.0.0.dist-info; echo Name: hook > /work/hook-1.0.0.dist-info/METADATA; echo hook > /work/hook-1.0.0.dist-info/top_level.txt; echo \"import subprocess; subprocess.run([\\\"/bin/echo\\\", \\\"at-import-time\\\"])\" > /work/hook.py'";
+        let install = Fixture::default()
+            .py_dist(
+                "hook",
+                &[(
+                    "hook.py",
+                    r#"import subprocess; subprocess.run(["/bin/echo", "at-import-time"])"#,
+                )],
+            )
+            .command();
         let script = super::build_matrix_script_core("pip", &probes, false, 120, Some(60), &|_| {
-            install.to_string()
+            install.clone()
         });
         let out = run_in_container(&script, "256m");
         let run = read_import_run(out.path(), 0, "").expect("the import step ran");
@@ -3538,7 +3786,9 @@ useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u 
     fn an_import_that_never_returns_is_stopped_and_marked() {
         let probes = vec![("six".to_string(), "1.17.0".to_string())];
         let script = super::build_matrix_script_core("pip", &probes, false, 120, Some(5), &|_| {
-            "sh -c 'mkdir -p /work/six-1.dist-info; echo Name: six > /work/six-1.dist-info/METADATA; echo hang > /work/six-1.dist-info/top_level.txt; echo import time > /work/hang.py; echo \"import time; time.sleep(600)\" > /work/hang.py'".to_string()
+            Fixture::default()
+                .py_dist("six", &[("hang.py", "import time; time.sleep(600)")])
+                .command()
         });
         let out = run_in_container(&script, "256m");
         let run = read_import_run(out.path(), 0, "").expect("the import step ran");
@@ -3789,9 +4039,17 @@ useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u 
     #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
     fn a_package_under_a_namespace_directory_is_the_one_that_is_loaded() {
         let probes = vec![("acme-widgets".to_string(), "1.0.0".to_string())];
-        let install = "sh -c 'd=/work/acme_widgets-1.0.0.dist-info; mkdir -p $d /work/acme/widgets; echo Name: acme-widgets > $d/METADATA; printf \"acme/widgets/__init__.py,,\\n\" > $d/RECORD; echo acme > $d/top_level.txt; echo \"import subprocess; subprocess.run([\\\"/bin/echo\\\", \\\"widgets-loaded\\\"])\" > /work/acme/widgets/__init__.py'";
+        let install = Fixture::default()
+            .py_dist(
+                "acme-widgets",
+                &[(
+                    "acme/widgets/__init__.py",
+                    r#"import subprocess; subprocess.run(["/bin/echo", "widgets-loaded"])"#,
+                )],
+            )
+            .command();
         let script = super::build_matrix_script_core("pip", &probes, false, 120, Some(60), &|_| {
-            install.to_string()
+            install.clone()
         });
         let out = run_in_container(&script, "256m");
         let run = read_import_run(out.path(), 0, "").expect("the import step ran");
@@ -3821,9 +4079,24 @@ useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u 
             Some(60),
             &|spec| {
                 if spec.contains("esmthrows") {
-                    "sh -c 'd=/work/node_modules/esmthrows; mkdir -p $d; echo \"{\\\"name\\\":\\\"esmthrows\\\",\\\"exports\\\":{\\\"import\\\":\\\"./e.mjs\\\",\\\"require\\\":\\\"./c.js\\\"}}\" > $d/package.json; echo \"throw new Error(1)\" > $d/e.mjs; echo \"module.exports=1\" > $d/c.js'".to_string()
+                    Fixture::default()
+                        .node_pkg(
+                            "esmthrows",
+                            r#"{"name":"esmthrows","exports":{"import":"./e.mjs","require":"./c.js"}}"#,
+                            &[("e.mjs", "throw new Error(1)"), ("c.js", "module.exports=1")],
+                        )
+                        .command()
                 } else {
-                    "sh -c 'd=/work/node_modules/cjsonly; mkdir -p $d; echo \"{\\\"name\\\":\\\"cjsonly\\\",\\\"exports\\\":{\\\"require\\\":\\\"./c.js\\\"}}\" > $d/package.json; echo \"require(\\\"child_process\\\").spawnSync(\\\"/bin/echo\\\",[\\\"cjs-loaded\\\"])\" > $d/c.js'".to_string()
+                    Fixture::default()
+                        .node_pkg(
+                            "cjsonly",
+                            r#"{"name":"cjsonly","exports":{"require":"./c.js"}}"#,
+                            &[(
+                                "c.js",
+                                r#"require("child_process").spawnSync("/bin/echo",["cjs-loaded"])"#,
+                            )],
+                        )
+                        .command()
                 }
             },
         );
@@ -3894,6 +4167,255 @@ useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u 
         assert!(
             err.contains("'a@1'") && err.contains("import step"),
             "{err}"
+        );
+    }
+
+    fn ierr_with(lines: &str) -> Option<super::ImportRun> {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_itrace_0.log"), "execve(...)\n").unwrap();
+        std::fs::write(dir.path().join("gyrseek_irc_0.log"), "1\n").unwrap();
+        std::fs::write(dir.path().join("gyrseek_ierr_0.log"), lines).unwrap();
+        read_import_run(dir.path(), 0, "")
+    }
+
+    #[test]
+    fn failures_that_are_all_a_missing_dependency_are_told_apart() {
+        let only = "gyrseek import error: blackd: ImportError: No module named aiohttp\n\
+                    gyrseek import error: x: ModuleNotFoundError: No module named y\n\
+                    gyrseek import error: n: ERR_MODULE_NOT_FOUND: Cannot find package z\n";
+        assert!(ierr_with(only).unwrap().missing_dependency_only);
+        // Any other kind among them, in any module, and it is not.
+        let mixed = format!("{only}gyrseek import error: m: RuntimeError: boom\n");
+        assert!(!ierr_with(&mixed).unwrap().missing_dependency_only);
+        // Text the package printed is not a report, and without a report it is not "only".
+        assert!(
+            !ierr_with("ImportError: from the package itself\n")
+                .unwrap()
+                .missing_dependency_only
+        );
+        assert!(!ierr_with("").unwrap().missing_dependency_only);
+    }
+
+    #[test]
+    fn a_clean_import_is_never_missing_a_dependency() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_itrace_0.log"), "execve(...)\n").unwrap();
+        std::fs::write(
+            dir.path().join("gyrseek_ierr_0.log"),
+            "gyrseek import error: a: ImportError: x\n",
+        )
+        .unwrap();
+        let run = read_import_run(dir.path(), 0, "").unwrap();
+        assert!(run.failure.is_none() && !run.missing_dependency_only);
+    }
+
+    /// #499: the dependencies a package brought are loaded too.
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_python_dependency_the_package_never_imports_is_loaded_too() {
+        let probes = vec![("app".to_string(), "1.0.0".to_string())];
+        let install = Fixture::default()
+            .py_dist("app", &[("app/__init__.py", "")])
+            .py_dist(
+                "dep",
+                &[(
+                    "dep/__init__.py",
+                    r#"import subprocess; subprocess.run(["/bin/echo", "dep-loaded"])"#,
+                )],
+            )
+            .command();
+        let script = super::build_matrix_script_core("pip", &probes, false, 120, Some(60), &|_| {
+            install.clone()
+        });
+        let out = run_in_container(&script, "256m");
+        let run = read_import_run(out.path(), 0, "").expect("the import step ran");
+        assert!(run.failure.is_none(), "{:?}", run.failure);
+        assert!(
+            crate::scanning::extract_process_exec_signatures(&run.trace)
+                .contains("echo|dep-loaded"),
+            "{}",
+            run.trace
+        );
+    }
+
+    /// Packages that export only subpaths (`dunder-proto`) or are a platform binary
+    /// (`@typescript/typescript-linux-arm64`) have no root entry: nothing to load, not a failure.
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_node_package_with_no_root_entry_is_not_a_failed_load() {
+        let probes = vec![("app".to_string(), "1.0.0".to_string())];
+        let install = Fixture::default()
+            .node_pkg(
+                "app",
+                r#"{"name":"app","main":"i.js"}"#,
+                &[("i.js", "module.exports=1")],
+            )
+            .node_pkg(
+                "sub",
+                r#"{"name":"sub","exports":{"./x":"./x.js"}}"#,
+                &[("x.js", "module.exports=1")],
+            )
+            .command();
+        let script = super::build_matrix_script_core("npm", &probes, false, 120, Some(60), &|_| {
+            install.clone()
+        });
+        let out = run_in_container_for("npm", &script, "256m");
+        let run = read_import_run(out.path(), 0, "").expect("the import step ran");
+        assert!(run.failure.is_none(), "{:?}", run.failure);
+    }
+
+    /// A native addon is loaded with `require()`: `import()` refuses a `.node` file, and that is
+    /// not a failed load (vite, jest and esbuild-style platform packages are all like this).
+    #[test]
+    fn a_log_that_was_cut_short_never_counts_as_only_a_missing_dependency() {
+        // A failure of another kind early in a log that is bigger than what is read must not be
+        // hidden by the dependency failures at its end.
+        let mut log = String::from("gyrseek import error: first: RuntimeError: boom\n");
+        log.push_str(&"noise from the package\n".repeat(4_000));
+        log.push_str("gyrseek import error: last: ModuleNotFoundError: No module named x\n");
+        assert!(log.len() as u64 > INSTALL_OUTPUT_READ_BYTES);
+        assert!(!ierr_with(&log).unwrap().missing_dependency_only);
+    }
+
+    #[test]
+    fn a_name_a_module_lacks_is_not_a_missing_dependency() {
+        // The Python program reports `from dep import removed` as `ImportNameError`.
+        let log = "gyrseek import error: m: ImportNameError: cannot import name removed\n";
+        assert!(!ierr_with(log).unwrap().missing_dependency_only);
+    }
+
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn python_tells_a_missing_name_from_a_missing_module() {
+        let probes = vec![
+            ("names".to_string(), "1.0.0".to_string()),
+            ("mods".to_string(), "1.0.0".to_string()),
+        ];
+        let script =
+            super::build_matrix_script_core("pip", &probes, false, 120, Some(60), &|spec| {
+                let (name, body) = if spec.contains("names") {
+                    ("names", "from os import not_there_at_all")
+                } else {
+                    ("mods", "import not_a_module_at_all")
+                };
+                Fixture::default()
+                    .py_dist(name, &[(&format!("{name}/__init__.py"), body)])
+                    .command()
+            });
+        let out = run_in_container(&script, "256m");
+        let names = read_import_run(out.path(), 0, "").expect("ran");
+        assert!(names.failure.is_some() && !names.missing_dependency_only);
+        let mods = read_import_run(out.path(), 1, "").expect("ran");
+        assert!(mods.failure.is_some() && mods.missing_dependency_only);
+    }
+
+    /// Node decides the entry from `package.json` before evaluating anything:
+    /// - an `import` entry that exists is loaded even when the `require` entry is missing;
+    /// - an error inside the `import` entry (it imports an unexported subpath) is a failure,
+    ///   whatever the `require` entry would do;
+    /// - `require`-only packages are still loaded.
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn node_decides_the_entry_before_evaluating_and_keeps_nested_errors() {
+        let probes = vec![("app".to_string(), "1.0.0".to_string())];
+        let install = Fixture::default()
+            .node_pkg(
+                "importonly",
+                r#"{"name":"importonly","exports":{"import":"./e.mjs","require":"./absent.cjs"}}"#,
+                &[(
+                    "e.mjs",
+                    r#"import {spawnSync} from "child_process"; spawnSync("/bin/echo", ["import-entry"]);"#,
+                )],
+            )
+            .node_pkg(
+                "nested",
+                r#"{"name":"nested","exports":{"import":"./e.mjs","require":"./c.js"}}"#,
+                &[("e.mjs", r#"import "inner/private";"#), ("c.js", "module.exports = 1;")],
+            )
+            .node_pkg(
+                "inner",
+                r#"{"name":"inner","exports":{".":"./i.js"}}"#,
+                &[("i.js", "module.exports = 1;")],
+            )
+            .node_pkg("app", r#"{"name":"app","main":"i.js"}"#, &[("i.js", "module.exports = 1;")])
+            .command();
+        let script = super::build_matrix_script_core("npm", &probes, false, 120, Some(60), &|_| {
+            install.clone()
+        });
+        let out = run_in_container_for("npm", &script, "256m");
+        let run = read_import_run(out.path(), 0, "").expect("ran");
+        let failure = run.failure.expect("the nested error must fail the load");
+        assert!(
+            failure.output.contains("gyrseek import error: nested:"),
+            "{}",
+            failure.output
+        );
+        assert!(
+            !failure.output.contains("gyrseek import error: importonly:"),
+            "an import entry with a missing require entry loads: {}",
+            failure.output
+        );
+        assert!(
+            crate::scanning::extract_process_exec_signatures(&run.trace)
+                .contains("echo|import-entry"),
+            "{}",
+            run.trace
+        );
+    }
+
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_node_native_addon_is_loaded_not_reported_as_failed() {
+        let probes = vec![("app".to_string(), "1.0.0".to_string())];
+        let install = Fixture::default()
+            .node_pkg("addon", r#"{"name":"addon","main":"a.node"}"#, &[])
+            .run("cp /bin/true /work/node_modules/addon/a.node")
+            .command();
+        let script = super::build_matrix_script_core("npm", &probes, false, 120, Some(60), &|_| {
+            install.clone()
+        });
+        let out = run_in_container_for("npm", &script, "256m");
+        let run = read_import_run(out.path(), 0, "").expect("the import step ran");
+        // `true` is not a real addon, so `require` fails: that is a real failure of another kind,
+        // and what matters is that it came from `require`, not from `import()` refusing `.node`.
+        let failure = run.failure.expect("a fake addon does not load");
+        assert!(
+            !failure.output.contains("ERR_UNKNOWN_FILE_EXTENSION"),
+            "{}",
+            failure.output
+        );
+    }
+
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_node_dependency_the_package_never_requires_is_loaded_too() {
+        let probes = vec![("app".to_string(), "1.0.0".to_string())];
+        let install = Fixture::default()
+            .node_pkg(
+                "app",
+                r#"{"name":"app","main":"i.js"}"#,
+                &[("i.js", "module.exports=1")],
+            )
+            .node_pkg(
+                "dep",
+                r#"{"name":"dep","main":"i.js"}"#,
+                &[(
+                    "i.js",
+                    r#"require("child_process").spawnSync("/bin/echo",["dep-loaded"])"#,
+                )],
+            )
+            .command();
+        let script = super::build_matrix_script_core("npm", &probes, false, 120, Some(60), &|_| {
+            install.clone()
+        });
+        let out = run_in_container_for("npm", &script, "256m");
+        let run = read_import_run(out.path(), 0, "").expect("the import step ran");
+        assert!(run.failure.is_none(), "{:?}", run.failure);
+        assert!(
+            crate::scanning::extract_process_exec_signatures(&run.trace)
+                .contains("echo|dep-loaded"),
+            "{}",
+            run.trace
         );
     }
 

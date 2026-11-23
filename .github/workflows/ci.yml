@@ -219,6 +219,15 @@ jobs:
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-native-pip
 
+      # Heavy real packages with the import-time scan on: deep dependency trees and native extensions
+      # must load and clear, and a module that needs an optional extra only warns.
+      - name: Just test import-time scan of heavy pip packages
+        env:
+          GYRSEEK_PY_SCANNER_PREBUILT: true
+          GYRSEEK_PY_SCANNER_IMAGE: "gyrseek-python-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-import-pip
+
   linux-docker-apparmor-seccomp-poetry-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (poetry)
     runs-on: ubuntu-latest
@@ -315,6 +324,15 @@ jobs:
           GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-native-npm
+
+      # Heavy real packages with the import-time scan on: native addons, subpath-only dependencies and a
+      # big tree must load and clear, and a package that cannot load in any version only warns.
+      - name: Just test import-time scan of heavy npm packages
+        env:
+          GYRSEEK_NPM_SCANNER_PREBUILT: true
+          GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-import-npm
 
   linux-docker-apparmor-seccomp-pnpm-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (pnpm)
