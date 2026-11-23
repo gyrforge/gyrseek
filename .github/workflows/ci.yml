@@ -211,6 +211,14 @@ jobs:
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-redirects-pip
 
+      # Real packages that vendor shared libraries named after a hash or a version: they must scan clear.
+      - name: Just test native-heavy pip packages
+        env:
+          GYRSEEK_PY_SCANNER_PREBUILT: true
+          GYRSEEK_PY_SCANNER_IMAGE: "gyrseek-python-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-native-pip
+
   linux-docker-apparmor-seccomp-poetry-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (poetry)
     runs-on: ubuntu-latest
@@ -299,6 +307,14 @@ jobs:
           GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-redirects-npm
+
+      # Real packages that vendor shared libraries named after a hash or a version: they must scan clear.
+      - name: Just test native-heavy npm packages
+        env:
+          GYRSEEK_NPM_SCANNER_PREBUILT: true
+          GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-native-npm
 
   linux-docker-apparmor-seccomp-pnpm-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (pnpm)

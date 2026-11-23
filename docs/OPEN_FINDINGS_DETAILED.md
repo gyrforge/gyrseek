@@ -990,7 +990,7 @@ if next.starts_with('-') {
 
 ### Finding 425 — Medium | `src/sandbox.rs`, `docs/DOCKER_SECURITY.md` | ⚠️ Open
 
-**Summary:** `build_docker_run_args` mounts `/tmp` as `rw,noexec,nosuid,size=128m` and `/work` as `noexec` with the memory limit as its size. Package managers build source distributions in isolated environments under `/tmp`: `uv` creates a build venv there and executes build tools from it, and builds such as numpy need far more than 128 MB. Observed with `pandas`: 2.2.2 failed with `PermissionError: [Errno 13] Permission denied: 'meson'`, and 2.2.1/2.2.0 failed with `No space left on device` while unpacking build requirements to `/tmp`. The image also has no C compiler, and the Python 3.13 image has no wheel for these pandas versions.
+**Summary:** `build_docker_run_args` mounts `/tmp` as `rw,noexec,nosuid,size=128m` and `/work` as `noexec` with the memory limit as its size. Package managers build source distributions in isolated environments under `/tmp`: `uv` creates a build venv there and executes build tools from it, and builds such as numpy need far more than 128 MB. Observed again while scanning native-heavy packages for #468: `scipy` failed with `No space left on device` while uv extracted its wheel into `/tmp`, and `esbuild` and `bcrypt` failed because their install scripts (`node install.js`, `node-gyp-build`) execute a binary from `/work`, which is `noexec` (`sh: node-gyp-build: Permission denied`, exit code 126), so scipy, esbuild and bcrypt cannot be scanned at all today. Observed with `pandas`: 2.2.2 failed with `PermissionError: [Errno 13] Permission denied: 'meson'`, and 2.2.1/2.2.0 failed with `No space left on device` while unpacking build requirements to `/tmp`. The image also has no C compiler, and the Python 3.13 image has no wheel for these pandas versions.
 
 **Impact:** with FIXED #421, any package that has to be built from source now blocks with `install_failed`, and the operator cannot fix it by correcting their own install, because it installs fine locally. The ways out are a custom scanner image (`GYRSEEK_PY_SCANNER_IMAGE` / `GYRSEEK_NPM_SCANNER_IMAGE`) or `internal_package_exemptions`, which skips scanning entirely. Before #421 these failed installs were diffed anyway, so source builds were effectively never observed by the sandbox either.
 
@@ -1182,16 +1182,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 468 — Medium | `src/scanning.rs`, `src/sandbox.rs` | ⚠️ Open
-
-**Summary:** `binary` findings are compared as `binary|<path>|<type>` strings between a candidate and its baselines, and they only started to fire with FIXED #467.
-
-**Root cause:** the comparison was written and unit-tested against synthetic inventories; in real scans the type was always empty, so the path-and-type equality was never exposed to real packages that ship compiled files whose names change between versions.
-
-**Fix direction:** scan numpy, pandas, scipy, cryptography, grpcio and a few npm packages with native addons against their real baselines; if they block, compare binaries by directory and extension (or by count and format) rather than the exact file name, keep an exact match for executables outside the package's own directories, and document `artifact_allowlist` for the rest.
-
----
-
 ### Finding 469 — Medium | `src/sandbox.rs` | ⚠️ Open
 
 **Summary:** One probe without a trace fails the whole batch.
@@ -1233,5 +1223,15 @@ if next.starts_with('-') {
 
 **Fix direction:** pin `busybox` by digest, add `docker pull` with a retry to the recipe before running the tests, and use the prebuilt scanner images in CI.
 
+
+---
+
+### Finding 473 — Low | `src/scanning.rs` | ⚠️ Open
+
+**Summary:** Comparing `binary` findings by a normalised path hides a hostile file that differs from a baseline file only by a hash or a version.
+
+**Root cause:** `normalize_artifact_path` replaces hex runs and dotted versions by `*`; the comparison is a set membership test on the result, so any number of files with the same normalised name and type match one baseline file.
+
+**Fix direction:** compare the count of files per normalised name as well and flag an increase, and keep an exact comparison for executables outside the package's own directories.
 
 ---
