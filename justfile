@@ -85,8 +85,15 @@ test-redirects-uv +args='': (test-redirects "uv" args)
 test-trace-integrity:
     cargo test --lib --locked -- --ignored a_payload_cannot_tamper a_probe_that_floods the_artifact_inventory_reports a_scanner_image_without
 
+# Real native-heavy packages at pinned versions must scan clear (vendored libraries renamed in every release; needs Docker and the network)
+test-native-pip +args='': build
+    tests/e2e/native.sh pip "{{bin}}" {{args}}
+
+test-native-npm +args='': build
+    tests/e2e/native.sh npm "{{bin}}" {{args}}
+
 # Run all Docker end-to-end tests
-test-docker: test-npm test-pnpm test-pip test-poetry test-uv test-redirects-npm test-redirects-pnpm test-redirects-pip test-redirects-poetry test-redirects-uv
+test-docker: test-npm test-pnpm test-pip test-poetry test-uv test-redirects-npm test-redirects-pnpm test-redirects-pip test-redirects-poetry test-redirects-uv test-native-pip test-native-npm
 
 # Install to local machine
 install:

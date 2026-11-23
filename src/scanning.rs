@@ -1933,34 +1933,66 @@ fn filter_allowlisted_process_exec_signatures(
     })
 }
 
+/// A path with the parts that change from one release to the next replaced by `*`: runs of eight
+/// or more hex digits (the hash that `auditwheel` puts in vendored libraries such as
+/// `numpy.libs/libscipy_openblas64_-1b7162d6.so`, and the content hashes of the npm cache), dotted
+/// versions, also release candidates (`libtiff.so.6.3.0`, `sharp-linux-arm64-0.35.5-rc.1.node`) and the two-digit fan-out
+/// directories of a content-addressed cache. Everything else, the directory and the rest of the
+/// file name, must still match.
+fn normalize_artifact_path(path: &str) -> String {
+    static CACHE_DIRS: OnceLock<Regex> = OnceLock::new();
+    static HEX_RUNS: OnceLock<Regex> = OnceLock::new();
+    static VERSIONS: OnceLock<Regex> = OnceLock::new();
+    let cache_dirs = CACHE_DIRS
+        .get_or_init(|| Regex::new(r"/(sha(?:1|256|512))/[0-9a-fA-F]{2}/[0-9a-fA-F]{2}/").unwrap());
+    let hex_runs = HEX_RUNS.get_or_init(|| Regex::new(r"[0-9a-fA-F]{8,}").unwrap());
+    // A dotted version, with a pre-release tag of a known kind (`-rc.1`, `-beta.2`,
+    // `-nightly-20261105.1`): baselines are often release candidates. An open-ended suffix would
+    // let `foo-1.0-evil.so` pass for `foo-1.0.so`.
+    let versions = VERSIONS.get_or_init(|| {
+        Regex::new(r"(?i)\d+(?:\.\d+)+(?:-(?:rc|alpha|beta|dev|pre|preview|canary|nightly|next|snapshot)(?:[.\-]?\d+)*)?").unwrap()
+    });
+    let path = cache_dirs.replace_all(path, "/$1/*/*/");
+    // Versions first: a date such as `20261105` in a pre-release tag is also a hex run.
+    let path = versions.replace_all(&path, "*");
+    hex_runs.replace_all(&path, "*").into_owned()
+}
+
+/// What makes two artifact findings "the same file" across versions. `binary` and
+/// `unexpected_runtime` findings (`<kind>|<path>|<type>`) are the same when the normalised path
+/// and the type match; `large_file` findings (`large_file|<path>|<size>`) when the normalised
+/// path matches, whatever the size. Every other finding is compared as written.
+fn artifact_key(finding: &str) -> String {
+    for kind in ["binary", "unexpected_runtime", "large_file"] {
+        let Some(rest) = finding.strip_prefix(kind).and_then(|r| r.strip_prefix('|')) else {
+            continue;
+        };
+        let Some((path, tail)) = rest.rsplit_once('|') else {
+            return finding.to_string();
+        };
+        let tail = if kind == "large_file" { "" } else { tail };
+        return format!("{kind}|{}|{tail}", normalize_artifact_path(path));
+    }
+    finding.to_string()
+}
+
 /// Returns artifact findings present in the current version that are new compared
-/// to baselines. For `large_file` findings (`large_file|<path>|<size>`), the check
-/// is path-based: a file that was already large in baseline versions is not flagged
-/// even if its size changed, while a newly large file is flagged.
+/// to baselines. A vendored library or a platform binary whose name carries a hash or a version
+/// (`libjpeg-0c352bdc.so.62`, `sharp-linux-arm64-0.35.5.node`) is the same file as the baseline's
+/// under another name, so it is not new (`artifact_key`); a file with a new name, a new directory
+/// or a different type still is. A file that was already large in the baselines is not flagged
+/// even if its size changed.
 pub(crate) fn new_artifact_findings_vs_baseline(
     artifact_curr: &HashSet<String>,
     baseline_artifact_findings: &HashSet<String>,
 ) -> Vec<String> {
+    let known: HashSet<String> = baseline_artifact_findings
+        .iter()
+        .map(|f| artifact_key(f))
+        .collect();
     artifact_curr
-        .difference(baseline_artifact_findings)
-        .filter(|curr_finding| {
-            if let Some(rest) = curr_finding.strip_prefix("large_file|") {
-                if let Some((path, _size)) = rest.rsplit_once('|') {
-                    !baseline_artifact_findings.iter().any(|b| {
-                        if let Some(b_rest) = b.strip_prefix("large_file|")
-                            && let Some((b_path, _b_size)) = b_rest.rsplit_once('|')
-                        {
-                            return b_path == path;
-                        }
-                        false
-                    })
-                } else {
-                    true
-                }
-            } else {
-                true
-            }
-        })
+        .iter()
+        .filter(|f| !baseline_artifact_findings.contains(*f) && !known.contains(&artifact_key(f)))
         .cloned()
         .collect()
 }
@@ -2818,8 +2850,8 @@ mod tests {
         find_new_connections_domain_aware, find_new_process_exec_signatures,
         find_new_sensitive_reads, forward_confirmed_hostname, is_harness_command,
         is_sandbox_local_ip, is_sensitive_file_read, minimum_release_age_policy_warning,
-        new_artifact_findings_vs_baseline, normalize_ip_string, npm_published_times,
-        parse_dns_response, reverse_dns_domain, scan_packages_versions,
+        new_artifact_findings_vs_baseline, normalize_artifact_path, normalize_ip_string,
+        npm_published_times, parse_dns_response, reverse_dns_domain, scan_packages_versions,
         select_age_eligible_baselines, select_effective_baselines, sort_versions_ascending,
         strip_artifact_section, unescape_strace_string,
     };
@@ -3644,6 +3676,141 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             "Allowlist must not leak across packages"
         );
         assert_eq!(remaining, sigs);
+    }
+
+    #[test]
+    fn a_hash_or_version_in_a_vendored_file_name_does_not_make_the_file_new() {
+        // The strings are the ones real scans produced (FIXED #468): numpy, pillow, psycopg2-binary
+        // and sharp were blocked because their vendored libraries are renamed in every release.
+        let set =
+            |items: &[&str]| -> HashSet<String> { items.iter().map(|s| s.to_string()).collect() };
+        let elf = "ELF 64-bit LSB executable";
+        for (old, new) in [
+            (
+                "/work/numpy.libs/libscipy_openblas64_-1b7162d6.so",
+                "/work/numpy.libs/libscipy_openblas64_-9a3f00ce.so",
+            ),
+            (
+                "/work/pillow.libs/libtiff-0c352bdc.so.6.3.0",
+                "/work/pillow.libs/libtiff-aa11bb22.so.6.4.1",
+            ),
+            (
+                "/work/psycopg2_binary.libs/libkrb5support-beb3078f.so.0.1",
+                "/work/psycopg2_binary.libs/libkrb5support-1234abcd.so.0.2",
+            ),
+            (
+                "/work/node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64-0.35.4.node",
+                "/work/node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64-0.35.5.node",
+            ),
+            (
+                "/work/node_modules/@img/sharp-libvips-linux-arm64/lib/libvips-cpp.so.8.15.2",
+                "/work/node_modules/@img/sharp-libvips-linux-arm64/lib/libvips-cpp.so.8.16.0",
+            ),
+            // Baselines that are release candidates, as for sharp 0.35.5 (-rc.1, -rc.0).
+            (
+                "/work/node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64-0.35.5-rc.1.node",
+                "/work/node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64-0.35.5.node",
+            ),
+            (
+                "/work/node_modules/x/lib/x-1.2.0-beta.3.node",
+                "/work/node_modules/x/lib/x-1.2.0.node",
+            ),
+            (
+                "/work/node_modules/x/lib/x-1.2.0-nightly-20261105.1.node",
+                "/work/node_modules/x/lib/x-1.2.0.node",
+            ),
+        ] {
+            let baseline = set(&[&format!("binary|{old}|{elf}")]);
+            let current = set(&[&format!("binary|{new}|{elf}")]);
+            assert!(
+                new_artifact_findings_vs_baseline(&current, &baseline).is_empty(),
+                "{new}"
+            );
+        }
+        // A large file that moved with its content hash (the npm cache) is the same large file.
+        let baseline = set(&[
+            "large_file|/work/.npm/_cacache/content-v2/sha512/21/cf/aaacc995efc41d946f62ac9b9cff7ef14aa63bfb9645860|31000000",
+        ]);
+        let current = set(&[
+            "large_file|/work/.npm/_cacache/content-v2/sha512/9b/04/7788c1de2f00aabbccdd11223344556677889900aabb|32000000",
+        ]);
+        assert!(new_artifact_findings_vs_baseline(&current, &baseline).is_empty());
+        // Plain equality still holds for everything else.
+        let same = set(&[
+            "binary|/work/pkg/_speedups.cpython-313-aarch64-linux-gnu.so|ELF 64-bit LSB executable",
+            "suspicious_pth|/work/x.pth|import os",
+        ]);
+        assert!(new_artifact_findings_vs_baseline(&same, &same).is_empty());
+    }
+
+    #[test]
+    fn a_new_or_different_executable_is_still_new() {
+        let set =
+            |items: &[&str]| -> HashSet<String> { items.iter().map(|s| s.to_string()).collect() };
+        let elf = "ELF 64-bit LSB executable";
+        let baseline = set(&[
+            &format!("binary|/work/numpy.libs/libscipy_openblas64_-1b7162d6.so|{elf}"),
+            &format!("binary|/work/pkg/_speedups.so|{elf}"),
+        ]);
+        for finding in [
+            // A new name, even next to an existing one.
+            format!("binary|/work/numpy.libs/payload-1b7162d6.so|{elf}"),
+            format!("binary|/work/pkg/miner|{elf}"),
+            // The same name in another directory.
+            format!("binary|/work/other/_speedups.so|{elf}"),
+            // The same path with another format (an ELF replaced by a Windows executable).
+            "binary|/work/pkg/_speedups.so|PE32+ executable".to_string(),
+            // A runtime that was not there, and a file that became large.
+            format!("unexpected_runtime|/work/node_modules/x/bun|{elf}"),
+            "large_file|/work/pkg/blob.bin|20000000".to_string(),
+            // A suffix that is not a pre-release tag is part of the name.
+            format!("binary|/work/node_modules/x/lib/x-1.0-evil.node|{elf}"),
+            // Findings that are not about names are compared as written.
+            "suspicious_pth|/work/evil.pth|import os".to_string(),
+        ] {
+            let current = set(&[finding.as_str()]);
+            assert_eq!(
+                new_artifact_findings_vs_baseline(&current, &baseline),
+                vec![finding.clone()],
+                "{finding}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalising_a_path_replaces_hashes_and_versions_and_nothing_else() {
+        for (path, expected) in [
+            (
+                "/work/numpy.libs/libscipy_openblas64_-1b7162d6.so",
+                "/work/numpy.libs/libscipy_openblas64_-*.so",
+            ),
+            (
+                "/work/pillow.libs/libtiff-0c352bdc.so.6.3.0",
+                "/work/pillow.libs/libtiff-*.so.*",
+            ),
+            (
+                "/work/node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64-0.35.5.node",
+                "/work/node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64-*.node",
+            ),
+            (
+                "/work/.npm/_cacache/content-v2/sha512/21/cf/aaacc995efc41d946f62",
+                "/work/.npm/_cacache/content-v2/sha512/*/*/*",
+            ),
+            (
+                "/work/node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64-0.35.5-rc.1.node",
+                "/work/node_modules/@img/sharp-linux-arm64/lib/sharp-linux-arm64-*.node",
+            ),
+            ("/work/lib/x-1.0-evil.node", "/work/lib/x-*-evil.node"),
+            // Things that stay: ABI tags, short numbers, the architecture, plain names.
+            (
+                "/work/pkg/_speedups.cpython-313-aarch64-linux-gnu.so",
+                "/work/pkg/_speedups.cpython-313-aarch64-linux-gnu.so",
+            ),
+            ("/work/lib/libssl.so.3", "/work/lib/libssl.so.3"),
+            ("/work/bin/bun", "/work/bin/bun"),
+        ] {
+            assert_eq!(normalize_artifact_path(path), expected, "{path}");
+        }
     }
 
     #[test]
