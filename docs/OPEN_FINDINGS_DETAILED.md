@@ -998,16 +998,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 447 — Medium | `src/sandbox.rs`, `src/parsing.rs` | ⚠️ Open
-
-**Summary:** The scanned artifact can differ from the one the real install uses, for the same package and version.
-
-**Root cause:** the probe runs `pip`/`uv`/`npm` with `name==version` in the sandbox, so the package manager chooses the artifact (a compatible wheel if there is one). The forwarded install from a lockfile uses the artifact the lockfile pins, which can be an sdist (built from source on install) or a wheel for another platform. #446 makes sure both are files of the same package and version, but not that they are the same file.
-
-**Fix direction:** record which artifact each lockfile entry pins and flag entries that pin an sdist only, or a file other than the one the probe installed; the complete fix is to probe the lockfile's exact artifact (for uv, `--no-binary`/`--only-binary` and a pinned URL).
-
----
-
 ### Finding 450 — Medium | `src/index_settings.rs` | ⚠️ Open
 
 **Summary:** Some package-manager settings that redirect an install are not read.
@@ -1025,17 +1015,6 @@ if next.starts_with('-') {
 **Root cause:** `node_redirects` returns every `registry` and `@scope:registry` setting and `refusal` runs in `LazyRunner::get()` before the package list is known, so the scope cannot be compared with the packages.
 
 **Fix direction:** pass the packages (named on the command line or from the lockfile) to the check and drop scoped redirects whose scope matches none of them; keep the default `registry` unconditional.
-
-
----
-
-### Finding 452 — Medium | `src/index_settings.rs` | ⚠️ Open
-
-**Summary:** A trusted host is assumed to mirror the public registry.
-
-**Root cause:** FIXED #445 refuses redirects to hosts that are not public or trusted, but for a trusted host it only removes the refusal. The sandbox probe still installs the public package, so nothing checks that the mirror serves the same file.
-
-**Fix direction:** record the expected host per package (or per index) and verify the downloaded artifact's hash against the public registry's for the scanned version when the install goes through a trusted host.
 
 
 ---
@@ -1242,5 +1221,74 @@ if next.starts_with('-') {
 **Root cause:** `/tmp` is mounted `noexec` (FIXED #425 enlarged it but kept it `noexec`), and build tools that pip and uv run from their build-isolation environment under `/tmp` (`meson`, `cmake`) fail with `Permission denied` even if a compiler is present; and the images have no compiler, so `node-pre-gyp --fallback-to-build`, `node-gyp rebuild` and source builds of Python packages fail. Seen with bcrypt 5.0.1 on Node 26 (the candidate 5.1.1 installed, its older baseline did not, which blocks the package).
 
 **Fix direction:** either ship a toolchain in the prebuilt scanner image and review what a build script may then do (this includes whether a dedicated executable build directory is acceptable, see WONT_FIX #480), or pick the sandbox runtime from the versions for which the package has prebuilds. Until then `node_version` or `python_version` is the escape hatch.
+
+---
+
+---
+
+### Finding 481 — Medium | `src/lock_verify.rs`, `src/index_settings.rs` | ⚠️ Open
+
+**Summary:** A command-line install through a trusted mirror is not hash-checked.
+
+**Root cause:** FIXED #447/#452 compare the hashes a lockfile pins with the public registry's. A package named on the command line has no lockfile and no hash, so `trusted_index_hosts` still means "assumed to serve the public files".
+
+**Fix direction:** install the scanned artifact by hash, or refuse a command-line install while a trusted mirror is configured. `pip --require-hashes` demands hashes for every dependency, and npm cannot take an integrity value on the command line, so neither is a drop-in.
+
+---
+
+### Finding 482 — Medium | `src/lock_verify.rs`, `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The scan traces one platform's wheel; a lockfile pins several.
+
+**Root cause:** `verify_lockfile_artifacts` requires every locked hash to be a public hash of that version, which proves the file is public but not that the probe ran it. uv.lock and poetry.lock list a wheel for each platform, and the real install takes the one for its own machine, while the probe container (Linux) took its own.
+
+**Fix direction:** probe the lockfile's wheel for each platform that is in use, or accept a lockfile only when the probe's wheel is the one the install will pick. Related to the native-package normalisation trade-off (#473).
+
+---
+
+---
+
+### Finding 483 — Medium | `src/lock_verify.rs` | ⚠️ Open
+
+**Summary:** Requirements files are not hash-checked.
+
+**Root cause:** `verify_lockfile_artifacts` handles only recorded lockfiles. `uv pip sync` and `pip -r` requirement lines carry `--hash=` values that are never compared, so the #452 mirror gap remains for them.
+
+
+---
+
+### Finding 484 — Low | `src/lock_verify.rs` | ⚠️ Open
+
+**Summary:** One extra registry request per locked package.
+
+**Root cause:** The verification fetches `/<name>/<version>` per package, separately from the history fetch, in batches of 16, and any failure blocks. A big lockfile or an outage blocks every lockfile install.
+
+
+---
+
+### Finding 485 — Low | `src/lock_verify.rs` | ⚠️ Open
+
+**Summary:** Hash forms that cannot be compared block a valid lockfile.
+
+**Root cause:** Only `sha1-` against `dist.shasum` is converted. A local `sha512-` against a sha1-only old package, non-sha256 pylock hashes and files removed from PyPI are all reported as not published.
+
+
+---
+
+### Finding 486 — Low | `src/lock_verify.rs` | ⚠️ Open
+
+**Summary:** Several lockfiles are merged before the sdist rule.
+
+**Root cause:** Pins are unioned per name and version, so the wheel flag of one lockfile masks an sdist-only entry in another.
+
+
+---
+
+### Finding 487 — Low | `src/lock_verify.rs` | ⚠️ Open
+
+**Summary:** Name and version spelling is sent to the registry as written.
+
+**Root cause:** PyPI is expected to redirect non-normalised names and versions; this was not measured, and an npm alias relies on the `name` field of the entry.
+
 
 ---

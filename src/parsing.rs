@@ -187,7 +187,7 @@ fn pylock_parts(table: &toml::Table) -> Vec<&toml::Table> {
 
 /// The version of a `pylock.toml` package. An entry without one installs whatever its files are,
 /// so the version is read from their names (all must agree); with no files it stays unknown.
-fn pylock_version(table: &toml::Table) -> Result<Option<String>, String> {
+pub(crate) fn pylock_version(table: &toml::Table) -> Result<Option<String>, String> {
     if let Some(version) = toml_str(table, "version") {
         return Ok(Some(version.to_string()));
     }
@@ -581,6 +581,19 @@ pub(crate) fn read_input(path: &str) -> std::io::Result<String> {
         }
     }
     read
+}
+
+/// Every input file that was read and existed, with the content that was scanned.
+pub(crate) fn recorded_inputs() -> Vec<(String, String)> {
+    INPUTS.lock().map_or_else(
+        |_| Vec::new(),
+        |inputs| {
+            inputs
+                .iter()
+                .filter_map(|(p, c)| c.clone().map(|c| (p.clone(), c)))
+                .collect()
+        },
+    )
 }
 
 /// Input files that differ from when they were read, can no longer be read, or were absent and
@@ -1568,6 +1581,24 @@ pub(crate) fn parse_npm_lock(
     Ok(found.into_iter().map(|(n, v)| (n, Some(v))).collect())
 }
 
+/// A `pnpm-lock.yaml` `packages` key without its leading `/` and peer suffix `(react@18)`.
+pub(crate) fn pnpm_key_without_peers(key: &str) -> &str {
+    let key = key.trim_start_matches('/');
+    key.split('(').next().unwrap_or(key)
+}
+
+/// Name and version of a key from `pnpm_key_without_peers`: v5 first (`name/1.2.3`,
+/// `name/1.2.3_peer@1`: a peer suffix contains `@`), then v6/v9 (`name@1.2.3`).
+pub(crate) fn pnpm_package_key(key: &str) -> Option<(&str, &str)> {
+    let v5 = key.rsplit_once('/').and_then(|(name, rest)| {
+        let version = rest.split('_').next().unwrap_or(rest);
+        semver::Version::parse(version)
+            .ok()
+            .map(|_| (name, version))
+    });
+    v5.or_else(|| key.rsplit_once('@').filter(|(n, _)| !n.is_empty()))
+}
+
 /// Exact registry packages from `pnpm-lock.yaml`. The `packages` keys are `/name/1.2.3` (v5),
 /// `/name@1.2.3(peer@1)` (v6) or `name@1.2.3` (v9). As for npm, an entry whose resolution is a
 /// tarball on another host, a git repository or a commit is an error unless the package is
@@ -1588,17 +1619,8 @@ pub(crate) fn parse_pnpm_lock(
         let Some(key) = key.as_str() else { continue };
         let resolution = entry.get("resolution");
         let has = |k: &str| resolution.is_some_and(|r| r.get(k).is_some());
-        let key = key.trim_start_matches('/');
-        let key = key.split('(').next().unwrap_or(key);
-        // v5 first (`name/1.2.3`, `name/1.2.3_peer@1`: a peer suffix contains `@`), then
-        // v6/v9 (`name@1.2.3`).
-        let v5 = key.rsplit_once('/').and_then(|(name, rest)| {
-            let version = rest.split('_').next().unwrap_or(rest);
-            semver::Version::parse(version)
-                .ok()
-                .map(|_| (name, version))
-        });
-        let parsed = v5.or_else(|| key.rsplit_once('@').filter(|(n, _)| !n.is_empty()));
+        let key = pnpm_key_without_peers(key);
+        let parsed = pnpm_package_key(key);
 
         if has("directory") {
             continue; // the user's own code
