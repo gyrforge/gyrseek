@@ -83,7 +83,7 @@ test-redirects-uv +args='': (test-redirects "uv" args)
 
 # A payload cannot rewrite its own or an earlier probe's trace (needs Docker and the network)
 test-trace-integrity:
-    cargo test --lib --locked -- --ignored a_payload_cannot_tamper a_probe_that_floods the_artifact_inventory_reports a_scanner_image_without files_dropped_outside_work
+    cargo test --lib --locked -- --ignored a_payload_cannot_tamper a_probe_that_floods the_artifact_inventory_reports a_scanner_image_without files_dropped_outside_work an_install_can_run_a_binary_from_work
 
 # Real native-heavy packages at pinned versions must scan clear (vendored libraries renamed in every release; needs Docker and the network)
 test-native-pip +args='': build

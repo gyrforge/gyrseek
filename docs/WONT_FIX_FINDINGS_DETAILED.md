@@ -768,8 +768,6 @@ We accept the risk of an attacker tampering with `OPEN_FINDINGS.md` to hide a ba
 
 ---
 
----
-
 ### Finding 308 — `false-positive` | `src/lib.rs` | 🚫 Won't Fix
 
 **Summary:** Claim that per-package domain/IP normalization lacks dedicated edge-case tests for trailing-dot stripping, mixed-case lowering, and IPv6 canonicalization in the per-package code paths.
@@ -1066,12 +1064,46 @@ PyPI is case-insensitive but does NOT normalize package names before they reach 
 
 ---
 
----
-
 ### Finding 448 — `yagni` | `src/parsing.rs` | 🚫 Won't Fix
 
 **Summary:** Compare the hash in a lockfile entry with the hash the registry publishes for the scanned name and version.
 
 **Reason for Not Fixing:** After FIXED #432, #442 and #446 a registry download must come from the registry host and be the file named for that exact package and version, so its content is the registry's own file. If the lockfile's hash differs from that file, the package manager's integrity check fails the install, which fails safe rather than installing something unscanned. PyPI also does not allow a file name to be reused, so the name and version identify one project's file. The comparison would add a registry lookup per entry without closing a gap. The real remaining divergence (the scanned artifact versus the pinned artifact) is tracked as open #447.
+
+---
+
+### Finding 478 — `superseded` | `src/sandbox.rs` | 🚫 Won't Fix
+
+**Summary:** Mount `/var/tmp` and `/home/gyrseek` `noexec` so an executable dropped there during the install cannot run, instead of only being reported (FIXED #471).
+
+**Reason for Not Fixing:** it was recorded when `/work` was `noexec`, so closing the two other places would have made `noexec` meaningful again. FIXED #425 then made `/work` executable, on purpose, so that install scripts can run the binaries their packages ship. A payload can run a dropped binary from `/work` as well, so a `noexec` `/var/tmp` would not reduce what it can run; what protects the scan is that every `execve` is traced (a blocked one too) and that dropped files and binaries are reported (FIXED #471, #475).
+
+---
+
+### Finding 480 — `accepted-risk` | `src/sandbox.rs` | 🚫 Won't Fix
+
+**Summary:** The probe container's `/work` is mounted `rw,exec,nosuid,nodev` (FIXED #425) so that install scripts can run the binaries their packages ship and C extensions can load from the install directory. The alternative, keeping `/work` `noexec` and only enlarging `/tmp`, was considered and rejected by the maintainer.
+
+**Reason for Not Fixing (the risk that is accepted):** a package under test can now run a native binary it drops in `/work` during the probe. Measured before the change: on a `noexec` tmpfs a dropped ELF cannot run, not even through the dynamic loader (`failed to map segment`), and a C extension cannot be loaded from it, while interpreted scripts still run. Allowing execution gives a hostile candidate more room to attempt native-code attacks on the container (kernel exploits, attacks on the sandbox itself).
+
+**Why it was accepted:**
+- The layer was already incomplete: the scanner user could run a dropped ELF and a shebang script from `/home/gyrseek` and `/var/tmp` (FIXED #471 measured this), so `noexec` on `/work` only stopped a payload that did not move its file first. Closing those places (the former OPEN #478) stopped making sense once `/work` allowed execution.
+- Without it, packages that run a binary at install time cannot be scanned at all. esbuild alone is a dependency of vite, tsup and most front-end tooling, so one blocked package blocks a whole `npm ci`, and the only way through is `internal_package_exemptions`, which skips scanning entirely. That is a worse outcome than scanning with execution allowed.
+- A sandbox that behaves like a real install observes more. A payload that would have failed to run its dropped binary under `noexec` now runs it, and the exec trace records a blocked `execve` and a successful one alike, so the attempt was already reported and the behaviour after it now is too.
+
+**What still limits the damage:** the payload runs as an unprivileged user with `no-new-privileges`, a seccomp profile (which also blocks `io_uring`), no added capabilities, process and memory limits, and `nosuid` and `nodev` on `/work` and `/tmp`; nothing from the host is mounted; the traces are in a root-only tmpfs (FIXED #411, #434, #461); `/tmp` stays `noexec`; every `execve` is traced and dropped files and binaries are reported (FIXED #471, #475). On Docker Desktop (macOS, WSL2) a VM sits between the container and the host; on native Linux the container shares the host kernel.
+
+**Caveats to keep in view:**
+- This widens what a malicious candidate can try inside the container. It does not change network access, which stays open for the registries.
+- The risk is higher where the container boundary is trusted least: a native Linux host running gyrseek on a machine with credentials the container could reach if it escaped.
+- Docker's tmpfs default is `noexec`, so `exec` is spelled out in the mount and a test reads the flags back; a future change that drops the word silently re-blocks esbuild and bcrypt.
+- Packages that must be compiled still fail without a compiler (OPEN #479); that is a separate limit.
+
+**Alternatives considered:**
+1. *Only a larger `/tmp`, `/work` stays `noexec`.* Fixes scipy-style failures only; esbuild and bcrypt stay unscannable. Rejected for the cost to front-end projects above.
+2. *Execution only for npm and pnpm probes, `noexec` for pip, uv and poetry.* Offered as a middle option, not chosen; it would shrink the exposure for Python scans at the cost of a manager-dependent flag. It can be revisited if Python probes are the concern.
+3. *Execution on `/tmp` as well.* Rejected: it widens the surface further and the image has no compiler, so source builds would still fail.
+
+**Revisit when:** a measured escape or abuse of an executable `/work`, a request to run gyrseek where the container boundary is not trusted, or a decision to ship a toolchain in the scanner images (OPEN #479), which changes what a build script may do and would need the same review.
 
 ---

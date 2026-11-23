@@ -124,5 +124,7 @@ This document tracks findings that were raised by static analysis, AI reviews, o
 | 395 | `docs/FIXED_FINDINGS.md` | `false-positive` | Claim that existing entries (#292–#376) violate FIXED #375 convention by including line numbers — FIXED #375 established a forward-looking convention for new entries; it does not retroactively require stripping line numbers from ~60 entries written before the convention existed. Same class as WONT_FIX #350 and #384. | 🚫 Won't Fix |
 | 396 | `src/lib.rs` | `yagni` | `!s.contains("")` in test assertion reads like a substring check but is `HashSet::contains` (membership check) — functionally correct; replacing with `!s.iter().any(\|d\| d.is_empty())` is more self-documenting but cosmetic only. Same class as WONT_FIX #345. | 🚫 Won't Fix |
 | 448  | `src/parsing.rs`           | `yagni`          | Compare lockfile hashes (`integrity`, `hash = "sha256:…"`) with the registry's record for the scanned version. | 🚫 Won't Fix |
+| 478  | `src/sandbox.rs`           | `superseded`     | Mount `/var/tmp` and `/home/gyrseek` as `noexec` tmpfs so a payload cannot run what it drops there. | 🚫 Won't Fix |
+| 480  | `src/sandbox.rs`           | `accepted-risk`  | Keep `/work` `noexec` in the probe container (and so leave esbuild, bcrypt and other packages that run a shipped binary at install time unscannable): rejected in favour of `/work` allowing execution (FIXED #425), with the caveats below accepted. | 🚫 Won't Fix |
 
 *For detailed reasoning, see [WONT_FIX_FINDINGS_DETAILED.md](./WONT_FIX_FINDINGS_DETAILED.md).*

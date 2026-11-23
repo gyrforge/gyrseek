@@ -988,16 +988,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 425 — Medium | `src/sandbox.rs`, `docs/DOCKER_SECURITY.md` | ⚠️ Open
-
-**Summary:** `build_docker_run_args` mounts `/tmp` as `rw,noexec,nosuid,size=128m` and `/work` as `noexec` with the memory limit as its size. Package managers build source distributions in isolated environments under `/tmp`: `uv` creates a build venv there and executes build tools from it, and builds such as numpy need far more than 128 MB. Observed again while scanning native-heavy packages for #468: `scipy` failed with `No space left on device` while uv extracted its wheel into `/tmp`, and `esbuild` and `bcrypt` failed because their install scripts (`node install.js`, `node-gyp-build`) execute a binary from `/work`, which is `noexec` (`sh: node-gyp-build: Permission denied`, exit code 126), so scipy, esbuild and bcrypt cannot be scanned at all today. Observed with `pandas`: 2.2.2 failed with `PermissionError: [Errno 13] Permission denied: 'meson'`, and 2.2.1/2.2.0 failed with `No space left on device` while unpacking build requirements to `/tmp`. The image also has no C compiler, and the Python 3.13 image has no wheel for these pandas versions.
-
-**Impact:** with FIXED #421, any package that has to be built from source now blocks with `install_failed`, and the operator cannot fix it by correcting their own install, because it installs fine locally. The ways out are a custom scanner image (`GYRSEEK_PY_SCANNER_IMAGE` / `GYRSEEK_NPM_SCANNER_IMAGE`) or `internal_package_exemptions`, which skips scanning entirely. Before #421 these failed installs were diffed anyway, so source builds were effectively never observed by the sandbox either.
-
-**Fix direction:** decide deliberately what the sandbox should allow for builds. Options: a larger `/tmp` (and `/work`) sized from `GYRSEEK_MEM_LIMIT`; allowing exec on a dedicated build directory while keeping it `nosuid` and unwritable to the payload's later stages; shipping a toolchain in the prebuilt scanner image; or choosing the scanner Python to match the package's wheels. Each widens what a malicious build script can do, so it needs the same review as the other hardening flags. Selecting the sandbox Python from the project (`.python-version`, `python_version`) now removes one cause, since a Python with wheels for the pinned versions avoids the source build entirely (pandas 2.2.x scans clean on 3.12), but it does not help packages that never publish wheels.
-
----
-
 ### Finding 433 — Medium | `src/sandbox.rs` | ⚠️ Open
 
 **Summary:** In host mode the probe is `timeout -k 5 N strace … ` with stderr piped back to `Command::output()`. GNU `timeout` returns when `strace` exits, so its SIGKILL timer does not reach descendants that `strace` detached on SIGTERM, and a descendant that keeps the stderr pipe open keeps `output()` waiting for end-of-file indefinitely. Docker mode is not affected: the container is the process boundary and the cleanup loop covers survivors. Not reproduced here because macOS has no `strace`.
@@ -1245,13 +1235,12 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 478 — Low | `src/sandbox.rs` | ⚠️ Open
+### Finding 479 — Medium | `src/sandbox.rs`, `docker/Dockerfile.*` | ⚠️ Open
 
-**Summary:** The places a payload can still run files from are not noexec.
+**Summary:** A package that must be built from source cannot be built in the sandbox: the default images have no compiler, and `/tmp` is `noexec`.
 
-**Root cause:** `build_docker_run_args` makes `/tmp` and `/work` `noexec` tmpfs mounts but leaves `/var/tmp` and `/home/gyrseek` on the container's writable layer.
+**Root cause:** `/tmp` is mounted `noexec` (FIXED #425 enlarged it but kept it `noexec`), and build tools that pip and uv run from their build-isolation environment under `/tmp` (`meson`, `cmake`) fail with `Permission denied` even if a compiler is present; and the images have no compiler, so `node-pre-gyp --fallback-to-build`, `node-gyp rebuild` and source builds of Python packages fail. Seen with bcrypt 5.0.1 on Node 26 (the candidate 5.1.1 installed, its older baseline did not, which blocks the package).
 
-**Fix direction:** mount both as `noexec,nosuid` tmpfs with a size limit and extend the Docker test to try to run a copied ELF from them.
-
+**Fix direction:** either ship a toolchain in the prebuilt scanner image and review what a build script may then do (this includes whether a dedicated executable build directory is acceptable, see WONT_FIX #480), or pick the sandbox runtime from the versions for which the package has prebuilds. Until then `node_version` or `python_version` is the escape hatch.
 
 ---

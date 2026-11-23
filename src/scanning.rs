@@ -995,7 +995,7 @@ fn extract_artifact_findings(full: &str) -> HashSet<String> {
 ///   - `unexpected_runtime|path|type` — bun/deno binary (subset of binary)
 ///   - `suspicious_pth|path|content`  — .pth with executable import/call patterns
 ///   - `large_file|path|size`        — file >10 MB
-///   - `dropped_file|path|size`      — any file outside `/work` (the scanner user's other writable places)
+///   - `dropped_file|path|size`      — any regular file outside `/work` in the other inventoried places
 pub(crate) fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> {
     let mut findings = HashSet::new();
     for line in raw {
@@ -1011,8 +1011,10 @@ pub(crate) fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> 
         let size: u64 = size_str.parse().unwrap_or(0);
 
         // A file outside `/work`: legitimate installs run with `HOME=/work` and write nothing to
-        // the other places the scanner user can write (`/home/gyrseek`, `/var/tmp`, `/run/lock`,
-        // `/dev/shm`), two of which allow execution, so anything there is reported.
+        // the places the inventory lists besides it (`/home/gyrseek`, `/var/tmp`, `/run/lock`,
+        // `/dev/shm`: a fixed list measured in the two default scanner images, so a custom image may
+        // have others), two of which allow execution, so any regular file there is reported.
+        // `/tmp` is not inventoried and symlinks are not listed (OPEN #476, #477).
         if !path.starts_with("/work/") {
             findings.insert(format!("dropped_file|{}|{}", path, size));
         }
@@ -1113,7 +1115,7 @@ fn install_failed_message(
         "❌ [gyrseek] install_failed: the sandbox install of '{package}' failed for {versions}.\n\
 This is not a gyrseek error. It is an error from your package manager ({manager}) while installing or resolving dependencies for this package. gyrseek cannot observe or vouch for a package that does not install, so it blocked it.\n\
 To fix: run the same install on its own, resolve the error, and run gyrseek again.\n\
-The sandbox is a locked-down Linux container (its own Python/Node, no compiler, a small non-executable /tmp), so a package that must be built from source (no prebuilt wheel) can fail there even though it installs on your machine. If the error below looks like that, point {image_var} at an image that matches your project."
+The default sandbox image is a locked-down Linux container with its own Python/Node and no compiler, and its `/tmp` is mounted `noexec`, so a package that must be built from source (no prebuilt wheel) can fail there, and a build that runs a program from `/tmp` fails there even when a compiler is present, although it installs on your machine. A custom image may differ. If the error below looks like that, point {image_var} at an image that matches your project, or set `python_version`/`node_version` to a release that has prebuilt binaries."
     );
     if let Some(sandbox) = sandbox {
         msg.push_str(&format!(
