@@ -1374,9 +1374,15 @@ fn build_docker_run_args(
         "--user".to_string(),
         "root".to_string(),
         "--tmpfs".to_string(),
-        "/tmp:rw,noexec,nosuid,size=128m".to_string(),
+        // `/tmp` stays `noexec` but is as large as `/work` (a 128 MB `/tmp` could not hold scipy's
+        // wheel while uv extracted it). `/work` allows execution: install scripts run the binaries
+        // their package ships (esbuild, bcrypt) and C extensions are loaded from it, as in a real
+        // install; with `noexec` those installs failed and could not be scanned (FIXED #425).
+        // `nosuid` and `nodev` stay.
+        format!("/tmp:rw,noexec,nosuid,nodev,size={mem_limit}"),
         "--tmpfs".to_string(),
-        format!("/work:rw,noexec,nosuid,size={mem_limit}"),
+        // Docker mounts a tmpfs `noexec` unless `exec` is asked for.
+        format!("/work:rw,exec,nosuid,nodev,size={mem_limit}"),
     ];
     if !danger_disable_seccomp {
         let profile_path = embedded_seccomp_profile_path()?;
@@ -1912,6 +1918,38 @@ mod tests {
     }
 
     #[test]
+    fn work_allows_execution_and_tmp_does_not_and_both_are_as_large_as_the_memory_limit() {
+        let _env = SandboxEnvVarGuard::remove("GYRSEEK_MEM_LIMIT");
+        let args =
+            build_docker_run_args("img:latest", "echo hi", false, None, "probe-test").unwrap();
+        let mount = |dir: &str| -> String {
+            let at = args
+                .iter()
+                .position(|a| a.starts_with(&format!("{dir}:")))
+                .unwrap_or_else(|| panic!("{dir}"));
+            assert_eq!(args[at - 1], "--tmpfs");
+            args[at].clone()
+        };
+        // Install scripts run the binaries their package ships from /work (FIXED #425).
+        let work = mount("/work");
+        assert!(
+            work.contains(",exec,") && !work.contains("noexec"),
+            "{work}"
+        );
+        assert!(work.contains("nosuid") && work.contains("nodev"), "{work}");
+        // /tmp holds extracted wheels and temporary files: large, but nothing runs from it.
+        let tmp = mount("/tmp");
+        assert!(
+            tmp.contains("noexec") && tmp.contains("nosuid") && tmp.contains("nodev"),
+            "{tmp}"
+        );
+        assert!(
+            tmp.ends_with("size=2g") && work.ends_with("size=2g"),
+            "{tmp} {work}"
+        );
+    }
+
+    #[test]
     fn docker_args_memory_limit_defaults_to_2g_and_is_configurable() {
         {
             let _env = SandboxEnvVarGuard::remove("GYRSEEK_MEM_LIMIT");
@@ -1922,7 +1960,14 @@ mod tests {
                 .position(|a| a == "--memory")
                 .expect("--memory flag present");
             assert_eq!(args.get(mem_pos + 1).map(String::as_str), Some("2g"));
-            assert!(args.iter().any(|a| a == "/work:rw,noexec,nosuid,size=2g"));
+            assert!(
+                args.iter()
+                    .any(|a| a == "/work:rw,exec,nosuid,nodev,size=2g")
+            );
+            assert!(
+                args.iter()
+                    .any(|a| a == "/tmp:rw,noexec,nosuid,nodev,size=2g")
+            );
         }
 
         {
@@ -1941,7 +1986,7 @@ mod tests {
             assert!(
                 args_custom
                     .iter()
-                    .any(|a| a == "/work:rw,noexec,nosuid,size=4g")
+                    .any(|a| a == "/work:rw,exec,nosuid,nodev,size=4g")
             );
         }
     }
@@ -2895,6 +2940,61 @@ echo "MS=$(( (t1 - t0) / 1000000 ))"; echo BEGIN; base64 < /gyrseek-trace/gyrsee
                 "probe {idx}: {seen:#?}"
             );
         }
+    }
+
+    /// FIXED #425. An install script can run a binary its package ships from `/work` (esbuild,
+    /// bcrypt) and `/tmp` holds a large wheel (scipy), while nothing can run from `/tmp`. Checked
+    /// as the unprivileged scanner user in a container built from the real arguments. Needs Docker.
+    #[test]
+    #[ignore = "needs Docker; run with `just test-trace-integrity`"]
+    fn an_install_can_run_a_binary_from_work_and_extract_a_large_wheel_into_tmp() {
+        let image =
+            crate::runtime_image::select_for_manager("pip", None, None, std::path::Path::new("."))
+                .image;
+        let probe = r#"cat > /tmp/probe.sh <<'EOS'
+cp /bin/true /work/prog && /work/prog && echo "WORK-EXEC-OK"
+cp /bin/true /tmp/prog 2>/dev/null; /tmp/prog 2>/dev/null && echo "TMP-EXEC-OK" || echo "TMP-EXEC-BLOCKED"
+head -c 300000000 /dev/zero > /tmp/large-wheel && echo "TMP-300MB-OK"
+chmod u+s /work/prog; grep -E " /(work|tmp) " /proc/mounts | cut -d" " -f2,4
+EOS
+useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u gyrseek -- sh /tmp/probe.sh"#;
+        let args =
+            build_docker_run_args(&image, probe, false, None, &super::container_name()).unwrap();
+        let output = std::process::Command::new("docker")
+            .args(&args)
+            .output()
+            .expect("docker");
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+        assert!(
+            text.contains("WORK-EXEC-OK"),
+            "{text} {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            text.contains("TMP-EXEC-BLOCKED") && !text.contains("TMP-EXEC-OK"),
+            "{text}"
+        );
+        assert!(
+            text.contains("TMP-300MB-OK"),
+            "a 300 MB file must fit in /tmp: {text}"
+        );
+        // Both mounts are nosuid and nodev; only /tmp is noexec.
+        let flags = |dir: &str| -> String {
+            text.lines()
+                .find(|l| l.starts_with(&format!("{dir} ")))
+                .unwrap_or_else(|| panic!("{dir}: {text}"))
+                .to_string()
+        };
+        assert!(
+            flags("/work").contains("nosuid")
+                && flags("/work").contains("nodev")
+                && !flags("/work").contains("noexec"),
+            "{text}"
+        );
+        assert!(
+            flags("/tmp").contains("nosuid") && flags("/tmp").contains("noexec"),
+            "{text}"
+        );
     }
 
     /// FIXED #434: a package that produces more trace than the tmpfs holds blocks only itself;

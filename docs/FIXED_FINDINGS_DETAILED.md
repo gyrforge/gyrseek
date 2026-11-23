@@ -1984,3 +1984,7 @@ only.
 ### Finding 469: One probe without a trace failed the batch
 - **Root Cause**: after the single-probe retry was removed (FIXED #418), `collect_probe_traces` returned an error for any probe whose trace file was missing.
 - **Fix**: a missing file is skipped with `trace_missing_message` (the same treatment as a timeout or a trace over the limit); the batch is an error only when no probe has a trace, or when a trace exists but is blank.
+
+### Finding 425: Native packages could not install in the sandbox
+- **Root Cause**: `build_docker_run_args` mounted `/tmp` `rw,noexec,nosuid,size=128m` and `/work` `rw,noexec,nosuid`. uv extracts a 40 MB wheel into `/tmp` (scipy: `No space left on device`), and npm install scripts such as `node install.js` (esbuild) and `node-gyp-build` (bcrypt) execute a binary under `/work/node_modules` (`Permission denied`, exit 126).
+- **Fix**: `/tmp` is sized like `/work` and stays `noexec`; `/work` is `rw,exec,nosuid,nodev`. Decided with the maintainer after measuring that a `noexec` mount stops a dropped ELF even through the dynamic loader (`failed to map segment`) but also stops legitimate C extensions, and that a failed exec attempt is recorded in the trace like a successful one. The accepted risk and the rejected alternatives are recorded as WONT_FIX #480. A Docker test runs a binary from `/work`, shows `/tmp` blocks one, writes a 300 MB file into `/tmp` and reads the mount flags back; Docker's tmpfs default is `noexec`, which the first version of the change missed until that test failed.
