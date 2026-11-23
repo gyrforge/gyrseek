@@ -88,6 +88,33 @@ expect_mirror_used() {
   ok "$1 went through the mirror"
 }
 
+# A hash in a lockfile or requirements file that the public registry does not publish for that
+# version (what a compromised mirror pins, FIXED #447, #452) is refused before anything is
+# installed. The file's first hash has its last character changed.
+expect_tampered_hash_refused() { # <dir> <file> <what> <nothing installed here> <gyrseek args...>
+  local d=$1 file=$2 what=$3 nothing=$4
+  shift 4
+  rm -rf "$nothing"
+  cp "$d/$file" "$d/$file.orig"
+  python3 - "$d/$file" <<'PY'
+import re, sys
+path = sys.argv[1]
+text = open(path).read()
+m = re.search(r"sha512-[A-Za-z0-9+/]{20}|sha256:[0-9a-f]{20}", text)
+assert m, "no hash in the file"
+token = m.group(0)
+last = "0" if token.startswith("sha256:") else "A"
+last = last if token[-1] != last else "1" if last == "0" else "B"
+open(path, "w").write(text[: m.start()] + token[:-1] + last + text[m.end() :])
+PY
+  gyrseek "$d" "$@"
+  mv "$d/$file.orig" "$d/$file"
+  [ "$CODE" -eq 1 ] || fail "$what: expected exit 1, got $CODE"
+  grep -q "does not publish for this version" <<<"$OUT" || fail "$what: not refused for its hash"
+  [ ! -e "$nothing" ] || fail "$what: the package manager ran anyway"
+  ok "$what is refused before anything is installed"
+}
+
 # ------------------------------------------------------------------ npm
 
 npm_checks() {
@@ -117,6 +144,7 @@ npm_checks() {
   [ -d "$d/node_modules/left-pad" ] || fail "left-pad was not installed"
   ok "npm install through the trusted mirror installs left-pad"
   expect_mirror_used "npm install"
+  expect_tampered_hash_refused "$d" package-lock.json "npm ci with a lockfile hash the registry does not publish" "$d/node_modules" npm ci
 
   rm -rf "$d/node_modules" "$d/.npmrc" "$d/gyrseek.yaml"
   (cd "$d" && npm pkg set dependencies.is-odd=^3.0.1 >/dev/null)
@@ -149,6 +177,7 @@ pnpm_checks() {
   [ -e "$d/node_modules/left-pad" ] || fail "left-pad was not installed"
   ok "pnpm install through the trusted mirror installs left-pad"
   expect_mirror_used "pnpm install"
+  expect_tampered_hash_refused "$d" pnpm-lock.yaml "pnpm install with a lockfile hash the registry does not publish" "$d/node_modules" pnpm install
 
   rm -rf "$d/node_modules" "$d/.npmrc" "$d/gyrseek.yaml"
   python3 - "$d/package.json" <<'PY'
@@ -190,6 +219,21 @@ pip_checks() {
   pip show six >/dev/null 2>&1 || fail "six was not installed"
   ok "pip install through the trusted mirror installs six"
   expect_mirror_used "pip install"
+
+  # A requirements file with the real hash goes through, one with another hash does not.
+  local sha
+  sha=$(python3 - <<'PY'
+import json, urllib.request
+doc = json.load(urllib.request.urlopen("https://pypi.org/pypi/six/1.16.0/json"))
+print(next(f["digests"]["sha256"] for f in doc["urls"] if f["packagetype"] == "bdist_wheel"))
+PY
+)
+  printf 'six==1.16.0 \\\n    --hash=sha256:%s\n' "$sha" >"$d/requirements.txt"
+  pip uninstall -y six >/dev/null 2>&1
+  gyrseek "$d" pip install -r requirements.txt
+  [ "$CODE" -eq 0 ] || fail "pip install -r with the real hash exited $CODE"
+  ok "pip install -r with the registry's own hash goes through"
+  expect_tampered_hash_refused "$d" requirements.txt "pip install -r with a hash the registry does not publish" "$d/.none" pip install -r requirements.txt
 }
 
 # ------------------------------------------------------------------ uv
@@ -219,6 +263,7 @@ TOML
   [ "$CODE" -eq 0 ] || fail "uv sync with a trusted host exited $CODE"
   "$d/.venv/bin/python" -c "import six" || fail "six was not installed"
   ok "uv sync with a trusted host installs six, forwarded as 'uv sync --locked'"
+  UV_EXTRA_INDEX_URL=$mirror expect_tampered_hash_refused "$d" uv.lock "uv sync with a lockfile hash the registry does not publish" "$d/.venv" uv sync
   rm -rf "$d/.venv" "$d/gyrseek.yaml"
 
   gyrseek "$d" uv sync --upgrade
@@ -293,6 +338,7 @@ PY
   [ "$CODE" -eq 0 ] || fail "poetry install with a trusted host exited $CODE"
   (cd "$d" && poetry run python -c "import six") || fail "six was not installed"
   ok "poetry install with a trusted host installs six"
+  POETRY_REPOSITORIES_MIRROR_URL=$mirror expect_tampered_hash_refused "$d" poetry.lock "poetry install with a lockfile hash the registry does not publish" "$d/.none" poetry install --no-root
   rm -f "$d/gyrseek.yaml"
 
   local before
@@ -313,4 +359,4 @@ case "$manager" in
   poetry) poetry_checks ;;
   *) echo "unknown manager: $manager" && exit 2 ;;
 esac
-echo "all $manager redirect and lockfile checks passed"
+echo "all $manager redirect, lockfile and hash checks passed"
