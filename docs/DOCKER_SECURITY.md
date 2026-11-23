@@ -237,7 +237,7 @@ Docker mode is not "weaker on macOS because it lacks seccomp and AppArmor". Secc
 | Payload privileges | Unprivileged user, no capabilities, `no-new-privileges` | Same (payload `CapEff` 0, no `docker.sock`) | Measured on macOS, same flags on Linux |
 | Trace integrity | Traces live in a root-only, size-limited tmpfs and reach the host on stdout, with no host mount | Same | Measured on macOS (`just test-trace-integrity`); the CI Docker job runs it on Linux |
 | Container escape blast radius | The container shares the host kernel, so an escape lands on the host | An escape lands in Docker Desktop's VM first, which is an extra boundary | Documented, not measured |
-| `noexec` on `/work` and `/tmp` | Same | Works there, but a dropped binary can still run from `/home/gyrseek` or `/var/tmp` | Measured on macOS |
+| `noexec` on `/work` and `/tmp` | Same | Works there, but a dropped binary can still run from `/home/gyrseek` or `/var/tmp` (measured: a copied ELF and a shebang script both ran). The artifact inventory therefore also lists `/home/gyrseek`, `/var/tmp`, `/run/lock` and `/dev/shm`, reports any file found there as `dropped_file`, and the reset between probes empties them (FIXED #471) | Measured on macOS |
 | Network egress during the probe | Open | Open. Private-address reach is unmeasured on both (OPEN_FINDINGS #412) | Measured (open), not tested (private addresses) |
 | Probe time limit | 300s per probe, `probe_timeout_seconds` (FIXED #413) | 300s per probe, `probe_timeout_seconds` (FIXED #413) | Measured on macOS; not run on native Linux |
 | CI coverage | Yes (`ubuntu-latest` jobs) | None. GitHub-hosted macOS runners cannot run Docker. Tested by hand only | Documented |

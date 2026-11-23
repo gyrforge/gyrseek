@@ -995,6 +995,7 @@ fn extract_artifact_findings(full: &str) -> HashSet<String> {
 ///   - `unexpected_runtime|path|type` — bun/deno binary (subset of binary)
 ///   - `suspicious_pth|path|content`  — .pth with executable import/call patterns
 ///   - `large_file|path|size`        — file >10 MB
+///   - `dropped_file|path|size`      — any file outside `/work` (the scanner user's other writable places)
 pub(crate) fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> {
     let mut findings = HashSet::new();
     for line in raw {
@@ -1008,6 +1009,13 @@ pub(crate) fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> 
         let content = if parts.len() > 3 { parts[3] } else { "" };
 
         let size: u64 = size_str.parse().unwrap_or(0);
+
+        // A file outside `/work`: legitimate installs run with `HOME=/work` and write nothing to
+        // the other places the scanner user can write (`/home/gyrseek`, `/var/tmp`, `/run/lock`,
+        // `/dev/shm`), two of which allow execution, so anything there is reported.
+        if !path.starts_with("/work/") {
+            findings.insert(format!("dropped_file|{}|{}", path, size));
+        }
 
         // Large file check (before binary check so both tags can coexist).
         if size > LARGE_FILE_THRESHOLD {
@@ -1960,17 +1968,21 @@ fn normalize_artifact_path(path: &str) -> String {
 
 /// What makes two artifact findings "the same file" across versions. `binary` and
 /// `unexpected_runtime` findings (`<kind>|<path>|<type>`) are the same when the normalised path
-/// and the type match; `large_file` findings (`large_file|<path>|<size>`) when the normalised
-/// path matches, whatever the size. Every other finding is compared as written.
+/// and the type match; `large_file` and `dropped_file` findings (`<kind>|<path>|<size>`) when the
+/// normalised path matches, whatever the size. Every other finding is compared as written.
 fn artifact_key(finding: &str) -> String {
-    for kind in ["binary", "unexpected_runtime", "large_file"] {
+    for kind in ["binary", "unexpected_runtime", "large_file", "dropped_file"] {
         let Some(rest) = finding.strip_prefix(kind).and_then(|r| r.strip_prefix('|')) else {
             continue;
         };
         let Some((path, tail)) = rest.rsplit_once('|') else {
             return finding.to_string();
         };
-        let tail = if kind == "large_file" { "" } else { tail };
+        let tail = if matches!(kind, "large_file" | "dropped_file") {
+            ""
+        } else {
+            tail
+        };
         return format!("{kind}|{}|{tail}", normalize_artifact_path(path));
     }
     finding.to_string()
@@ -3741,6 +3753,69 @@ execve("/tmp/b/bun", ["bun", "run", "_index.js"], 0x7ff) = 0
             "suspicious_pth|/work/x.pth|import os",
         ]);
         assert!(new_artifact_findings_vs_baseline(&same, &same).is_empty());
+    }
+
+    #[test]
+    fn a_file_outside_work_is_a_dropped_file_and_one_inside_is_not() {
+        let line = |path: &str, size: u32, kind: &str| format!("{path}\0{size}\0{kind}\0");
+        let found = classify_inventory_lines(
+            [
+                line("/home/gyrseek/payload", 300, "ELF 64-bit LSB executable"),
+                line("/var/tmp/x.sh", 20, ""),
+                line("/dev/shm/a", 1, ""),
+                line("/run/lock/b", 1, ""),
+                line("/work/node_modules/p/index.js", 100, ""),
+                line("/workspace/lookalike", 5, ""),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        for expected in [
+            "dropped_file|/home/gyrseek/payload|300",
+            "binary|/home/gyrseek/payload|ELF 64-bit LSB executable",
+            "dropped_file|/var/tmp/x.sh|20",
+            "dropped_file|/dev/shm/a|1",
+            "dropped_file|/run/lock/b|1",
+            // `/workspace` is not `/work`.
+            "dropped_file|/workspace/lookalike|5",
+        ] {
+            assert!(found.contains(expected), "{expected}: {found:#?}");
+        }
+        assert!(
+            !found.iter().any(|f| f.contains("/work/node_modules")),
+            "{found:#?}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_file_is_compared_by_path_whatever_its_size() {
+        let set =
+            |items: &[&str]| -> HashSet<String> { items.iter().map(|s| s.to_string()).collect() };
+        // The same file with another size, or a hash that changed in its name, is not new.
+        let baseline = set(&["dropped_file|/var/tmp/cache-0c352bdc12|10"]);
+        let current = set(&["dropped_file|/var/tmp/cache-aa11bb22cc|999"]);
+        assert!(new_artifact_findings_vs_baseline(&current, &baseline).is_empty());
+        // A new file, or the same name in another directory, is.
+        for finding in [
+            "dropped_file|/var/tmp/payload|10",
+            "dropped_file|/home/gyrseek/cache-0c352bdc12|10",
+        ] {
+            let current = set(&[finding]);
+            assert_eq!(
+                new_artifact_findings_vs_baseline(&current, &baseline),
+                vec![finding.to_string()],
+                "{finding}"
+            );
+        }
+        // An allowlist entry for `dropped_file|path` covers it whatever the size.
+        let allow: HashMap<String, HashSet<String>> =
+            HashMap::from([("pkg".to_string(), set(&["dropped_file|/var/tmp/payload"]))]);
+        let (blocked, allowed) = filter_allowlisted_artifact_findings(
+            "pkg",
+            vec!["dropped_file|/var/tmp/payload|10".to_string()],
+            &allow,
+        );
+        assert!(blocked.is_empty() && allowed.len() == 1);
     }
 
     #[test]

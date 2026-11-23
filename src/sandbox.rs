@@ -782,9 +782,9 @@ fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
 
 /// Reads what the container script left in `out_dir` for each probe: the trace, the
 /// artifact inventory, an exit-code file for a failed install and a marker for a probe that
-/// timed out or filled the trace tmpfs. A probe whose trace is missing or blank is an error and
-/// is never re-run: a second run would have its own artifact inventory, and mixing the two
-/// would describe two different installs (FIXED #418).
+/// timed out or filled the trace tmpfs. A probe is never re-run (a second run would have its own
+/// artifact inventory, and mixing the two would describe two different installs, FIXED #418): one
+/// with no trace file is left out and named, one with a blank trace is an error.
 fn collect_probe_traces(
     out_dir: &std::path::Path,
     probes: &[(String, String)],
@@ -815,9 +815,22 @@ fn collect_probe_traces(
             continue;
         }
         let trace_path = out_dir.join(format!("gyrseek_trace_{}.log", idx));
-        // A missing or blank trace means strace produced no data and MUST NOT be treated as a
-        // clean zero-connection scan: fail closed, with strace's own error.
-        let mut trace = std::fs::read_to_string(&trace_path).unwrap_or_default();
+        // A probe that left no trace file at all (the install never reached strace) cannot be
+        // scanned, but it says nothing about the other probes: leave it out so the scanner
+        // blocks just that package, as for a timeout (FIXED #469).
+        let mut trace = match std::fs::read_to_string(&trace_path) {
+            Ok(trace) => trace,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let msg = trace_missing_message(package, version);
+                eprintln!("⚠️ [gyrseek] {msg}");
+                timed_out.push(msg);
+                continue;
+            }
+            Err(_) => String::new(),
+        };
+        // A blank (or unreadable) trace means strace produced no data and MUST NOT be treated as
+        // a clean zero-connection scan: fail closed, with strace's own error. Unlike a missing
+        // file it points at ptrace not working at all, which affects every probe.
         if trace.trim().is_empty() {
             let err_path = out_dir.join(format!("gyrseek_err_{}.log", idx));
             let strace_err = std::fs::read_to_string(&err_path).unwrap_or_default();
@@ -910,6 +923,13 @@ fn install_output_tail(raw: &str) -> String {
         .collect();
     let start = lines.len().saturating_sub(INSTALL_OUTPUT_MAX_LINES);
     lines[start..].join("\n")
+}
+
+fn trace_missing_message(package: &str, version: &str) -> String {
+    format!(
+        "sandbox probe for '{package}@{version}' left no trace file, so it cannot be scanned; treating it as a block. \
+This is not expected: re-run the scan, and report it if it keeps happening"
+    )
 }
 
 fn trace_limit_message(limit: &str, package: &str, version: &str) -> String {
@@ -1085,7 +1105,7 @@ fn build_artifact_scan_steps(manager: &str, idx: usize) -> Vec<String> {
         format!("{{ true > {out}; }} 2>/dev/null || true"),
         format!(
             "{find_interpreter}; \
-             if [ -n \"$INTERP\" ] && find /work -type f -print0 2>/dev/null | {script} > {out} 2>/dev/null; \
+             if [ -n \"$INTERP\" ] && find /work {OUTSIDE_WORK_DIRS} -type f -print0 2>/dev/null | {script} > {out} 2>/dev/null; \
              then true; elif gyrseek_full; then true; \
              else echo \"gyrseek: cannot inventory the installed files: the scanner image has no working {runtime}\" >&2; exit 126; fi"
         ),
@@ -1229,12 +1249,21 @@ fn trace_dir_setup_steps() -> Vec<String> {
     ]
 }
 
-/// Empties the shared install tree (and `/tmp`) between probes. Traces and
-/// artifact inventories live in `/out`, so they are untouched. The trailing
+/// The places the unprivileged scanner user can write to apart from `/work` and `/tmp`, which
+/// legitimate installs do not use (they run with `HOME=/work`, and temporary files go to `/tmp`).
+/// Measured in the default image: `/home/gyrseek` and `/var/tmp` are writable and executable (a
+/// copied ELF and a shebang script both ran from them, unlike `/work` and `/tmp`, which are
+/// `noexec`), `/run/lock` and `/dev/shm` are writable. The artifact inventory lists them, so
+/// anything dropped there is reported (`dropped_file`), and the reset below empties them, so one
+/// probe cannot leave something behind for the next (FIXED #471).
+const OUTSIDE_WORK_DIRS: &str = "/home/gyrseek /var/tmp /run/lock /dev/shm";
+
+/// Empties the shared install tree, `/tmp` and the other places the scanner user can write
+/// (`OUTSIDE_WORK_DIRS`) between probes, and once before the first. Traces and
+/// artifact inventories live in the trace tmpfs, so they are untouched. The trailing
 /// `|| true` is needed because the script runs under `set -e` and a failed
 /// cleanup must not abort the remaining probes.
-const WORK_RESET_STEP: &str =
-    "find /work /tmp -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true";
+const WORK_RESET_STEP: &str = "find /work /tmp /home/gyrseek /var/tmp /run/lock /dev/shm -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true";
 
 /// SIGKILLs every process owned by the scanner user, repeating until none is left (a
 /// survivor can fork between a scan of `/proc` and its kill; zombies are already dead and
@@ -1271,6 +1300,9 @@ fn build_matrix_script_with(
     let mut steps = image_setup_steps(manager, prebuilt);
     steps.extend(scanner_user_setup_steps());
     steps.extend(trace_dir_setup_steps());
+    // Every probe, the first included, starts from the same empty directories: `useradd` leaves
+    // the skeleton dotfiles in the home directory, which would make probe 0 differ from the rest.
+    steps.push(WORK_RESET_STEP.to_string());
 
     for (idx, (package, version)) in probes.iter().enumerate() {
         let spec = package_spec(manager, package, version);
@@ -1634,11 +1666,11 @@ mod tests {
     use super::{
         ARTIFACT_INVENTORY_NODE, ARTIFACT_INVENTORY_PYTHON, EMBEDDED_APPARMOR_PROFILE_NAME,
         EMBEDDED_APPARMOR_PROFILE_TEXT, EMBEDDED_SECCOMP_PROFILE_JSON, KILL_PAYLOAD_PROCESSES_STEP,
-        SCANNER_USER, TRACE_FUNCTIONS, WORK_RESET_STEP, base64_decode, build_artifact_scan_steps,
-        build_docker_run_args, build_matrix_script, build_runner_from_env,
-        docker_apparmor_enabled_from_env, docker_apparmor_profile_name, install_output_tail,
-        probe_timeout_message, read_frames, read_install_failure, sandbox_max_processes,
-        sandbox_trace_limit, size_to_bytes, strace_install_command,
+        OUTSIDE_WORK_DIRS, SCANNER_USER, TRACE_FUNCTIONS, WORK_RESET_STEP, base64_decode,
+        build_artifact_scan_steps, build_docker_run_args, build_matrix_script,
+        build_runner_from_env, docker_apparmor_enabled_from_env, docker_apparmor_profile_name,
+        install_output_tail, probe_timeout_message, read_frames, read_install_failure,
+        sandbox_max_processes, sandbox_trace_limit, size_to_bytes, strace_install_command,
     };
     use super::{
         DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, is_timeout_exit,
@@ -2096,8 +2128,10 @@ mod tests {
         for manager in ["pip", "npm"] {
             let combined = build_artifact_scan_steps(manager, 0).join(" ");
             assert!(
-                combined.contains("find /work -type f -print0"),
-                "should inventory every file, names NUL-separated: {combined}"
+                combined.contains(
+                    "find /work /home/gyrseek /var/tmp /run/lock /dev/shm -type f -print0"
+                ),
+                "should inventory every file where the payload can write, names NUL-separated: {combined}"
             );
         }
     }
@@ -2261,6 +2295,33 @@ mod tests {
         // `:` is a special builtin, whose failed redirection ends a non-interactive shell even
         // after `|| true`, so it must not be used for these writes.
         assert!(!script.contains(": > /gyrseek-trace"), "{script}");
+    }
+
+    #[test]
+    fn the_places_the_scanner_user_can_write_are_inventoried_and_wiped_alike() {
+        // One list drives both: whatever is looked at is also emptied between probes.
+        let home = format!("/home/{SCANNER_USER}");
+        for dir in OUTSIDE_WORK_DIRS.split_whitespace() {
+            assert!(WORK_RESET_STEP.contains(dir), "{dir} is not reset");
+            assert!(
+                build_artifact_scan_steps("pip", 0)[1].contains(dir),
+                "{dir} is not inventoried"
+            );
+        }
+        assert!(
+            OUTSIDE_WORK_DIRS.contains(&home),
+            "the scanner user's home is part of it"
+        );
+        // /work and /tmp are reset too, but only /work is inventoried (/tmp is noexec and busy).
+        assert!(WORK_RESET_STEP.contains("/work /tmp "));
+        assert!(
+            !build_artifact_scan_steps("pip", 0)[1]
+                .split_whitespace()
+                .any(|word| word == "/tmp"),
+            "/tmp is not inventoried"
+        );
+        // The reset empties the directories without removing them.
+        assert!(WORK_RESET_STEP.contains("-mindepth 1 -maxdepth 1"));
     }
 
     #[test]
@@ -2760,6 +2821,82 @@ echo "MS=$(( (t1 - t0) / 1000000 ))"; echo BEGIN; base64 < /gyrseek-trace/gyrsee
         }
     }
 
+    /// FIXED #471. The scanner user can write, and run what it writes, in `/home/gyrseek` and
+    /// `/var/tmp`, and can write in `/dev/shm` and `/run/lock`. A payload that drops files there is
+    /// reported, the next probe starts clean, and the probe before it (which starts right after the
+    /// skeleton dotfiles `useradd` creates) reports nothing. Needs Docker.
+    #[test]
+    #[ignore = "needs Docker; run with `just test-trace-integrity`"]
+    fn files_dropped_outside_work_are_reported_and_do_not_reach_the_next_probe() {
+        use std::collections::HashSet;
+        let probes = vec![
+            ("first".to_string(), "1.0.0".to_string()),
+            ("dropper".to_string(), "1.0.0".to_string()),
+            ("last".to_string(), "1.0.0".to_string()),
+        ];
+        let dropper = "sh -c 'cp /bin/true /home/gyrseek/payload; cp /bin/true /var/tmp/miner; echo x > /dev/shm/note; echo x > /run/lock/mark; echo x > /home/gyrseek/.hidden; echo x > /work/legit'";
+        let script = super::build_matrix_script_with("pip", &probes, false, 120, &|spec| {
+            if spec.contains("dropper") {
+                dropper.to_string()
+            } else {
+                "sh -c 'echo ok'".to_string()
+            }
+        });
+        let out = run_in_container(&script, "64m");
+        let findings = |idx: usize| -> HashSet<String> {
+            let log = std::fs::read(out.path().join(format!("gyrseek_artifacts_{idx}.log")))
+                .expect("artifacts log");
+            let lines = String::from_utf8_lossy(&log)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect();
+            crate::scanning::classify_inventory_lines(lines)
+        };
+        let dropped = findings(1);
+        for path in [
+            "/home/gyrseek/payload",
+            "/var/tmp/miner",
+            "/dev/shm/note",
+            "/run/lock/mark",
+            "/home/gyrseek/.hidden",
+        ] {
+            assert!(
+                dropped
+                    .iter()
+                    .any(|f| f.starts_with(&format!("dropped_file|{path}|"))),
+                "{path}: {dropped:#?}"
+            );
+        }
+        // An executable dropped where it can run is also reported as one.
+        assert!(
+            dropped
+                .iter()
+                .any(|f| f.starts_with("binary|/home/gyrseek/payload|ELF")),
+            "{dropped:#?}"
+        );
+        assert!(
+            dropped
+                .iter()
+                .any(|f| f.starts_with("binary|/var/tmp/miner|ELF")),
+            "{dropped:#?}"
+        );
+        // A file under /work is an ordinary install file, not a dropped one.
+        assert!(
+            !dropped.iter().any(|f| f.contains("/work/legit")),
+            "{dropped:#?}"
+        );
+        // The probes around it see nothing outside /work: nothing leaked forward, and probe 0 does
+        // not see the skeleton dotfiles `useradd` creates.
+        for idx in [0, 2] {
+            let seen = findings(idx);
+            assert!(
+                !seen.iter().any(|f| f.starts_with("dropped_file|")),
+                "probe {idx}: {seen:#?}"
+            );
+        }
+    }
+
     /// FIXED #434: a package that produces more trace than the tmpfs holds blocks only itself;
     /// the next probe still gets a whole tmpfs. Needs Docker and the network.
     #[test]
@@ -2895,22 +3032,35 @@ echo "MS=$(( (t1 - t0) / 1000000 ))"; echo BEGIN; base64 < /gyrseek-trace/gyrsee
     }
 
     #[test]
-    fn a_missing_or_blank_trace_is_an_error_and_nothing_is_re_run() {
+    fn a_probe_with_no_trace_file_is_left_out_and_named_and_nothing_is_re_run() {
         // A second run would come with its own artifact inventory, and the two would describe
-        // different installs (FIXED #418): the probe fails closed instead.
+        // different installs (FIXED #418); a missing file only blocks its own package (FIXED #469).
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
         put(d, "gyrseek_artifacts_0.log", "/work/x\0\0\0\n");
-        let err = collect_probe_traces(d, &[probe("a", "1.0.0")], 300, "256m").unwrap_err();
-        assert!(err.contains("empty trace for 'a@1.0.0'"), "missing: {err}");
-        put(d, "gyrseek_trace_0.log", "  \n"); // blank
-        let err = collect_probe_traces(d, &[probe("a", "1.0.0")], 300, "256m").unwrap_err();
-        assert!(err.contains("empty trace for 'a@1.0.0'"), "blank: {err}");
-        // One bad probe fails the batch even when the others are fine.
-        put(d, "gyrseek_trace_0.log", "good\n");
+        put(d, "gyrseek_trace_1.log", "execve(\"/bin/b\") = 0\n");
+        let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
+        let got = collect_probe_traces(d, &probes, 300, "256m").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].probe, probe("b", "2.0.0"));
+        // When no probe has a trace the batch is an error that names each of them.
+        let only_missing = tempfile::tempdir().unwrap();
+        let err = collect_probe_traces(only_missing.path(), &probes, 300, "256m").unwrap_err();
+        assert!(
+            err.contains("'a@1.0.0' left no trace file") && err.contains("'b@2.0.0'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_blank_trace_fails_the_batch_because_strace_does_not_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        put(d, "gyrseek_trace_0.log", "  \n");
+        put(d, "gyrseek_trace_1.log", "good\n");
         let probes = [probe("a", "1.0.0"), probe("b", "2.0.0")];
         let err = collect_probe_traces(d, &probes, 300, "256m").unwrap_err();
-        assert!(err.contains("empty trace for 'b@2.0.0'"), "{err}");
+        assert!(err.contains("empty trace for 'a@1.0.0'"), "{err}");
     }
 
     #[test]
@@ -3122,7 +3272,7 @@ echo "MS=$(( (t1 - t0) / 1000000 ))"; echo BEGIN; base64 < /gyrseek-trace/gyrsee
             }
             assert!(script.contains(&format!("'pkg{i}==1.0.{i}'")), "probe {i}");
         }
-        assert_eq!(script.matches(WORK_RESET_STEP).count(), 12);
+        assert_eq!(script.matches(WORK_RESET_STEP).count(), 13);
         // An empty batch is an empty install section, not a crash.
         let empty = build_matrix_script("npm", &[], true, 300);
         assert!(!empty.contains("strace"));
@@ -3190,12 +3340,30 @@ echo "MS=$(( (t1 - t0) / 1000000 ))"; echo BEGIN; base64 < /gyrseek-trace/gyrsee
             true,
             300,
         );
+        let install0 = script.find("gyrseek_trace_0.log").expect("trace 0");
         let scan0 = script.find("gyrseek_artifacts_0.log").expect("artifacts 0");
         let install1 = script.find("gyrseek_trace_1.log").expect("trace 1");
-        let wipe = script.find(WORK_RESET_STEP).expect("work reset step");
-        assert!(wipe > scan0, "wipe must come after probe 0's artifact scan");
-        assert!(wipe < install1, "wipe must come before probe 1's install");
-        assert_eq!(script.matches(WORK_RESET_STEP).count(), 2);
+        // Once before the first probe, so probe 0 starts as empty as the rest, and after each.
+        let before_first = script
+            .find(WORK_RESET_STEP)
+            .expect("reset before the first probe");
+        assert!(
+            before_first < install0,
+            "the first reset must come before probe 0's install"
+        );
+        let after_first = script[scan0..]
+            .find(WORK_RESET_STEP)
+            .expect("reset after probe 0")
+            + scan0;
+        assert!(
+            after_first > scan0,
+            "wipe must come after probe 0's artifact scan"
+        );
+        assert!(
+            after_first < install1,
+            "wipe must come before probe 1's install"
+        );
+        assert_eq!(script.matches(WORK_RESET_STEP).count(), 3);
         assert!(
             !WORK_RESET_STEP.contains("/out"),
             "the wipe must never touch the trace logs"

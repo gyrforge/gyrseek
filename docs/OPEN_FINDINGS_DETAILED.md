@@ -1182,17 +1182,6 @@ if next.starts_with('-') {
 
 ---
 
-### Finding 469 — Medium | `src/sandbox.rs` | ⚠️ Open
-
-**Summary:** One probe without a trace fails the whole batch.
-
-**Root cause:** `collect_probe_traces` returns `Err` for a missing or blank trace file, while the timeout and trace-limit markers skip just that probe.
-
-**Fix direction:** skip a probe whose trace file is missing with a message (as for a timeout), keep `Err` for a blank trace (strace produced nothing), and test both.
-
-
----
-
 ### Finding 470 — Low | `src/sandbox.rs` | ⚠️ Open
 
 **Summary:** A custom image can have the package manager but no interpreter on PATH.
@@ -1200,17 +1189,6 @@ if next.starts_with('-') {
 **Root cause:** `build_artifact_scan_steps` resolves the interpreter with `command -v` as root, which is not the environment the install runs in.
 
 **Fix direction:** add `GYRSEEK_INVENTORY_INTERPRETER` (or a config key) that overrides the lookup, and mention it in the exit 126 message.
-
-
----
-
-### Finding 471 — Medium | `src/sandbox.rs` | ⚠️ Open
-
-**Summary:** The inventory covers only /work and three executable formats.
-
-**Root cause:** `find /work -type f -print0` feeds a script that checks four magic numbers; nothing else is looked at.
-
-**Fix direction:** extend the `find` to `/home/gyrseek` and `/var/tmp` (and any other path writable by the scanner user), add `#!` and `\0asm` detection, and test each in the Docker fixture.
 
 
 ---
@@ -1233,5 +1211,47 @@ if next.starts_with('-') {
 **Root cause:** `normalize_artifact_path` replaces hex runs and dotted versions by `*`; the comparison is a set membership test on the result, so any number of files with the same normalised name and type match one baseline file.
 
 **Fix direction:** compare the count of files per normalised name as well and flag an increase, and keep an exact comparison for executables outside the package's own directories.
+
+---
+
+### Finding 474 — Low | `src/scanning.rs` | ⚠️ Open
+
+**Summary:** `normalize_artifact_path` recognises hex runs, dotted versions with a short list of pre-release tags, and cache fan-out directories; other ways a vendored file changes name between releases still make it "new".
+
+**Root cause:** the rules were derived from the failures seen when scanning numpy, pillow, psycopg2-binary, sharp and @swc/core. A single-number soname (`libssl.so.3`) is kept on purpose, because normalising it would also hide a hostile `libssl.so.9`; Python's PEP 440 spellings and other tags are simply not covered.
+
+**Fix direction:** scan more native packages (grpcio, cryptography, lxml and pydantic-core were clear only because they ship few vendored files), add the spellings that occur, and decide whether a soname bump inside the package's own `.libs` directory is the same library.
+
+---
+
+### Finding 476 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The artifact inventory recognises only three executable formats and lists neither symlinks nor `/tmp`.
+
+**Root cause:** `ARTIFACT_INVENTORY_PYTHON` and `ARTIFACT_INVENTORY_NODE` check four magic numbers, `find -type f` skips symlinks, and `/tmp` was left out as noisy.
+
+**Fix direction:** report new shebang scripts and WebAssembly only outside the package's own directories, list symlinks whose target is outside `/work`, and decide about `/tmp`.
+
+---
+
+### Finding 477 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The writable places outside /work are a fixed list.
+
+**Root cause:** The list was measured once in the default images and hard-coded; the inventory `find` and `WORK_RESET_STEP` both use it.
+
+**Fix direction:** probe writability at the start of the matrix script with `runuser -u gyrseek -- find / -xdev -writable -type d`, keep the result in a shell variable, and build both the `find` and the reset from it.
+
+
+---
+
+### Finding 478 — Low | `src/sandbox.rs` | ⚠️ Open
+
+**Summary:** The places a payload can still run files from are not noexec.
+
+**Root cause:** `build_docker_run_args` makes `/tmp` and `/work` `noexec` tmpfs mounts but leaves `/var/tmp` and `/home/gyrseek` on the container's writable layer.
+
+**Fix direction:** mount both as `noexec,nosuid` tmpfs with a size limit and extend the Docker test to try to run a copied ELF from them.
+
 
 ---
