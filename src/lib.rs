@@ -27,7 +27,7 @@ use runtime_image::{
 };
 use sandbox::{DEFAULT_PROBE_TIMEOUT_SECS, SandboxRunner, build_runner_from_env};
 use scanning::{
-    HARD_MINIMUM_AGE_HOURS, PolicyConfig, ScanReport, normalize_git_clone_entry,
+    HARD_MINIMUM_AGE_HOURS, ImportAllowlists, PolicyConfig, ScanReport, normalize_git_clone_entry,
     scan_package_versions, scan_packages_versions,
 };
 
@@ -110,6 +110,22 @@ struct GyrseekConfig {
     artifact_allowlist: HashMap<String, Vec<String>>,
     #[serde(default)]
     sensitive_file_access_allowlist: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    import_scan: Option<bool>,
+    #[serde(default)]
+    import_timeout_seconds: Option<usize>,
+    #[serde(default)]
+    import_ip_allowlist: Vec<AllowlistEntry>,
+    #[serde(default)]
+    import_domain_allowlist: Vec<AllowlistEntry>,
+    #[serde(default)]
+    import_git_clone_allowlist: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    import_process_exec_allowlist: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    import_artifact_allowlist: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    import_sensitive_file_access_allowlist: HashMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -120,16 +136,28 @@ struct BaselineOverrideConfig {
     baseline_2: Option<String>,
 }
 
-/// Removes every `--no-sandbox` from `args` and reports whether it was present, like
+/// Removes every `flag` from `args` and reports whether it was present, like
 /// `--danger-disable-seccomp`: it is consumed wherever it appears and never forwarded.
+///
+/// The value of `--config`/`-c` is never taken for a flag, so a policy file that happens to be
+/// called `--no-import-scan` still loads.
+fn take_flag(args: Vec<String>, flag: &str) -> (Vec<String>, bool) {
+    let mut found = false;
+    let mut kept = Vec::with_capacity(args.len());
+    let mut after_config = false;
+    for arg in args {
+        if arg == flag && !after_config {
+            found = true;
+        } else {
+            after_config = arg == "--config" || arg == "-c";
+            kept.push(arg);
+        }
+    }
+    (kept, found)
+}
+
 fn take_no_sandbox_flag(args: Vec<String>) -> (Vec<String>, bool) {
-    let found = args.iter().any(|arg| arg == "--no-sandbox");
-    (
-        args.into_iter()
-            .filter(|arg| arg != "--no-sandbox")
-            .collect(),
-        found,
-    )
+    take_flag(args, "--no-sandbox")
 }
 
 fn parse_global_options(args: Vec<String>) -> Result<(Vec<String>, String, bool, bool), String> {
@@ -270,6 +298,174 @@ fn parse_list_map(
     result
 }
 
+/// Reads an `ip_allowlist`-style key: bare entries are global (under `"*"`), `{pkg: [..]}` entries
+/// are per package. `name` is the key, for the messages.
+fn parse_ip_allowlist(
+    entries: Vec<AllowlistEntry>,
+    name: &str,
+) -> HashMap<String, HashSet<String>> {
+    let mut ip_allowlist: HashMap<String, HashSet<String>> = HashMap::new();
+    for entry in entries {
+        match entry {
+            AllowlistEntry::Global(s) => match s.parse::<IpAddr>() {
+                Ok(_) => {
+                    ip_allowlist
+                        .entry("*".to_string())
+                        .or_default()
+                        .insert(scanning::normalize_ip_string(&s));
+                }
+                Err(_) => {
+                    println!(
+                        "⚠️ [gyrseek] Ignoring invalid {name} entry (not an IP): {}",
+                        s
+                    );
+                }
+            },
+            AllowlistEntry::PerPackage(map) => {
+                for (pkg_raw, ips) in map {
+                    let Some(pkg) = validate_allowlist_pkg_key(&pkg_raw, name, &ip_allowlist, true)
+                    else {
+                        continue;
+                    };
+                    let set = ip_allowlist.entry(pkg.clone()).or_default();
+                    for s in ips {
+                        match s.parse::<IpAddr>() {
+                            Ok(_) => {
+                                set.insert(scanning::normalize_ip_string(&s));
+                            }
+                            Err(_) => {
+                                println!(
+                                    "⚠️ [gyrseek] Ignoring invalid {name} entry '{}' for package '{}'",
+                                    s, pkg
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ip_allowlist
+}
+
+/// The same for a `domain_allowlist`-style key.
+fn parse_domain_allowlist(
+    entries: Vec<AllowlistEntry>,
+    name: &str,
+) -> HashMap<String, HashSet<String>> {
+    let mut domain_allowlist: HashMap<String, HashSet<String>> = HashMap::new();
+    for entry in entries {
+        match entry {
+            AllowlistEntry::Global(s) => {
+                let normalized = s.trim().trim_end_matches('.').to_ascii_lowercase();
+                if normalized == "*" {
+                    println!(
+                        "⚠️ [gyrseek] Ignoring overly permissive {name} entry: \"*\" does not match any domain. Use exact domain names (e.g. 'pypi.org') or remove this entry."
+                    );
+                } else if normalized.is_empty() {
+                    println!("⚠️ [gyrseek] Ignoring blank {name} entry");
+                } else if !normalized.contains('.') {
+                    println!(
+                        "⚠️ [gyrseek] Ignoring {name} entry {:?}: a bare label without a dot would match all subdomains of any TLD. Use a fully-qualified domain (e.g. 'pypi.org').",
+                        s.trim()
+                    );
+                } else {
+                    domain_allowlist
+                        .entry("*".to_string())
+                        .or_default()
+                        .insert(normalized);
+                }
+            }
+            AllowlistEntry::PerPackage(map) => {
+                for (pkg_raw, domains) in map {
+                    let Some(pkg) =
+                        validate_allowlist_pkg_key(&pkg_raw, name, &domain_allowlist, true)
+                    else {
+                        continue;
+                    };
+                    let set = domain_allowlist.entry(pkg.clone()).or_default();
+                    for s in domains {
+                        let normalized = s.trim().trim_end_matches('.').to_ascii_lowercase();
+                        if normalized == "*" {
+                            println!(
+                                "⚠️ [gyrseek] Ignoring overly permissive {name} entry \"*\" for package '{}': does not match any domain. Use exact domain names (e.g. 'pypi.org') or remove this entry.",
+                                pkg
+                            );
+                        } else if normalized.is_empty() {
+                            println!(
+                                "⚠️ [gyrseek] Ignoring blank {name} entry for package '{}'",
+                                pkg
+                            );
+                        } else if !normalized.contains('.') {
+                            println!(
+                                "⚠️ [gyrseek] Ignoring {name} entry {:?} for package '{}': a bare label without a dot would match all subdomains of any TLD. Use a fully-qualified domain (e.g. 'pypi.org').",
+                                s.trim(),
+                                pkg
+                            );
+                        } else {
+                            set.insert(normalized);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    domain_allowlist
+}
+
+/// A `sensitive_file_access_allowlist`-style key: a broad entry (`*`, `/`) would allow every
+/// file, so it is dropped, and so is a package left with nothing.
+fn parse_sensitive_file_allowlist(
+    map: HashMap<String, Vec<String>>,
+    name: &str,
+) -> HashMap<String, HashSet<String>> {
+    let mut allowlist = parse_list_map(map, false, name);
+    for (pkg, entries) in allowlist.iter_mut() {
+        entries.retain(|v| {
+            let t = v.trim();
+            if t == "*" || t == "/" || t == "*/" || t == "/*" {
+                println!(
+                    "⚠️ [gyrseek] Ignoring overly permissive {name} entry '{}' for package '{}'",
+                    v, pkg
+                );
+                false
+            } else {
+                true
+            }
+        });
+    }
+    allowlist.retain(|pkg, entries| {
+        if entries.is_empty() {
+            println!(
+                "⚠️ [gyrseek] {name} package '{}' has no valid entries after filtering; no allowlist protection will be applied",
+                pkg
+            );
+            false
+        } else {
+            true
+        }
+    });
+    allowlist
+}
+
+/// A `git_clone_allowlist`-style key. Only the repository part is lowercased: option values such
+/// as paths keep their case.
+fn parse_git_clone_allowlist(
+    map: HashMap<String, Vec<String>>,
+    name: &str,
+) -> HashMap<String, HashSet<String>> {
+    parse_list_map(map, false, name)
+        .into_iter()
+        .map(|(pkg, entries)| {
+            let entries = entries
+                .iter()
+                .map(|e| normalize_git_clone_entry(e))
+                .collect();
+            (pkg, entries)
+        })
+        .collect()
+}
+
 fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
@@ -284,109 +480,8 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
     let cfg: GyrseekConfig = serde_yaml::from_str(&content)
         .map_err(|e| format!("Failed to parse YAML config '{}': {}", path, e))?;
 
-    let mut ip_allowlist: HashMap<String, HashSet<String>> = HashMap::new();
-    for entry in cfg.ip_allowlist {
-        match entry {
-            AllowlistEntry::Global(s) => match s.parse::<IpAddr>() {
-                Ok(_) => {
-                    ip_allowlist
-                        .entry("*".to_string())
-                        .or_default()
-                        .insert(scanning::normalize_ip_string(&s));
-                }
-                Err(_) => {
-                    println!(
-                        "⚠️ [gyrseek] Ignoring invalid ip_allowlist entry (not an IP): {}",
-                        s
-                    );
-                }
-            },
-            AllowlistEntry::PerPackage(map) => {
-                for (pkg_raw, ips) in map {
-                    let Some(pkg) =
-                        validate_allowlist_pkg_key(&pkg_raw, "ip_allowlist", &ip_allowlist, true)
-                    else {
-                        continue;
-                    };
-                    let set = ip_allowlist.entry(pkg.clone()).or_default();
-                    for s in ips {
-                        match s.parse::<IpAddr>() {
-                            Ok(_) => {
-                                set.insert(scanning::normalize_ip_string(&s));
-                            }
-                            Err(_) => {
-                                println!(
-                                    "⚠️ [gyrseek] Ignoring invalid ip_allowlist entry '{}' for package '{}'",
-                                    s, pkg
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut domain_allowlist: HashMap<String, HashSet<String>> = HashMap::new();
-    for entry in cfg.domain_allowlist {
-        match entry {
-            AllowlistEntry::Global(s) => {
-                let normalized = s.trim().trim_end_matches('.').to_ascii_lowercase();
-                if normalized == "*" {
-                    println!(
-                        "⚠️ [gyrseek] Ignoring overly permissive domain_allowlist entry: \"*\" does not match any domain. Use exact domain names (e.g. 'pypi.org') or remove this entry."
-                    );
-                } else if normalized.is_empty() {
-                    println!("⚠️ [gyrseek] Ignoring blank domain_allowlist entry");
-                } else if !normalized.contains('.') {
-                    println!(
-                        "⚠️ [gyrseek] Ignoring domain_allowlist entry {:?}: a bare label without a dot would match all subdomains of any TLD. Use a fully-qualified domain (e.g. 'pypi.org').",
-                        s.trim()
-                    );
-                } else {
-                    domain_allowlist
-                        .entry("*".to_string())
-                        .or_default()
-                        .insert(normalized);
-                }
-            }
-            AllowlistEntry::PerPackage(map) => {
-                for (pkg_raw, domains) in map {
-                    let Some(pkg) = validate_allowlist_pkg_key(
-                        &pkg_raw,
-                        "domain_allowlist",
-                        &domain_allowlist,
-                        true,
-                    ) else {
-                        continue;
-                    };
-                    let set = domain_allowlist.entry(pkg.clone()).or_default();
-                    for s in domains {
-                        let normalized = s.trim().trim_end_matches('.').to_ascii_lowercase();
-                        if normalized == "*" {
-                            println!(
-                                "⚠️ [gyrseek] Ignoring overly permissive domain_allowlist entry \"*\" for package '{}': does not match any domain. Use exact domain names (e.g. 'pypi.org') or remove this entry.",
-                                pkg
-                            );
-                        } else if normalized.is_empty() {
-                            println!(
-                                "⚠️ [gyrseek] Ignoring blank domain_allowlist entry for package '{}'",
-                                pkg
-                            );
-                        } else if !normalized.contains('.') {
-                            println!(
-                                "⚠️ [gyrseek] Ignoring domain_allowlist entry {:?} for package '{}': a bare label without a dot would match all subdomains of any TLD. Use a fully-qualified domain (e.g. 'pypi.org').",
-                                s.trim(),
-                                pkg
-                            );
-                        } else {
-                            set.insert(normalized);
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let ip_allowlist = parse_ip_allowlist(cfg.ip_allowlist, "ip_allowlist");
+    let domain_allowlist = parse_domain_allowlist(cfg.domain_allowlist, "domain_allowlist");
 
     let mut baseline_overrides = HashMap::new();
     for (package, cfg) in cfg.baseline_overrides {
@@ -541,48 +636,39 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
     let process_exec_allowlist =
         parse_list_map(cfg.process_exec_allowlist, true, "process_exec_allowlist");
     let artifact_allowlist = parse_list_map(cfg.artifact_allowlist, false, "artifact_allowlist");
-    let mut sensitive_file_access_allowlist = parse_list_map(
+    let sensitive_file_access_allowlist = parse_sensitive_file_allowlist(
         cfg.sensitive_file_access_allowlist,
-        false,
         "sensitive_file_access_allowlist",
     );
-    for (pkg, entries) in sensitive_file_access_allowlist.iter_mut() {
-        entries.retain(|v| {
-            let t = v.trim();
-            if t == "*" || t == "/" || t == "*/" || t == "/*" {
-                println!(
-                    "⚠️ [gyrseek] Ignoring overly permissive sensitive_file_access_allowlist entry '{}' for package '{}'",
-                    v, pkg
-                );
-                false
-            } else {
-                true
-            }
-        });
-    }
-    sensitive_file_access_allowlist.retain(|pkg, entries| {
-        if entries.is_empty() {
-            println!(
-                "⚠️ [gyrseek] sensitive_file_access_allowlist package '{}' has no valid entries after filtering; no allowlist protection will be applied",
-                pkg
-            );
-            false
-        } else {
-            true
-        }
-    });
-    // Only the repository part is lowercased: option values such as paths keep their case.
-    let git_clone_allowlist: HashMap<String, HashSet<String>> =
-        parse_list_map(cfg.git_clone_allowlist, false, "git_clone_allowlist")
-            .into_iter()
-            .map(|(pkg, entries)| {
-                let entries = entries
-                    .iter()
-                    .map(|e| normalize_git_clone_entry(e))
-                    .collect();
-                (pkg, entries)
-            })
-            .collect();
+    let git_clone_allowlist =
+        parse_git_clone_allowlist(cfg.git_clone_allowlist, "git_clone_allowlist");
+    let import_timeout_seconds = option_zero_to_none(
+        cfg.import_timeout_seconds,
+        "Ignoring invalid import_timeout_seconds=0; using default 300",
+    )
+    .unwrap_or(DEFAULT_PROBE_TIMEOUT_SECS);
+    let import_allowlists = ImportAllowlists {
+        ip: parse_ip_allowlist(cfg.import_ip_allowlist, "import_ip_allowlist"),
+        domain: parse_domain_allowlist(cfg.import_domain_allowlist, "import_domain_allowlist"),
+        git_clone: parse_git_clone_allowlist(
+            cfg.import_git_clone_allowlist,
+            "import_git_clone_allowlist",
+        ),
+        process_exec: parse_list_map(
+            cfg.import_process_exec_allowlist,
+            true,
+            "import_process_exec_allowlist",
+        ),
+        artifact: parse_list_map(
+            cfg.import_artifact_allowlist,
+            false,
+            "import_artifact_allowlist",
+        ),
+        sensitive_file: parse_sensitive_file_allowlist(
+            cfg.import_sensitive_file_access_allowlist,
+            "import_sensitive_file_access_allowlist",
+        ),
+    };
 
     Ok(PolicyConfig {
         ip_allowlist,
@@ -604,6 +690,9 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         process_exec_allowlist,
         artifact_allowlist,
         sensitive_file_access_allowlist,
+        import_scan: cfg.import_scan.unwrap_or(true),
+        import_timeout_seconds,
+        import_allowlists,
     })
 }
 
@@ -1656,6 +1745,134 @@ mod config_tests {
         );
     }
 
+    fn load_yaml(yaml: &str) -> super::PolicyConfig {
+        let mut file = NamedTempFile::new().expect("temp file");
+        writeln!(file, "{yaml}").expect("write");
+        load(&file)
+    }
+
+    #[test]
+    fn import_scanning_is_on_by_default_with_the_install_timeout() {
+        let cfg = load_yaml("baseline_count: 2");
+        assert!(cfg.import_scan);
+        assert_eq!(cfg.import_timeout_seconds, 300);
+    }
+
+    #[test]
+    fn import_scanning_can_be_switched_off_and_given_its_own_timeout() {
+        let cfg =
+            load_yaml("import_scan: false\nimport_timeout_seconds: 90\nprobe_timeout_seconds: 600");
+        assert!(!cfg.import_scan);
+        assert_eq!(cfg.import_timeout_seconds, 90);
+        assert_eq!(cfg.probe_timeout_seconds, 600);
+    }
+
+    #[test]
+    fn a_zero_import_timeout_falls_back_to_300_rather_than_disabling_it() {
+        assert_eq!(
+            load_yaml("import_timeout_seconds: 0").import_timeout_seconds,
+            300
+        );
+    }
+
+    #[test]
+    fn import_allowlists_are_read_separately_from_the_install_ones() {
+        let cfg = load_yaml(
+            r#"
+process_exec_allowlist:
+  pkg: ["Curl"]
+import_process_exec_allowlist:
+  pkg: ["ldconfig|-p"]
+import_ip_allowlist:
+  - "203.0.113.7"
+  - pkg: ["::ffff:198.51.100.1"]
+import_domain_allowlist:
+  - "Example.org."
+import_git_clone_allowlist:
+  pkg: ["https://GitHub.com/acme/Repo.git"]
+import_artifact_allowlist:
+  pkg: ["binary|/work/x"]
+import_sensitive_file_access_allowlist:
+  pkg: ["/home/gyrseek/.config/x", "*"]
+"#,
+        );
+        assert_eq!(
+            cfg.process_exec_allowlist["pkg"],
+            ["curl".to_string()].into()
+        );
+        let import = &cfg.import_allowlists;
+        assert_eq!(
+            import.process_exec["pkg"],
+            ["ldconfig|-p".to_string()].into()
+        );
+        assert!(import.ip["*"].contains("203.0.113.7"));
+        assert!(import.ip["pkg"].contains("198.51.100.1"));
+        assert!(import.domain["*"].contains("example.org"));
+        assert!(import.git_clone["pkg"].contains("https://github.com/acme/repo.git"));
+        assert!(import.artifact["pkg"].contains("binary|/work/x"));
+        // A broad entry is dropped here as it is for the install-time key.
+        assert_eq!(import.sensitive_file["pkg"].len(), 1);
+        // Nothing leaked across.
+        assert!(cfg.ip_allowlist.is_empty() && cfg.domain_allowlist.is_empty());
+    }
+
+    #[test]
+    fn import_allowlists_reject_the_same_things_the_install_ones_do() {
+        let cfg = load_yaml(
+            r#"
+import_process_exec_allowlist:
+  "*": ["bun"]
+import_domain_allowlist:
+  - "com"
+import_ip_allowlist:
+  - "not-an-ip"
+"#,
+        );
+        assert!(cfg.import_allowlists.process_exec.is_empty());
+        assert!(cfg.import_allowlists.domain.is_empty());
+        assert!(cfg.import_allowlists.ip.is_empty());
+    }
+
+    #[test]
+    fn no_import_scan_is_consumed_wherever_it_appears() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (rest, found) = super::take_flag(
+            args(&["--no-import-scan", "npm", "install"]),
+            "--no-import-scan",
+        );
+        assert!(found);
+        assert_eq!(rest, args(&["npm", "install"]));
+        let (rest, found) = super::take_flag(
+            args(&["pip", "install", "x", "--no-import-scan"]),
+            "--no-import-scan",
+        );
+        assert!(found);
+        assert_eq!(rest, args(&["pip", "install", "x"]));
+        let (rest, found) = super::take_flag(args(&["pip", "install", "x"]), "--no-import-scan");
+        assert!(!found);
+        assert_eq!(rest.len(), 3);
+    }
+
+    #[test]
+    fn a_config_file_named_like_a_flag_is_still_the_config_value() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (rest, found) = super::take_flag(
+            args(&["--config", "--no-import-scan", "npm", "install", "pkg"]),
+            "--no-import-scan",
+        );
+        assert!(!found);
+        assert_eq!(
+            rest,
+            args(&["--config", "--no-import-scan", "npm", "install", "pkg"])
+        );
+        let (rest, found) = super::take_flag(
+            args(&["-c", "p.yaml", "--no-import-scan", "npm", "install"]),
+            "--no-import-scan",
+        );
+        assert!(found);
+        assert_eq!(rest, args(&["-c", "p.yaml", "npm", "install"]));
+    }
+
     #[test]
     fn option_zero_to_none_direct() {
         use crate::option_zero_to_none;
@@ -1781,6 +1998,8 @@ struct LazyRunner {
     danger_disable_seccomp: bool,
     no_sandbox: bool,
     probe_timeout_secs: usize,
+    /// `Some` loads each installed package after its install (`import_scan`).
+    import_timeout_secs: Option<usize>,
     trace_limit: Option<String>,
     image: ImageChoice,
     /// Set when a package-manager setting sends the install to a registry gyrseek did not scan.
@@ -1807,6 +2026,7 @@ impl LazyRunner {
                     self.danger_disable_seccomp,
                     self.no_sandbox,
                     self.probe_timeout_secs,
+                    self.import_timeout_secs,
                     self.trace_limit.clone(),
                     self.image.clone(),
                 ) {
@@ -2145,6 +2365,7 @@ pub async fn run(args: Vec<String>) {
     }
 
     let (args, no_sandbox) = take_no_sandbox_flag(args);
+    let (args, no_import_scan) = take_flag(args, "--no-import-scan");
     let (args, config_path, config_explicit, danger_disable_seccomp) =
         match parse_global_options(args) {
             Ok(v) => v,
@@ -2154,13 +2375,16 @@ pub async fn run(args: Vec<String>) {
             }
         };
 
-    let policy = match load_policy_config(&config_path, config_explicit) {
+    let mut policy = match load_policy_config(&config_path, config_explicit) {
         Ok(v) => v,
         Err(e) => {
             println!("❌ [gyrseek] {}", e);
             std::process::exit(1);
         }
     };
+    if no_import_scan {
+        policy.import_scan = false;
+    }
 
     let total_ips: usize = policy.ip_allowlist.values().map(|s| s.len()).sum();
     if total_ips > 0 {
@@ -2244,6 +2468,16 @@ pub async fn run(args: Vec<String>) {
             policy.probe_timeout_seconds
         );
     }
+    if !policy.import_scan {
+        println!(
+            "ℹ️ [gyrseek] Import scanning is off: installed packages are not loaded in the sandbox."
+        );
+    } else if policy.import_timeout_seconds != DEFAULT_PROBE_TIMEOUT_SECS {
+        println!(
+            "ℹ️ [gyrseek] Import timeout set to {}s (import_timeout_seconds)",
+            policy.import_timeout_seconds
+        );
+    }
     if let Some(limit) = &policy.trace_limit {
         println!("ℹ️ [gyrseek] Probe trace limit set to {limit} (trace_limit)");
     }
@@ -2284,6 +2518,7 @@ pub async fn run(args: Vec<String>) {
         danger_disable_seccomp,
         no_sandbox,
         probe_timeout_secs: policy.probe_timeout_seconds,
+        import_timeout_secs: policy.import_scan.then_some(policy.import_timeout_seconds),
         trace_limit: policy.trace_limit.clone(),
         image,
         index_refusal: index_settings::refusal(

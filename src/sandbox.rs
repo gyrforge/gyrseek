@@ -1,4 +1,5 @@
 use crate::runtime_image::ImageChoice;
+use std::collections::HashSet;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use tempfile::TempDir;
@@ -176,6 +177,17 @@ pub(crate) struct InstallFailure {
     pub output: String,
 }
 
+/// What loading the installed package (the import step after the install) did in the sandbox.
+#[derive(Clone, Debug)]
+pub(crate) struct ImportRun {
+    /// Raw strace output of the import, with the files it created appended as an inventory.
+    pub trace: String,
+    /// The import exited non-zero (an import error, a missing library) or left no trace.
+    pub failure: Option<InstallFailure>,
+    /// The import exceeded `import_timeout_seconds`; its trace is partial.
+    pub timed_out: bool,
+}
+
 /// A single traced probe.
 #[derive(Debug)]
 pub(crate) struct ProbeTrace {
@@ -183,6 +195,9 @@ pub(crate) struct ProbeTrace {
     /// Raw strace output, with the post-install artifact inventory appended.
     pub trace: String,
     pub install_failure: Option<InstallFailure>,
+    /// `None` when no import ran: import scanning is off, the install did not succeed, host mode,
+    /// or a runner that does not support it.
+    pub import: Option<ImportRun>,
 }
 
 pub(crate) trait SandboxRunner {
@@ -207,6 +222,7 @@ pub(crate) trait SandboxRunner {
                     probe: (package.clone(), version.clone()),
                     trace,
                     install_failure: None,
+                    import: None,
                 })
             })
             .collect()
@@ -232,6 +248,7 @@ pub(crate) fn build_runner_from_env(
     danger_disable_seccomp: bool,
     no_sandbox: bool,
     probe_timeout_secs: usize,
+    import_timeout_secs: Option<usize>,
     trace_limit: Option<String>,
     image: ImageChoice,
 ) -> Result<Box<dyn SandboxRunner>, String> {
@@ -242,12 +259,18 @@ pub(crate) fn build_runner_from_env(
         if danger_disable_seccomp {
             eprintln!("⚠️ [gyrseek] Warning: --danger-disable-seccomp has no effect in host mode.");
         }
+        if import_timeout_secs.is_some() {
+            eprintln!(
+                "⚠️ [gyrseek] Host mode does not load installed packages, so import-time behaviour is not scanned."
+            );
+        }
         Ok(Box::new(HostRunner { probe_timeout_secs }))
     } else {
         docker_preflight("docker", std::env::consts::OS)?;
         Ok(Box::new(DockerRunner {
             danger_disable_seccomp,
             probe_timeout_secs,
+            import_timeout_secs,
             trace_limit,
             image,
         }))
@@ -292,6 +315,7 @@ impl SandboxRunner for HostRunner {
                     probe: (package.clone(), version.clone()),
                     trace,
                     install_failure,
+                    import: None,
                 }),
                 None => timed_out.push(probe_timeout_message(
                     self.probe_timeout_secs,
@@ -391,6 +415,8 @@ impl HostRunner {
 struct DockerRunner {
     danger_disable_seccomp: bool,
     probe_timeout_secs: usize,
+    /// `Some` loads each installed package after its install, within this many seconds.
+    import_timeout_secs: Option<usize>,
     /// `trace_limit` from the config; `GYRSEEK_TRACE_LIMIT` overrides it.
     trace_limit: Option<String>,
     image: ImageChoice,
@@ -428,6 +454,7 @@ impl SandboxRunner for DockerRunner {
             probes,
             self.danger_disable_seccomp,
             self.probe_timeout_secs,
+            self.import_timeout_secs,
             &sandbox_trace_limit(self.trace_limit.as_deref()),
             &self.image.image,
         )
@@ -518,25 +545,70 @@ pub(crate) fn sandbox_max_processes() -> String {
         .unwrap_or_else(|| "256".to_string())
 }
 
+/// The most probes one container runs. The whole script is one `docker run` argument, which Linux
+/// limits to 128 KiB, and a probe adds about 2.6 KB of it (more with long package names): a bigger
+/// batch is split over several containers, one after the other, with the probes spread evenly.
+const MAX_PROBES_PER_CONTAINER: usize = 32;
+
+fn probe_chunks(probes: &[(String, String)]) -> Vec<&[(String, String)]> {
+    let containers = probes.len().div_ceil(MAX_PROBES_PER_CONTAINER);
+    let mut rest = probes;
+    (0..containers)
+        .map(|i| {
+            let (chunk, tail) = rest.split_at(rest.len().div_ceil(containers - i));
+            rest = tail;
+            chunk
+        })
+        .collect()
+}
+
 fn trace_install_docker_matrix(
     manager: &str,
     probes: &[(String, String)],
     danger_disable_seccomp: bool,
     probe_timeout_secs: usize,
+    import_timeout_secs: Option<usize>,
     trace_limit: &str,
     default_image: &str,
 ) -> Result<Vec<ProbeTrace>, String> {
-    if probes.is_empty() {
-        return Ok(Vec::new());
+    let mut traces = Vec::with_capacity(probes.len());
+    for chunk in probe_chunks(probes) {
+        traces.extend(trace_one_container(
+            manager,
+            chunk,
+            danger_disable_seccomp,
+            probe_timeout_secs,
+            import_timeout_secs,
+            trace_limit,
+            default_image,
+        )?);
     }
+    Ok(traces)
+}
 
+fn trace_one_container(
+    manager: &str,
+    probes: &[(String, String)],
+    danger_disable_seccomp: bool,
+    probe_timeout_secs: usize,
+    import_timeout_secs: Option<usize>,
+    trace_limit: &str,
+    default_image: &str,
+) -> Result<Vec<ProbeTrace>, String> {
     let image_config = scanner_image_config(manager, default_image);
 
     // Where the files that the container streams out are written; the container itself gets no
     // host mount at all.
     let out_dir = tempfile::tempdir().map_err(|e| format!("failed to create temp dir: {e}"))?;
 
-    let script = build_matrix_script(manager, probes, image_config.prebuilt, probe_timeout_secs);
+    let script = build_matrix_script_core(
+        manager,
+        probes,
+        image_config.prebuilt,
+        probe_timeout_secs,
+        import_timeout_secs,
+        &|spec| install_invocation(manager, spec),
+    );
     let name = container_name();
     let args = build_docker_run_args(
         &image_config.image,
@@ -552,7 +624,7 @@ fn trace_install_docker_matrix(
     if code == Some(124) {
         // Only the cleanup after a timed-out probe exits 124 (see KILL_PAYLOAD_PROCESSES_STEP).
         return Err(format!(
-            "a probe exceeded probe_timeout_seconds={probe_timeout_secs} and left processes running that could not be stopped, so the whole batch was aborted"
+            "a probe exceeded probe_timeout_seconds={probe_timeout_secs} (or its import import_timeout_seconds) and left processes running that could not be stopped, so the whole batch was aborted"
         ));
     }
 
@@ -564,7 +636,13 @@ fn trace_install_docker_matrix(
         ));
     }
 
-    collect_probe_traces(out_dir.path(), probes, probe_timeout_secs, trace_limit)
+    collect_probe_traces_expecting(
+        out_dir.path(),
+        probes,
+        probe_timeout_secs,
+        import_timeout_secs.is_some(),
+        trace_limit,
+    )
 }
 
 /// Allowed growth of a decoded file beyond the tmpfs size (the tmpfs counts pages, not bytes).
@@ -695,7 +773,19 @@ fn is_probe_file_name(name: &str) -> bool {
     let Some((kind, idx)) = rest.split_once('_') else {
         return false;
     };
-    ["trace", "err", "artifacts", "rc", "timeout"].contains(&kind)
+    [
+        "trace",
+        "err",
+        "artifacts",
+        "rc",
+        "timeout",
+        "itrace",
+        "ierr",
+        "iartifacts",
+        "irc",
+        "itimeout",
+    ]
+    .contains(&kind)
         && !idx.is_empty()
         && idx.len() <= 6
         && idx.bytes().all(|b| b.is_ascii_digit())
@@ -785,10 +875,25 @@ pub(crate) fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
 /// timed out or filled the trace tmpfs. A probe is never re-run (a second run would have its own
 /// artifact inventory, and mixing the two would describe two different installs, FIXED #418): one
 /// with no trace file is left out and named, one with a blank trace is an error.
+#[cfg(test)]
 fn collect_probe_traces(
     out_dir: &std::path::Path,
     probes: &[(String, String)],
     probe_timeout_secs: usize,
+    trace_limit: &str,
+) -> Result<Vec<ProbeTrace>, String> {
+    collect_probe_traces_expecting(out_dir, probes, probe_timeout_secs, false, trace_limit)
+}
+
+/// `collect_probe_traces`; with `import_expected` (import scanning is on) a probe whose install
+/// succeeded must also have left its import step behind. One that left nothing is left out and
+/// named, like a probe with no trace: reading it as "not run" would allow the package with no
+/// import comparison and no warning.
+fn collect_probe_traces_expecting(
+    out_dir: &std::path::Path,
+    probes: &[(String, String)],
+    probe_timeout_secs: usize,
+    import_expected: bool,
     trace_limit: &str,
 ) -> Result<Vec<ProbeTrace>, String> {
     let mut results = Vec::new();
@@ -844,18 +949,21 @@ fn collect_probe_traces(
         // Append post-install artifact scan findings to the trace, separated by
         // a marker so the scanner can split them during signal extraction.
         let artifact_path = out_dir.join(format!("gyrseek_artifacts_{}.log", idx));
-        if let Ok(artifact_content) = std::fs::read_to_string(&artifact_path) {
-            let trimmed = artifact_content.trim();
-            if !trimmed.is_empty() {
-                trace.push_str("\n=== gyrseek_artifacts ===\n");
-                trace.push_str(trimmed);
-            }
-        }
+        let installed_inventory = std::fs::read_to_string(&artifact_path).unwrap_or_default();
+        append_inventory(&mut trace, installed_inventory.trim());
         let install_failure = read_install_failure(out_dir, idx);
+        let import = read_import_run(out_dir, idx, &installed_inventory);
+        if import_expected && install_failure.is_none() && import.is_none() {
+            let msg = import_missing_message(package, version);
+            eprintln!("⚠️ [gyrseek] {msg}");
+            timed_out.push(msg);
+            continue;
+        }
         results.push(ProbeTrace {
             probe: (package.clone(), version.clone()),
             trace,
             install_failure,
+            import,
         });
     }
 
@@ -864,6 +972,66 @@ fn collect_probe_traces(
     }
 
     Ok(results)
+}
+
+/// Appends an artifact inventory to a trace, behind the delimiter the scanner splits on.
+fn append_inventory(trace: &mut String, inventory: &str) {
+    if !inventory.is_empty() {
+        trace.push_str("\n=== gyrseek_artifacts ===\n");
+        trace.push_str(inventory);
+    }
+}
+
+/// Reads what the import step of probe `idx` left behind, if it ran. The import inventory lists
+/// the whole tree again, so the lines the install inventory already had are dropped: what is
+/// left was created by loading the package, and is judged against the baselines' import-time
+/// files rather than their install-time ones. A trace the import did not leave, or a blank one,
+/// with no exit-code file is a failed import too (fail closed: the step ran but cannot be trusted).
+fn read_import_run(
+    out_dir: &std::path::Path,
+    idx: usize,
+    installed_inventory: &str,
+) -> Option<ImportRun> {
+    let file = |kind: &str| out_dir.join(format!("gyrseek_{kind}_{idx}.log"));
+    if file("itimeout").exists() {
+        return Some(ImportRun {
+            trace: String::new(),
+            failure: None,
+            timed_out: true,
+        });
+    }
+    // None of the import step's files: it did not run (the install failed, or import scanning is
+    // off). Any of them without a trace means it ran and went wrong, e.g. strace did not start.
+    let ran = ["itrace", "irc", "ierr", "iartifacts"]
+        .iter()
+        .any(|kind| file(kind).exists());
+    if !ran {
+        return None;
+    }
+    let mut trace = std::fs::read_to_string(file("itrace")).unwrap_or_default();
+    // A blank trace is judged before the inventory goes in, or the inventory would make it look
+    // like a load that was observed.
+    let failure = if trace.trim().is_empty() {
+        let output = read_file_tail(&file("ierr"))
+            .map(|raw| install_output_tail(&raw))
+            .unwrap_or_default();
+        let exit_code = read_failure(out_dir, "irc", "ierr", idx).map_or(-1, |f| f.exit_code);
+        Some(InstallFailure { exit_code, output })
+    } else {
+        read_failure(out_dir, "irc", "ierr", idx)
+    };
+    let known: HashSet<&str> = installed_inventory.lines().collect();
+    let import_inventory = std::fs::read_to_string(file("iartifacts")).unwrap_or_default();
+    let created: Vec<&str> = import_inventory
+        .lines()
+        .filter(|l| !l.is_empty() && !known.contains(l))
+        .collect();
+    append_inventory(&mut trace, &created.join("\n"));
+    Some(ImportRun {
+        trace,
+        failure,
+        timed_out: false,
+    })
 }
 
 /// Unprivileged in-container user the untrusted install payload runs as. The
@@ -875,8 +1043,18 @@ const SCANNER_USER: &str = "gyrseek";
 /// Reads the exit code the matrix script saved for a probe whose install failed
 /// (`gyrseek_rc_N.log` exists only then) plus the tail of its error output.
 fn read_install_failure(out_dir: &std::path::Path, idx: usize) -> Option<InstallFailure> {
-    let rc = std::fs::read_to_string(out_dir.join(format!("gyrseek_rc_{idx}.log"))).ok()?;
-    let output = read_file_tail(&out_dir.join(format!("gyrseek_err_{idx}.log")))
+    read_failure(out_dir, "rc", "err", idx)
+}
+
+/// The same for any step: `<rc_kind>` holds its exit code, `<err_kind>` its stderr.
+fn read_failure(
+    out_dir: &std::path::Path,
+    rc_kind: &str,
+    err_kind: &str,
+    idx: usize,
+) -> Option<InstallFailure> {
+    let rc = std::fs::read_to_string(out_dir.join(format!("gyrseek_{rc_kind}_{idx}.log"))).ok()?;
+    let output = read_file_tail(&out_dir.join(format!("gyrseek_{err_kind}_{idx}.log")))
         .map(|raw| install_output_tail(&raw))
         .unwrap_or_default();
     Some(InstallFailure {
@@ -929,6 +1107,13 @@ fn trace_missing_message(package: &str, version: &str) -> String {
     format!(
         "sandbox probe for '{package}@{version}' left no trace file, so it cannot be scanned; treating it as a block. \
 This is not expected: re-run the scan, and report it if it keeps happening"
+    )
+}
+
+fn import_missing_message(package: &str, version: &str) -> String {
+    format!(
+        "sandbox probe for '{package}@{version}' installed but left nothing of its import step, so its import-time behaviour cannot be scanned; treating it as a block. \
+This is not expected: re-run the scan, and report it if it keeps happening (or skip import scanning with --no-import-scan)"
     )
 }
 
@@ -1084,21 +1269,50 @@ fn image_setup_steps(manager: &str, prebuilt: bool) -> Vec<String> {
 /// reported (FIXED #467). If the interpreter is missing or fails, the script stops with a message
 /// (exit 126) instead of carrying on with an empty inventory, unless the trace tmpfs is full, in
 /// which case the probe is reported as over the limit.
+///
+/// This form carries the inventory program inline, so its tests and the Docker tests run it as a
+/// whole. The matrix script keeps the program in a variable instead (see `script_variable_steps`).
+#[cfg(test)]
 fn build_artifact_scan_steps(manager: &str, idx: usize) -> Vec<String> {
-    let out = probe_file("artifacts", idx);
-    let (find_interpreter, script, runtime) = if is_npm_family_manager(manager) {
-        (
-            "INTERP=$(command -v node || true)",
-            format!("\"$INTERP\" -e '{ARTIFACT_INVENTORY_NODE}'"),
-            "node",
-        )
+    let program = if is_npm_family_manager(manager) {
+        ARTIFACT_INVENTORY_NODE
     } else {
-        (
-            "INTERP=$(command -v python3 || command -v python || true)",
-            format!("\"$INTERP\" -c '{ARTIFACT_INVENTORY_PYTHON}'"),
-            "python3 or python",
-        )
+        ARTIFACT_INVENTORY_PYTHON
     };
+    artifact_scan_steps(
+        manager,
+        &probe_file("artifacts", idx),
+        &format!("'{program}'"),
+    )
+}
+
+/// Defines what every probe repeats once: the function that kills a timed-out probe's leftover
+/// processes, and the two programs the probes run (`GYRSEEK_INVENTORY`, and `GYRSEEK_IMPORT` when
+/// the import step is on) as shell variables: the whole script is one `docker run` argument,
+/// which Linux limits to 128 KiB, and a lockfile of a dozen packages is three probes each.
+/// Neither variable is exported, so the payload does not see them. No single quote occurs in
+/// either program.
+fn script_variable_steps(manager: &str, import: bool) -> Vec<String> {
+    let (inventory, load) = if is_npm_family_manager(manager) {
+        (ARTIFACT_INVENTORY_NODE, IMPORT_NODE)
+    } else {
+        (ARTIFACT_INVENTORY_PYTHON, IMPORT_PYTHON)
+    };
+    let mut steps = vec![
+        format!("gyrseek_kill_payload() {{ {KILL_PAYLOAD_PROCESSES_STEP}; }}"),
+        format!("GYRSEEK_INVENTORY='{inventory}'"),
+    ];
+    if import {
+        steps.push(format!("GYRSEEK_IMPORT='{load}'"));
+    }
+    steps
+}
+
+/// The inventory steps writing to `out` (the import step takes a second inventory); `program` is
+/// what the interpreter is given after its flag.
+fn artifact_scan_steps(manager: &str, out: &str, program: &str) -> Vec<String> {
+    let (find_interpreter, run, runtime) = interpreter(manager);
+    let script = format!("\"$INTERP\" {run} {program}");
     vec![
         // Initialize/clear the artifact log for this probe. The trace tmpfs may be full by now
         // (the probe is then reported as over the limit), and the script runs under `set -e`.
@@ -1110,6 +1324,23 @@ fn build_artifact_scan_steps(manager: &str, idx: usize) -> Vec<String> {
              else echo \"gyrseek: cannot inventory the installed files: the scanner image has no working {runtime}\" >&2; exit 126; fi"
         ),
     ]
+}
+
+/// How to find the manager's own interpreter (`INTERP=…`), the flag that runs a program given on
+/// the command line, and its name for messages.
+fn interpreter(manager: &str) -> (&'static str, &'static str, &'static str) {
+    if is_npm_family_manager(manager) {
+        ("INTERP=$(command -v node || true)", "-e", "node")
+    } else {
+        (
+            "INTERP=$(command -v python3 || command -v python || true)",
+            // `-I`: the inventory runs as root with `/work` as its directory, and `-c` alone puts
+            // that directory on `sys.path`, so a module the package left there (`struct.py`)
+            // would run as root.
+            "-I -c",
+            "python3 or python",
+        )
+    }
 }
 
 /// Reads the NUL-separated file names `find` prints and writes one inventory line per file:
@@ -1213,6 +1444,102 @@ for (const f of names) {
 }
 process.stdout.write(Buffer.concat(parts));"#;
 
+/// Loads the package's own modules, as `python3 -c` with the package name as its argument: the
+/// modules come from the files the installation recorded (`RECORD`), so a name that differs from
+/// the import name (`pyyaml` / `yaml`) works, and under a namespace directory without an
+/// `__init__.py` (`acme/widgets/__init__.py`) the first real package or module is imported, not
+/// the empty namespace. `top_level.txt` is the fallback when nothing was recorded. An import error is
+/// printed and makes the exit code 1; the process then ends at once, so a thread the package
+/// started cannot keep it alive. No single quote or apostrophe: the shell wraps it in quotes. It
+/// stays well under strace's 4096-byte string limit, and `is_harness_command` recognises it by
+/// comparing it with this text, so it is not counted as the package's own process.
+pub(crate) const IMPORT_PYTHON: &str = r#"import importlib, importlib.metadata as md, os, re, sys
+sys.path.insert(0, "/work")
+norm = lambda s: re.sub(r"[-_.]+", "-", s or "").lower()
+want = norm(sys.argv[1])
+mods = set()
+for d in md.distributions(path=["/work"]):
+    if norm(d.metadata["Name"]) != want:
+        continue
+    files = [f.parts for f in d.files or [] if f.parts[0] not in ("__pycache__", "bin") and not f.parts[0].endswith(".dist-info") and not f.parts[0].startswith("..")]
+    pk = {p[:-1] for p in files if p[-1] == "__init__.py"}
+    for p in files:
+        if not p[-1].endswith((".py", ".so", ".pyd")):
+            continue
+        for i in range(1, len(p)):
+            if p[:i] in pk:
+                mods.add(".".join(p[:i]))
+                break
+        else:
+            mods.add(".".join(p[:-1] + (p[-1].split(".")[0],)))
+    if not mods:
+        mods.update((d.read_text("top_level.txt") or "").split())
+rc = 0
+for m in sorted(mods):
+    if not all(part.isidentifier() for part in m.split(".")):
+        continue
+    try:
+        importlib.import_module(m)
+    except BaseException as e:
+        rc = 1
+        print("gyrseek import error: %s: %r" % (m, e), file=sys.stderr)
+sys.stderr.flush()
+os._exit(rc)"#;
+
+/// The same for Node, as `node -e` with the package name as its argument. A package with no entry
+/// point (a command-line tool with only a `bin`) has nothing to load. `import()` is used, and
+/// `require()` only when the package exports no `import` entry (`ERR_PACKAGE_PATH_NOT_EXPORTED`):
+/// a package whose `import` entry throws must be reported, not rescued by its `require` entry.
+pub(crate) const IMPORT_NODE: &str = r#"const name = process.argv[1];
+try { require.resolve(name, { paths: ["/work"] }); } catch (e) { if (e.code === "MODULE_NOT_FOUND") process.exit(0); }
+import(name).catch((e) => { if (e.code === "ERR_PACKAGE_PATH_NOT_EXPORTED") return require(name); throw e; }).then(() => process.exit(0), (e) => { console.error("gyrseek import error: " + name + ": " + e); process.exit(1); });"#;
+
+/// The command that loads `package` after it was installed into `/work`, as the scanner user's
+/// `strace` payload. `INTERP` is set by `interpreter`.
+fn import_invocation(manager: &str, package: &str) -> String {
+    let package = shell_single_quoted(package);
+    if is_npm_family_manager(manager) {
+        format!(
+            "env HOME=/work NODE_PATH=/work/node_modules \"$INTERP\" -e \"$GYRSEEK_IMPORT\" {package}"
+        )
+    } else {
+        format!(
+            "env HOME=/work PYTHONPATH=/work PYTHONDONTWRITEBYTECODE=1 \"$INTERP\" -c \"$GYRSEEK_IMPORT\" {package}"
+        )
+    }
+}
+
+/// Steps that load the installed package of probe `idx` under strace, as the install did, and
+/// inventory the files that left behind. Skipped when the install failed or timed out: nothing
+/// was installed to load. A timed-out import is marked and its leftover processes killed.
+fn import_steps(manager: &str, package: &str, idx: usize, timeout_secs: usize) -> Vec<String> {
+    let (find_interpreter, _, _) = interpreter(manager);
+    let trace = probe_file("itrace", idx);
+    let err = probe_file("ierr", idx);
+    let rc_file = probe_file("irc", idx);
+    let timeout_marker = probe_file("itimeout", idx);
+    let installed = format!(
+        "[ ! -f {} ] && [ ! -f {} ]",
+        probe_file("rc", idx),
+        probe_file("timeout", idx)
+    );
+    let run = format!(
+        "{} >/dev/null 2>{err} || {{ rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then {{ true > {timeout_marker}; }} 2>/dev/null || true; gyrseek_kill_payload; else {{ echo $rc > {rc_file}; }} 2>/dev/null || true; fi; true; }}",
+        strace_command(
+            &import_invocation(manager, package),
+            Some(&trace),
+            timeout_secs
+        ),
+    );
+    let mut inner = vec![find_interpreter.to_string(), run];
+    inner.extend(artifact_scan_steps(
+        manager,
+        &probe_file("iartifacts", idx),
+        "\"$GYRSEEK_INVENTORY\"",
+    ));
+    vec![format!("if {installed}; then {}; fi", inner.join("; "))]
+}
+
 /// Where the matrix script keeps what each probe leaves behind (strace log, strace stderr,
 /// artifact inventory, exit code, timeout marker) while that probe runs: a size-limited tmpfs that
 /// only root can enter (`--tmpfs ... mode=700,size=<GYRSEEK_TRACE_LIMIT>`). The payload runs as
@@ -1237,7 +1564,7 @@ fn probe_file(kind: &str, idx: usize) -> String {
 const TRACE_FUNCTIONS: &str = "gyrseek_emit() { echo \"GYRSEEK-FILE ${1##*/}\"; base64 < \"$1\"; echo GYRSEEK-END; rm -f \"$1\"; }; \
 gyrseek_full() { set -- $(df -Pk /gyrseek-trace 2>/dev/null | tail -n 1 | tr -s ' ' | cut -d' ' -f2,4); [ \"${2:-0}\" -lt 16 ] || [ $(( ${2:-0} * 100 )) -lt \"${1:-0}\" ]; }; \
 gyrseek_publish() { if gyrseek_full; then echo \"GYRSEEK-LIMIT $1\"; rm -f /gyrseek-trace/gyrseek_*_$1.log; return 0; fi; \
-for kind in trace err artifacts rc timeout; do f=/gyrseek-trace/gyrseek_${kind}_$1.log; if [ -f \"$f\" ]; then gyrseek_emit \"$f\"; fi; done; return 0; }; \
+for kind in trace err artifacts rc timeout itrace ierr iartifacts irc itimeout; do f=/gyrseek-trace/gyrseek_${kind}_$1.log; if [ -f \"$f\" ]; then gyrseek_emit \"$f\"; fi; done; return 0; }; \
 gyrseek_publish_rest() { for f in /gyrseek-trace/gyrseek_*.log; do if [ -f \"$f\" ]; then gyrseek_emit \"$f\"; fi; done; return 0; }";
 
 /// Defines the publishing functions and arranges for whatever a probe left behind to be
@@ -1277,6 +1604,7 @@ const KILL_PAYLOAD_PROCESSES_STEP: &str = "n=1; for _ in 1 2 3 4 5 6 7 8 9 10; d
 /// strace logs kept in the size-limited, root-only `TRACE_DIR`, payload dropped to the scanner
 /// user, followed by a targeted artifact scan of the installed file tree. Each probe's files
 /// are streamed to the host on stdout when the probe is done.
+#[cfg(test)]
 fn build_matrix_script(
     manager: &str,
     probes: &[(String, String)],
@@ -1290,6 +1618,7 @@ fn build_matrix_script(
 
 /// `build_matrix_script` with the install command of each probe supplied by the caller (the
 /// trace-integrity test runs a payload that tries to tamper with its trace).
+#[cfg(test)]
 fn build_matrix_script_with(
     manager: &str,
     probes: &[(String, String)],
@@ -1297,9 +1626,26 @@ fn build_matrix_script_with(
     timeout_secs: usize,
     install: &dyn Fn(&str) -> String,
 ) -> String {
+    build_matrix_script_core(manager, probes, prebuilt, timeout_secs, None, install)
+}
+
+/// The matrix script; with `import_timeout_secs` set, every probe also loads the installed
+/// package after its install (see `import_steps`).
+fn build_matrix_script_core(
+    manager: &str,
+    probes: &[(String, String)],
+    prebuilt: bool,
+    timeout_secs: usize,
+    import_timeout_secs: Option<usize>,
+    install: &dyn Fn(&str) -> String,
+) -> String {
     let mut steps = image_setup_steps(manager, prebuilt);
     steps.extend(scanner_user_setup_steps());
     steps.extend(trace_dir_setup_steps());
+    steps.extend(script_variable_steps(
+        manager,
+        import_timeout_secs.is_some(),
+    ));
     // Every probe, the first included, starts from the same empty directories: `useradd` leaves
     // the skeleton dotfiles in the home directory, which would make probe 0 differ from the rest.
     steps.push(WORK_RESET_STEP.to_string());
@@ -1321,11 +1667,18 @@ fn build_matrix_script_with(
         // non-zero exit is a failed install: its exit code is saved for the host, which
         // blocks the package and shows the install's own error output.
         steps.push(format!(
-            "{} >/dev/null 2>{err} || {{ rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then {{ true > {timeout_marker}; }} 2>/dev/null || true; {KILL_PAYLOAD_PROCESSES_STEP}; else {{ echo $rc > {rc_file}; }} 2>/dev/null || true; fi; true; }}",
+            "{} >/dev/null 2>{err} || {{ rc=$?; if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then {{ true > {timeout_marker}; }} 2>/dev/null || true; gyrseek_kill_payload; else {{ echo $rc > {rc_file}; }} 2>/dev/null || true; fi; true; }}",
             strace_command(&install(&spec), Some(&log), timeout_secs),
         ));
         // After each install, scan the installed tree for suspicious artifacts.
-        steps.extend(build_artifact_scan_steps(manager, idx));
+        steps.extend(artifact_scan_steps(
+            manager,
+            &probe_file("artifacts", idx),
+            "\"$GYRSEEK_INVENTORY\"",
+        ));
+        if let Some(import_timeout) = import_timeout_secs {
+            steps.extend(import_steps(manager, package, idx, import_timeout));
+        }
         // Send this probe's files to the host and free the tmpfs for the next probe.
         steps.push(format!("gyrseek_publish {idx}"));
         // Then wipe the install tree so the next probe starts from the same
@@ -1679,8 +2032,8 @@ mod tests {
         sandbox_max_processes, sandbox_trace_limit, size_to_bytes, strace_install_command,
     };
     use super::{
-        DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, is_timeout_exit,
-        read_file_tail,
+        DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, import_invocation,
+        is_probe_file_name, is_timeout_exit, read_file_tail, read_import_run,
     };
     use crate::sandbox::SandboxRunner;
     use std::sync::Mutex;
@@ -2190,7 +2543,9 @@ mod tests {
                 scan.contains("command -v python3 || command -v python"),
                 "{manager}: {scan}"
             );
-            assert!(scan.contains("\"$INTERP\" -c '"), "{manager}: {scan}");
+            // `-I`: the inventory runs as root in `/work`, so no module the package left there may
+            // be importable.
+            assert!(scan.contains("\"$INTERP\" -I -c '"), "{manager}: {scan}");
             assert!(
                 !scan.contains("node") && !scan.contains("perl"),
                 "{manager}: {scan}"
@@ -2603,9 +2958,17 @@ mod tests {
     /// Runs `script` in a container built like the real one (`limit` is the trace tmpfs size) and
     /// returns the files it streamed out.
     fn run_in_container(script: &str, limit: &str) -> tempfile::TempDir {
-        let image =
-            crate::runtime_image::select_for_manager("pip", None, None, std::path::Path::new("."))
-                .image;
+        run_in_container_for("pip", script, limit)
+    }
+
+    fn run_in_container_for(manager: &str, script: &str, limit: &str) -> tempfile::TempDir {
+        let image = crate::runtime_image::select_for_manager(
+            manager,
+            None,
+            None,
+            std::path::Path::new("."),
+        )
+        .image;
         let name = super::container_name();
         let args = build_docker_run_args(&image, script, false, Some(limit), &name).unwrap();
         let out = tempfile::tempdir().unwrap();
@@ -3033,6 +3396,507 @@ useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u 
         );
     }
 
+    /// Needs Docker and the network: installs a real package, loads it in the sandbox, and checks
+    /// the import trace shows its modules being read (not only that a step ran).
+    fn import_in_the_sandbox(manager: &str, package: &str, version: &str) -> super::ProbeTrace {
+        let default = crate::runtime_image::select_for_manager(
+            manager,
+            None,
+            None,
+            std::path::Path::new("."),
+        )
+        .image;
+        let probes = vec![(package.to_string(), version.to_string())];
+        let mut traces = super::trace_install_docker_matrix(
+            manager,
+            &probes,
+            false,
+            300,
+            Some(120),
+            "256m",
+            &default,
+        )
+        .expect("the sandbox run");
+        traces.remove(0)
+    }
+
+    fn mentions(trace: &str, text: &str) -> bool {
+        let hex: String = text.bytes().map(|b| format!("\\x{b:02x}")).collect();
+        trace.contains(text) || trace.contains(&hex)
+    }
+
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_python_package_is_loaded_after_it_is_installed() {
+        // The distribution is `pyyaml`, the module `yaml`: the name comes from the metadata.
+        let probe = import_in_the_sandbox("pip", "pyyaml", "6.0.2");
+        assert!(probe.install_failure.is_none());
+        let run = probe.import.expect("the import step ran");
+        assert!(run.failure.is_none(), "{:?}", run.failure);
+        assert!(!run.timed_out);
+        assert!(
+            mentions(&run.trace, "/work/yaml/__init__.py"),
+            "yaml was not imported: {}",
+            run.trace
+        );
+        // Only the install put the package there; loading it does not leave new files.
+        assert!(
+            !run.trace.contains("=== gyrseek_artifacts ==="),
+            "{}",
+            run.trace
+        );
+    }
+
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_node_package_is_loaded_after_it_is_installed() {
+        let probe = import_in_the_sandbox("npm", "is-odd", "3.0.1");
+        assert!(probe.install_failure.is_none());
+        let run = probe.import.expect("the import step ran");
+        assert!(run.failure.is_none(), "{:?}", run.failure);
+        assert!(
+            mentions(&run.trace, "/work/node_modules/is-odd/index.js"),
+            "is-odd was not loaded: {}",
+            run.trace
+        );
+    }
+
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_pnpm_package_is_loaded_after_it_is_installed() {
+        let probe = import_in_the_sandbox("pnpm", "is-odd", "3.0.1");
+        let run = probe.import.expect("the import step ran");
+        assert!(run.failure.is_none(), "{:?}", run.failure);
+        assert!(mentions(&run.trace, "is-odd/index.js"), "{}", run.trace);
+    }
+
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_package_that_cannot_be_loaded_reports_why_and_is_not_a_failed_install() {
+        // The install succeeds, but the module its metadata names (`nope`) is not there.
+        let probes = vec![("six".to_string(), "1.17.0".to_string())];
+        let script = super::build_matrix_script_core(
+            "pip",
+            &probes,
+            false,
+            120,
+            Some(60),
+            &|spec| {
+                format!(
+                    "sh -c 'echo {spec} >/dev/null; mkdir -p /work/six-1.17.0.dist-info; echo Name: six > /work/six-1.17.0.dist-info/METADATA; echo nope > /work/six-1.17.0.dist-info/top_level.txt'"
+                )
+            },
+        );
+        let out = run_in_container(&script, "256m");
+        let run = read_import_run(out.path(), 0, "").expect("the import step ran");
+        let failure = run.failure.expect("the import failed");
+        assert_eq!(failure.exit_code, 1);
+        assert!(
+            failure.output.contains("gyrseek import error: nope"),
+            "{}",
+            failure.output
+        );
+        assert!(super::read_install_failure(out.path(), 0).is_none());
+    }
+
+    /// FIXED #25: what a package does the moment it is loaded (the Telnyx and mistralai waves)
+    /// is in the import trace, as its own process, and the import step itself is not.
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_process_started_when_the_package_loads_shows_in_the_import_trace() {
+        let probes = vec![("hook".to_string(), "1.0.0".to_string())];
+        // The "install" lays down a package whose module runs a harmless program on import.
+        let install = "sh -c 'mkdir -p /work/hook-1.0.0.dist-info; echo Name: hook > /work/hook-1.0.0.dist-info/METADATA; echo hook > /work/hook-1.0.0.dist-info/top_level.txt; echo \"import subprocess; subprocess.run([\\\"/bin/echo\\\", \\\"at-import-time\\\"])\" > /work/hook.py'";
+        let script = super::build_matrix_script_core("pip", &probes, false, 120, Some(60), &|_| {
+            install.to_string()
+        });
+        let out = run_in_container(&script, "256m");
+        let run = read_import_run(out.path(), 0, "").expect("the import step ran");
+        assert!(run.failure.is_none(), "{:?}", run.failure);
+        let install_trace =
+            std::fs::read_to_string(out.path().join("gyrseek_trace_0.log")).unwrap();
+        let signatures = crate::scanning::extract_process_exec_signatures(&run.trace);
+        assert!(
+            signatures.iter().any(|s| s == "echo|at-import-time"),
+            "{signatures:?}"
+        );
+        assert_eq!(
+            signatures.len(),
+            1,
+            "only the package's own process: {signatures:?}"
+        );
+        assert!(
+            crate::scanning::extract_process_exec_signatures(&install_trace)
+                .iter()
+                .all(|s| s != "echo|at-import-time"),
+            "not run by the install"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn an_import_that_never_returns_is_stopped_and_marked() {
+        let probes = vec![("six".to_string(), "1.17.0".to_string())];
+        let script = super::build_matrix_script_core("pip", &probes, false, 120, Some(5), &|_| {
+            "sh -c 'mkdir -p /work/six-1.dist-info; echo Name: six > /work/six-1.dist-info/METADATA; echo hang > /work/six-1.dist-info/top_level.txt; echo import time > /work/hang.py; echo \"import time; time.sleep(600)\" > /work/hang.py'".to_string()
+        });
+        let out = run_in_container(&script, "256m");
+        let run = read_import_run(out.path(), 0, "").expect("the import step ran");
+        assert!(run.timed_out);
+    }
+
+    #[test]
+    fn the_import_step_is_only_in_the_script_when_it_is_asked_for() {
+        let probes = [("pkg".to_string(), "1.0.0".to_string())];
+        let off = build_matrix_script("pip", &probes, true, 60);
+        assert!(!off.contains("gyrseek_itrace_0.log"), "{off}");
+        let install = |spec: &str| super::install_invocation("pip", spec);
+        let on = super::build_matrix_script_core("pip", &probes, true, 60, Some(45), &install);
+        assert!(
+            on.contains("-o /gyrseek-trace/gyrseek_itrace_0.log"),
+            "{on}"
+        );
+        // Its own limit, not the install's.
+        assert!(on.contains("timeout -k 5 45 strace"), "{on}");
+        // Not run when the install failed or timed out: nothing was installed to load.
+        assert!(
+            on.contains(
+                "if [ ! -f /gyrseek-trace/gyrseek_rc_0.log ] && [ ! -f /gyrseek-trace/gyrseek_timeout_0.log ]; then"
+            ),
+            "{on}"
+        );
+        // After the install's inventory, before the probe's files leave the container.
+        let at = |needle: &str| on.find(needle).unwrap_or_else(|| panic!("{needle}"));
+        assert!(at("gyrseek_artifacts_0.log") < at("gyrseek_itrace_0.log"));
+        assert!(at("gyrseek_iartifacts_0.log") < at("gyrseek_publish 0"));
+        // The import runs as the scanner user, like the install.
+        assert!(on.contains("-u gyrseek"));
+    }
+
+    #[test]
+    fn the_import_command_per_manager() {
+        let py = import_invocation("uv", "pyyaml");
+        assert!(py.contains("PYTHONPATH=/work"), "{py}");
+        assert!(py.ends_with("'pyyaml'"), "{py}");
+        for manager in ["npm", "pnpm"] {
+            let node = import_invocation(manager, "@scope/pkg");
+            assert!(node.contains("node") || node.contains("$INTERP"), "{node}");
+            assert!(node.contains("NODE_PATH=/work/node_modules"), "{node}");
+            assert!(node.ends_with("'@scope/pkg'"), "{node}");
+        }
+        // The package name is quoted, never run.
+        assert!(
+            import_invocation("pip", "a'; rm -rf /; '").ends_with("'a'\"'\"'; rm -rf /; '\"'\"''")
+        );
+    }
+
+    #[test]
+    fn no_import_files_means_no_import_ran() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(read_import_run(dir.path(), 0, "").is_none());
+    }
+
+    #[test]
+    fn a_clean_import_keeps_its_trace_and_only_the_files_it_created() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_itrace_0.log"), "execve(...)\n").unwrap();
+        std::fs::write(
+            dir.path().join("gyrseek_iartifacts_0.log"),
+            "/work/a.py\0 1\0\0\n/home/gyrseek/dropped\0 9\0\0\n",
+        )
+        .unwrap();
+        // The install already inventoried `/work/a.py`.
+        let run = read_import_run(dir.path(), 0, "/work/a.py\0 1\0\0\n").unwrap();
+        assert!(run.failure.is_none() && !run.timed_out);
+        assert!(run.trace.starts_with("execve(...)"));
+        assert!(run.trace.contains("/home/gyrseek/dropped"));
+        assert!(!run.trace.contains("/work/a.py"), "{}", run.trace);
+    }
+
+    #[test]
+    fn an_import_that_exited_non_zero_carries_its_exit_code_and_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_itrace_1.log"), "execve(...)\n").unwrap();
+        std::fs::write(dir.path().join("gyrseek_irc_1.log"), "1\n").unwrap();
+        std::fs::write(
+            dir.path().join("gyrseek_ierr_1.log"),
+            "gyrseek import error: yaml: ImportError('libyaml')\n",
+        )
+        .unwrap();
+        let failure = read_import_run(dir.path(), 1, "").unwrap().failure.unwrap();
+        assert_eq!(failure.exit_code, 1);
+        assert!(failure.output.contains("ImportError('libyaml')"));
+    }
+
+    #[test]
+    fn a_timed_out_import_is_marked_and_has_no_trace_to_compare() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_itimeout_0.log"), "").unwrap();
+        std::fs::write(dir.path().join("gyrseek_itrace_0.log"), "partial").unwrap();
+        let run = read_import_run(dir.path(), 0, "").unwrap();
+        assert!(run.timed_out);
+        assert!(run.trace.is_empty());
+    }
+
+    #[test]
+    fn a_blank_import_trace_is_a_failed_import_not_a_clean_one() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_itrace_0.log"), "  \n").unwrap();
+        std::fs::write(
+            dir.path().join("gyrseek_ierr_0.log"),
+            "strace: attach failed\n",
+        )
+        .unwrap();
+        let failure = read_import_run(dir.path(), 0, "").unwrap().failure.unwrap();
+        assert!(failure.output.contains("attach failed"));
+    }
+
+    #[test]
+    fn the_import_files_may_come_out_of_the_container() {
+        for kind in ["itrace", "ierr", "iartifacts", "irc", "itimeout"] {
+            assert!(
+                is_probe_file_name(&format!("gyrseek_{kind}_3.log")),
+                "{kind}"
+            );
+            assert!(TRACE_FUNCTIONS.contains(kind), "{kind} is not published");
+        }
+        assert!(!is_probe_file_name("gyrseek_import_3.log"));
+    }
+
+    #[test]
+    fn the_collector_attaches_the_import_to_its_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::write(d.join("gyrseek_trace_0.log"), "install\n").unwrap();
+        std::fs::write(d.join("gyrseek_itrace_0.log"), "import\n").unwrap();
+        let got =
+            collect_probe_traces(d, &[("a".to_string(), "1".to_string())], 300, "64m").unwrap();
+        assert_eq!(got[0].trace, "install\n");
+        assert_eq!(got[0].import.as_ref().unwrap().trace, "import\n");
+    }
+
+    /// The script is one `docker run` argument, which Linux limits to 128 KiB (MAX_ARG_STRLEN).
+    /// CI hit the limit (`Argument list too long`) on a project of 13 packages when each probe
+    /// carried its own copy of the inventory and import programs; a bigger batch is now split
+    /// over several containers (FIXED #494).
+    #[test]
+    fn a_big_batch_is_split_so_every_script_fits_in_one_docker_argument() {
+        for count in [1, 32, 33, 64, 65, 200, 900] {
+            let probes: Vec<(String, String)> = (0..count)
+                .map(|i| {
+                    (
+                        format!("{}-{i}", "long-package-name".repeat(10)),
+                        "1.2.3".to_string(),
+                    )
+                })
+                .collect();
+            let chunks = super::probe_chunks(&probes);
+            assert_eq!(chunks.iter().map(|c| c.len()).sum::<usize>(), count);
+            assert!(
+                chunks
+                    .iter()
+                    .all(|c| c.len() <= super::MAX_PROBES_PER_CONTAINER)
+            );
+            // Spread evenly: no container is left with a stray probe or two.
+            let (min, max) = (
+                chunks.iter().map(|c| c.len()).min().unwrap(),
+                chunks.iter().map(|c| c.len()).max().unwrap(),
+            );
+            assert!(max - min <= 1, "{count}: {min}..{max}");
+            for manager in ["uv", "pip", "poetry", "npm", "pnpm"] {
+                let install = |spec: &str| super::install_invocation(manager, spec);
+                for chunk in &chunks {
+                    let script = super::build_matrix_script_core(
+                        manager,
+                        chunk,
+                        false,
+                        300,
+                        Some(300),
+                        &install,
+                    );
+                    assert!(
+                        script.len() < 110 * 1024,
+                        "{manager}: {} bytes for {} probes",
+                        script.len(),
+                        chunk.len()
+                    );
+                    // Each program is in the script once, however many probes there are.
+                    assert_eq!(script.matches("GYRSEEK_INVENTORY=").count(), 1);
+                    assert_eq!(script.matches("GYRSEEK_IMPORT=").count(), 1);
+                }
+            }
+        }
+        assert!(super::probe_chunks(&[]).is_empty());
+    }
+
+    #[test]
+    fn the_import_program_is_only_defined_when_the_step_is_on() {
+        let probes = [("pkg".to_string(), "1.0.0".to_string())];
+        let off = build_matrix_script("pip", &probes, true, 60);
+        assert!(off.contains("GYRSEEK_INVENTORY=") && !off.contains("GYRSEEK_IMPORT="));
+    }
+
+    #[test]
+    fn an_import_that_left_an_exit_code_but_no_trace_is_a_failed_import() {
+        // strace did not start: no trace, but the script saved the exit code and the error.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_irc_0.log"), "1\n").unwrap();
+        std::fs::write(
+            dir.path().join("gyrseek_ierr_0.log"),
+            "strace: ptrace failed\n",
+        )
+        .unwrap();
+        let run = read_import_run(dir.path(), 0, "").expect("it ran");
+        let failure = run.failure.expect("and failed");
+        assert_eq!(failure.exit_code, 1);
+        assert!(failure.output.contains("ptrace failed"));
+    }
+
+    #[test]
+    fn a_blank_import_trace_is_not_made_clean_by_a_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_itrace_0.log"), "\n").unwrap();
+        std::fs::write(
+            dir.path().join("gyrseek_iartifacts_0.log"),
+            "/work/new.py\0 1\0\0\n",
+        )
+        .unwrap();
+        let run = read_import_run(dir.path(), 0, "").unwrap();
+        assert!(
+            run.failure.is_some(),
+            "an unobserved import is not a clean one"
+        );
+    }
+
+    /// The inventory runs as root in `/work`; `-I` keeps a module the package left there off its
+    /// path. Without it `struct.py` below would stop the inventory and fail the script.
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_module_the_package_leaves_in_work_does_not_run_in_the_root_inventory() {
+        let probes = vec![("shadow".to_string(), "1.0.0".to_string())];
+        let script = super::build_matrix_script_core("pip", &probes, false, 120, Some(60), &|_| {
+            "sh -c 'echo \"raise SystemExit(7)\" > /work/struct.py'".to_string()
+        });
+        let out = run_in_container(&script, "256m");
+        let inventory =
+            std::fs::read_to_string(out.path().join("gyrseek_artifacts_0.log")).unwrap();
+        assert!(inventory.contains("/work/struct.py"), "{inventory}");
+    }
+
+    /// A package under an implicit namespace (`acme/widgets/__init__.py`, no `acme/__init__.py`):
+    /// the package is loaded, not the empty namespace.
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn a_package_under_a_namespace_directory_is_the_one_that_is_loaded() {
+        let probes = vec![("acme-widgets".to_string(), "1.0.0".to_string())];
+        let install = "sh -c 'd=/work/acme_widgets-1.0.0.dist-info; mkdir -p $d /work/acme/widgets; echo Name: acme-widgets > $d/METADATA; printf \"acme/widgets/__init__.py,,\\n\" > $d/RECORD; echo acme > $d/top_level.txt; echo \"import subprocess; subprocess.run([\\\"/bin/echo\\\", \\\"widgets-loaded\\\"])\" > /work/acme/widgets/__init__.py'";
+        let script = super::build_matrix_script_core("pip", &probes, false, 120, Some(60), &|_| {
+            install.to_string()
+        });
+        let out = run_in_container(&script, "256m");
+        let run = read_import_run(out.path(), 0, "").expect("the import step ran");
+        assert!(run.failure.is_none(), "{:?}", run.failure);
+        assert!(
+            crate::scanning::extract_process_exec_signatures(&run.trace)
+                .contains("echo|widgets-loaded"),
+            "{}",
+            run.trace
+        );
+    }
+
+    /// Node: an ESM entry that throws is reported, whatever the CommonJS entry would do; a package
+    /// that only exports `require` is still loaded.
+    #[test]
+    #[ignore = "needs Docker and the network; run with `just test-trace-integrity`"]
+    fn node_reports_an_esm_entry_that_throws_and_still_loads_a_require_only_package() {
+        let probes = vec![
+            ("esmthrows".to_string(), "1.0.0".to_string()),
+            ("cjsonly".to_string(), "1.0.0".to_string()),
+        ];
+        let script = super::build_matrix_script_core(
+            "npm",
+            &probes,
+            false,
+            120,
+            Some(60),
+            &|spec| {
+                if spec.contains("esmthrows") {
+                    "sh -c 'd=/work/node_modules/esmthrows; mkdir -p $d; echo \"{\\\"name\\\":\\\"esmthrows\\\",\\\"exports\\\":{\\\"import\\\":\\\"./e.mjs\\\",\\\"require\\\":\\\"./c.js\\\"}}\" > $d/package.json; echo \"throw new Error(1)\" > $d/e.mjs; echo \"module.exports=1\" > $d/c.js'".to_string()
+                } else {
+                    "sh -c 'd=/work/node_modules/cjsonly; mkdir -p $d; echo \"{\\\"name\\\":\\\"cjsonly\\\",\\\"exports\\\":{\\\"require\\\":\\\"./c.js\\\"}}\" > $d/package.json; echo \"require(\\\"child_process\\\").spawnSync(\\\"/bin/echo\\\",[\\\"cjs-loaded\\\"])\" > $d/c.js'".to_string()
+                }
+            },
+        );
+        let out = run_in_container_for("npm", &script, "256m");
+        let thrown = read_import_run(out.path(), 0, "").expect("ran");
+        assert!(
+            thrown.failure.is_some(),
+            "the throwing ESM entry must fail the import"
+        );
+        let loaded = read_import_run(out.path(), 1, "").expect("ran");
+        assert!(loaded.failure.is_none(), "{:?}", loaded.failure);
+        assert!(
+            crate::scanning::extract_process_exec_signatures(&loaded.trace)
+                .contains("echo|cjs-loaded"),
+            "{}",
+            loaded.trace
+        );
+    }
+
+    #[test]
+    fn an_expected_import_step_that_left_nothing_blocks_only_that_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let probes = [
+            ("a".to_string(), "1".to_string()),
+            ("b".to_string(), "1".to_string()),
+        ];
+        // `a` installed and left no import files; `b` has its import trace.
+        std::fs::write(d.join("gyrseek_trace_0.log"), "install a\n").unwrap();
+        std::fs::write(d.join("gyrseek_trace_1.log"), "install b\n").unwrap();
+        std::fs::write(d.join("gyrseek_itrace_1.log"), "import b\n").unwrap();
+        let got = super::collect_probe_traces_expecting(d, &probes, 300, true, "64m").unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].probe.0, "b");
+    }
+
+    #[test]
+    fn a_missing_import_step_is_fine_when_it_was_not_asked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_trace_0.log"), "install\n").unwrap();
+        let probes = [("a".to_string(), "1".to_string())];
+        let got =
+            super::collect_probe_traces_expecting(dir.path(), &probes, 300, false, "64m").unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].import.is_none());
+    }
+
+    #[test]
+    fn a_missing_import_step_is_fine_when_the_install_failed() {
+        // Nothing was installed, so there was nothing to import: the probe stays, as a failed install.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_trace_0.log"), "install\n").unwrap();
+        std::fs::write(dir.path().join("gyrseek_rc_0.log"), "1\n").unwrap();
+        let probes = [("a".to_string(), "1".to_string())];
+        let got =
+            super::collect_probe_traces_expecting(dir.path(), &probes, 300, true, "64m").unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(got[0].install_failure.is_some() && got[0].import.is_none());
+    }
+
+    #[test]
+    fn when_every_probe_lacks_its_expected_import_the_batch_is_an_error_naming_them() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gyrseek_trace_0.log"), "install\n").unwrap();
+        let probes = [("a".to_string(), "1".to_string())];
+        let err = super::collect_probe_traces_expecting(dir.path(), &probes, 300, true, "64m")
+            .unwrap_err();
+        assert!(
+            err.contains("'a@1'") && err.contains("import step"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn matrix_script_saves_the_exit_code_of_a_failed_install() {
         let script = build_matrix_script(
@@ -3290,6 +4154,7 @@ useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u 
         let runner = DockerRunner {
             danger_disable_seccomp: false,
             probe_timeout_secs: 300,
+            import_timeout_secs: None,
             trace_limit: None,
             image: ImageChoice {
                 image: "python:3.12-slim-bookworm@sha256:x".into(),
@@ -3675,6 +4540,7 @@ Stderr: {}",
                 false,
                 true,
                 300,
+                Some(300),
                 None,
                 crate::runtime_image::select_for_manager(
                     "uv",
