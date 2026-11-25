@@ -6,19 +6,33 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only for every job; the one job that needs more says why, where it asks.
 permissions:
   contents: read
 
+# A new push to a pull request cancels that PR's older run; pushes to main
+# are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
+  # Pinned, not `stable`: a floating toolchain moves the lints under us
+  # (clippy 1.100 rejected code that 1.99 accepted, in a PR that had not
+  # touched it). Bump it on purpose, in its own change.
+  RUST_VERSION: "1.100.0"
 
 jobs:
   rust-checks:
     name: Rust checks
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
@@ -51,9 +65,9 @@ jobs:
           just-version: '1.58.0'
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: rustfmt, clippy
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_VERSION"
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -74,9 +88,12 @@ jobs:
   linux-docker-uv-test:
     name: (Linux) (Docker) Test CLI with (uv)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
@@ -89,10 +106,10 @@ jobs:
         with:
           just-version: '1.58.0'
 
-      - name: Install rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: rustfmt, clippy
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_VERSION"
 
       - name: Just test uv
         run: just test-uv "--danger-disable-seccomp"
@@ -104,9 +121,12 @@ jobs:
   linux-docker-seccomp-uv-test:
     name: (Linux) (Docker) (Seccomp) Test CLI with (uv)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
@@ -119,10 +139,10 @@ jobs:
         with:
           just-version: '1.58.0'
 
-      - name: Install rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: rustfmt, clippy
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_VERSION"
 
       - name: Just test uv
         run: just test-uv
@@ -130,9 +150,12 @@ jobs:
   linux-docker-apparmor-seccomp-uv-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (uv)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
@@ -145,10 +168,10 @@ jobs:
         with:
           just-version: '1.58.0'
 
-      - name: Install rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: rustfmt, clippy
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_VERSION"
 
       - name: Build python pre-built docker scanner image
         run: just docker-build-python
@@ -172,9 +195,12 @@ jobs:
   linux-docker-apparmor-seccomp-pip-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (pip)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
@@ -187,10 +213,10 @@ jobs:
         with:
           just-version: '1.58.0'
 
-      - name: Install rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: rustfmt, clippy
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_VERSION"
 
       - name: Build python pre-built docker scanner image
         run: just docker-build-python
@@ -231,9 +257,12 @@ jobs:
   linux-docker-apparmor-seccomp-poetry-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (poetry)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
@@ -251,10 +280,10 @@ jobs:
         with:
           just-version: '1.58.0'
 
-      - name: Install rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: rustfmt, clippy
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_VERSION"
 
       - name: Build python pre-built docker scanner image
         run: just docker-build-python
@@ -278,9 +307,12 @@ jobs:
   linux-docker-apparmor-seccomp-npm-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (npm)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
@@ -293,10 +325,10 @@ jobs:
         with:
           just-version: '1.58.0'
 
-      - name: Install rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: rustfmt, clippy
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_VERSION"
 
       - name: Build npm pre-built docker scanner image
         run: just docker-build-npm
@@ -337,9 +369,12 @@ jobs:
   linux-docker-apparmor-seccomp-pnpm-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (pnpm)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev apparmor-utils
@@ -354,10 +389,10 @@ jobs:
         with:
           just-version: '1.58.0'
 
-      - name: Install rust
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-        with:
-          components: rustfmt, clippy
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_VERSION"
 
       - name: Build npm pre-built docker scanner image
         run: just docker-build-npm
@@ -381,12 +416,18 @@ jobs:
   cargo-audit:
     name: Dependency advisory scan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
-      checks: write
+      # rustsec/audit-check reports its result as a check run on the commit.
+      # Pull requests from forks get a read-only token whatever is asked for
+      # here, so there it only writes to the log.
+      checks: write  # the audit result is posted as a check run
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The advisory database fetch is the usual flake, so a failed audit is retried twice
       # (three attempts in all). A step cannot loop over an action, hence the copies.
