@@ -83,7 +83,7 @@ test-redirects-uv +args='': (test-redirects "uv" args)
 
 # A payload cannot rewrite its own or an earlier probe's trace (needs Docker and the network)
 test-trace-integrity:
-    cargo test --lib --locked -- --ignored a_payload_cannot_tamper a_probe_that_floods the_artifact_inventory_reports a_scanner_image_without files_dropped_outside_work an_install_can_run_a_binary_from_work a_python_package_is_loaded a_node_package_is_loaded a_pnpm_package_is_loaded a_package_that_cannot_be_loaded an_import_that_never_returns a_process_started_when_the_package_loads a_module_the_package_leaves a_package_under_a_namespace node_reports_an_esm
+    cargo test --lib --locked -- --ignored a_payload_cannot_tamper a_probe_that_floods the_artifact_inventory_reports a_scanner_image_without files_dropped_outside_work an_install_can_run_a_binary_from_work a_python_package_is_loaded a_node_package_is_loaded a_pnpm_package_is_loaded a_package_that_cannot_be_loaded an_import_that_never_returns a_process_started_when_the_package_loads a_module_the_package_leaves a_package_under_a_namespace node_reports_an_esm a_python_dependency_the_package python_tells_a_missing_name node_decides_the_entry a_node_native_addon a_node_package_with_no_root_entry a_node_dependency_the_package
 
 # Real native-heavy packages at pinned versions must scan clear (vendored libraries renamed in every release; needs Docker and the network)
 test-native-pip +args='': build
@@ -92,8 +92,15 @@ test-native-pip +args='': build
 test-native-npm +args='': build
     tests/e2e/native.sh npm "{{bin}}" {{args}}
 
+# Heavy real packages at pinned versions with the import-time scan on: native addons, subpath-only dependencies, deep trees, a module that needs an optional extra (needs Docker and the network)
+test-import-pip +args='': build
+    tests/e2e/import.sh pip "{{bin}}" {{args}}
+
+test-import-npm +args='': build
+    tests/e2e/import.sh npm "{{bin}}" {{args}}
+
 # Run all Docker end-to-end tests
-test-docker: test-npm test-pnpm test-pip test-poetry test-uv test-redirects-npm test-redirects-pnpm test-redirects-pip test-redirects-poetry test-redirects-uv test-native-pip test-native-npm
+test-docker: test-npm test-pnpm test-pip test-poetry test-uv test-redirects-npm test-redirects-pnpm test-redirects-pip test-redirects-poetry test-redirects-uv test-native-pip test-native-npm test-import-pip test-import-npm
 
 # Install to local machine
 install:

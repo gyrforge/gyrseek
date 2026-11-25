@@ -174,6 +174,8 @@ struct ImportSignals {
     signals: TraceSignals,
     failure: Option<InstallFailure>,
     timed_out: bool,
+    /// Every module that failed to load failed on a missing dependency.
+    missing_dependency_only: bool,
 }
 
 impl TraceSignals {
@@ -1138,6 +1140,7 @@ fn trace_sandbox_install_matrix(
                 signals: signals_from_trace(&run.trace),
                 failure: run.failure,
                 timed_out: run.timed_out,
+                missing_dependency_only: run.missing_dependency_only,
             })
         });
         by_probe.insert((package, version), signals);
@@ -1609,11 +1612,7 @@ fn is_sensitive_file_read(path: &str) -> bool {
             return true;
         }
     }
-    if path.contains("/.gnupg/private-keys-v1.d/") || path.contains("/.azure/") {
-        return true;
-    }
-
-    false
+    path.contains("/.gnupg/private-keys-v1.d/") || path.contains("/.azure/")
 }
 
 fn lexical_clean_path(path: &str) -> String {
@@ -2639,6 +2638,24 @@ fn check_import(
             return false;
         }
         (None, false) => clean.iter().for_each(|i| merged.absorb(&i.signals)),
+        (Some(f), false) if candidate.missing_dependency_only => {
+            // A module that needs a dependency the sandbox lacks (an optional extra a release
+            // started to require) is not evidence about the package, and what ran before it
+            // failed is still compared below.
+            println!(
+                "⚠️ [gyrseek] '{}' {} could not load some module(s) in the sandbox because a dependency is missing (exit code {}), where {} loaded cleanly. Not blocked on its own; what ran before the failure is still compared.\n{}",
+                plan.package,
+                plan.current,
+                f.exit_code,
+                ran.iter()
+                    .filter(|(_, i)| i.failure.is_none())
+                    .map(|(v, _)| *v)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                f.output
+            );
+            clean.iter().for_each(|i| merged.absorb(&i.signals));
+        }
         (Some(f), false) => {
             println!(
                 "❌ [gyrseek] import_failed: loading '{}' {} in the sandbox failed (exit code {}) although {} loaded cleanly.\n{}\nA package that starts failing to load can be one that broke, or one that ran code before it failed; the trace up to the failure is compared below. If it is a missing optional dependency or system library, it needs resolving on your side or in a custom scanner image; --no-import-scan skips import scanning altogether.",
@@ -8746,6 +8763,7 @@ recvmsg(6, {msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\x00\x44\x00\x00\x
             trace: trace.to_string(),
             failure: None,
             timed_out: false,
+            missing_dependency_only: false,
         }
     }
 
@@ -8965,6 +8983,44 @@ recvmsg(6, {msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base="\x00\x44\x00\x00\x
                 "import_failed".to_string(),
                 "import_process_exec_anomaly".to_string()
             ]
+        );
+    }
+
+    fn load_failed_on_a_missing_dependency(trace: &str) -> crate::sandbox::ImportRun {
+        crate::sandbox::ImportRun {
+            missing_dependency_only: true,
+            ..load_failed(trace)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_candidate_that_only_misses_a_dependency_is_warned_about_not_blocked() {
+        let report = scan_with_imports(
+            [
+                Some(load_failed_on_a_missing_dependency(QUIET)),
+                Some(loaded(QUIET)),
+                Some(loaded(QUIET)),
+            ],
+            PolicyConfig::default(),
+        )
+        .await;
+        assert!(report.allowed, "{:?}", report.blocked_reasons);
+    }
+
+    #[tokio::test]
+    async fn a_missing_dependency_does_not_hide_what_ran_before_it() {
+        let report = scan_with_imports(
+            [
+                Some(load_failed_on_a_missing_dependency(CURL)),
+                Some(loaded(QUIET)),
+                Some(loaded(QUIET)),
+            ],
+            PolicyConfig::default(),
+        )
+        .await;
+        assert_eq!(
+            report.blocked_reasons,
+            vec!["import_process_exec_anomaly".to_string()]
         );
     }
 
