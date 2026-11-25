@@ -1451,3 +1451,23 @@ if next.starts_with('-') {
 **Fix direction:** end the process normally after a short bounded grace period: Python leaves through `sys.exit` so `atexit` hooks run and joins threads for up to a few seconds, Node waits for the event loop to drain for up to a few seconds before `process.exit`. The grace period must stay well below `import_timeout_seconds`, and a package that never goes idle is then stopped by the grace limit instead of the timeout (it still has to be killed, as now). Measure how much it adds on the pinned packages in `tests/e2e/import.sh` before choosing the value.
 
 ---
+
+### Finding 511 — Low | `.github/workflows/release.yml`, `Cargo.toml` | ⚠️ Open
+
+**Summary:** Narrow platform coverage and an unpinned build environment.
+
+**Root cause:** The `build` job produces `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` only, on `ubuntu-22.04` and `ubuntu-22.04-arm`. The binary links glibc and OpenSSL 3 dynamically, because `reqwest` is built with its default `native-tls` feature, so it does not run on musl systems, and not on macOS or Windows (gyrseek needs Docker, which GitHub's macOS and Windows runners do not provide, but developers do run it on macOS). The runner image will be retired at some point, which raises the glibc floor for newer builds. Rust comes from `rustup` and the system packages from the Ubuntu archive, checked by their own signatures but not pinned by hash; `cargo build --locked` pins the crates.
+
+**Fix direction:** switch `reqwest` to `rustls-tls` and build a static musl binary; add macOS archives for local use; pin the toolchain installer by hash if a hermetic build is wanted.
+
+---
+
+### Finding 512 — Low | `.github/workflows/release.yml` | ⚠️ Open
+
+**Summary:** The publishing path has not run.
+
+**Root cause:** The `build` job was exercised before the first release (its steps were run in an `ubuntu:22.04` container for aarch64, and a pull request that edits the file runs it on both runners), but `verify`, the attestation, the draft and the publish step only run for a pushed tag. They fail safe: nothing is public until the last command, and every earlier failure leaves at most a draft. The first release is still their first run, and a draft left behind makes the next run stop until someone deletes it on the Releases page (the run says so).
+
+**Fix direction:** make the first release a version nobody depends on yet, watch it, and keep the `release` environment's reviewer on until it has gone through once.
+
+---

@@ -2,6 +2,11 @@
 # credentials, on a maintainer's or contributor's machine or in CI. A pull
 # request from a fork can change any of these files, so each is listed.
 # Enforced only while the branch ruleset for main requires code-owner review.
+#
+# The owner is a team, not people: any member can approve, and a handle that is
+# misspelt or that has left cannot silently make every review impossible. The
+# team needs Write access to this repository (Settings > Collaborators and
+# teams); GitHub ignores an owner without it and reports a CODEOWNERS error.
 
 # AI agent configuration. Skills, rules and instruction files are read by
 # review and coding agents as trusted context (a PR that edits them can embed
@@ -12,32 +17,33 @@
 # .agents/skills, so the real directory has to be named, not the links; the
 # links themselves are listed without a trailing slash, so that pointing one
 # somewhere else needs approval too. skills-lock.json pins the external skills.
-/.agents/ @SouthernMine4957 @david-craggs
-/.claude/ @SouthernMine4957 @david-craggs
-/.opencode/ @SouthernMine4957 @david-craggs
-/.github/skills @SouthernMine4957 @david-craggs
-/AGENTS.md @SouthernMine4957 @david-craggs
-/CLAUDE.md @SouthernMine4957 @david-craggs
-/.github/copilot-instructions.md @SouthernMine4957 @david-craggs
-/.coderabbit.yaml @SouthernMine4957 @david-craggs
-/skills-lock.json @SouthernMine4957 @david-craggs
+/.agents/ @gyrforge/gyrseek-builders
+/.claude/ @gyrforge/gyrseek-builders
+/.opencode/ @gyrforge/gyrseek-builders
+/.github/skills @gyrforge/gyrseek-builders
+/AGENTS.md @gyrforge/gyrseek-builders
+/CLAUDE.md @gyrforge/gyrseek-builders
+/.github/copilot-instructions.md @gyrforge/gyrseek-builders
+/.coderabbit.yaml @gyrforge/gyrseek-builders
+/skills-lock.json @gyrforge/gyrseek-builders
 
 # Git hooks: .githooks/pre-commit runs on every commit of anyone who sets
 # core.hooksPath to it.
-/.githooks/ @SouthernMine4957 @david-craggs
+/.githooks/ @gyrforge/gyrseek-builders
 
 # CI and everything CI executes. The workflow runs `just` recipes, the shell
 # scripts and Dockerfiles under tests/ and docker/, and builds the crate
 # (build scripts and dependencies come from Cargo.toml and Cargo.lock). Today
 # CI has no secrets; the day a release workflow gets some, these are the files
 # that would run next to them.
-/.github/workflows/ @SouthernMine4957 @david-craggs
-/.github/CODEOWNERS @SouthernMine4957 @david-craggs
-/.yamllint.yaml @SouthernMine4957 @david-craggs
+/.github/workflows/ @gyrforge/gyrseek-builders
+/.github/CODEOWNERS @gyrforge/gyrseek-builders
+/.github/dependabot.yml @gyrforge/gyrseek-builders
+/.yamllint.yaml @gyrforge/gyrseek-builders
 # .gitattributes can mark a file so that GitHub hides its diff in a review.
-/.gitattributes @SouthernMine4957 @david-craggs
-/justfile @SouthernMine4957 @david-craggs
-/tests/ @SouthernMine4957 @david-craggs
-/docker/ @SouthernMine4957 @david-craggs
-/Cargo.toml @SouthernMine4957 @david-craggs
-/Cargo.lock @SouthernMine4957 @david-craggs
+/.gitattributes @gyrforge/gyrseek-builders
+/justfile @gyrforge/gyrseek-builders
+/tests/ @gyrforge/gyrseek-builders
+/docker/ @gyrforge/gyrseek-builders
+/Cargo.toml @gyrforge/gyrseek-builders
+/Cargo.lock @gyrforge/gyrseek-builders
