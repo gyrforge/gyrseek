@@ -1,0 +1,219 @@
+name: Release
+
+# Builds gyrseek for Linux, publishes the archives with a SHA256SUMS file, and
+# attests their provenance, so that gyrseek-action (and anyone else) can
+# download a pinned version and check it against a hash.
+#
+# - A tag `vX.Y.Z` that matches Cargo.toml, is on main, and whose commit passed
+#   CI is released. A release is never replaced: to change one, bump the version.
+# - A pull request that edits this file builds and smoke-tests the archives and
+#   publishes nothing.
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+
+permissions: {}
+
+# A pull request's older run is cancelled; a release in flight never is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The compiler CI tests with (`RUST_VERSION` in ci.yml). The build job fails if
+  # the two differ, so a release is never built with another compiler than the
+  # one that passed the tests.
+  RUST_VERSION: "1.100.0"
+
+jobs:
+  verify:
+    name: Check the tag
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read  # check out the tag and look up an existing release
+      actions: read  # read whether CI passed on the commit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the tag, the branch, CI and the release
+        env:
+          TAG: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match the version $version in Cargo.toml"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::$TAG is not on main"
+            exit 1
+          fi
+          passed=$(gh run list --workflow ci.yml --commit "$SHA" --status success --json databaseId --jq length)
+          if [ "$passed" -lt 1 ]; then
+            echo "::error::CI has not passed on $SHA"
+            exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::release $TAG already exists; releases are not replaced, bump the version"
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: verify
+    # Runs for a tag only after the checks passed, and for a pull request, where
+    # they are skipped. A cancelled or timed-out check is neither, so it stops here.
+    if: ${{ !cancelled() && (needs.verify.result == 'success' || needs.verify.result == 'skipped') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read  # check out the source; nothing else is needed to build
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Built on the oldest runner image supported, so that the binary runs
+          # on it and on everything newer (it links glibc and OpenSSL 3).
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the compiler matches CI
+        run: |
+          set -euo pipefail
+          ci=$(sed -n 's/^  RUST_VERSION: "\(.*\)"$/\1/p' .github/workflows/ci.yml)
+          if [ "$ci" != "$RUST_VERSION" ]; then
+            echo "::error::release.yml builds with Rust $RUST_VERSION but ci.yml tests with $ci"
+            exit 1
+          fi
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          name="gyrseek-v${version}-${TARGET}"
+          mkdir -p "dist/$name"
+          cp target/release/gyrseek LICENSE README.md "dist/$name/"
+          strip "dist/$name/gyrseek"
+          # The same input gives the same archive: sorted names, no owner, no
+          # timestamps, and no name or date in the gzip header.
+          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+            -C dist -cf - "$name" | gzip -n > "dist/$name.tar.gz"
+          rm -r "dist/${name:?}"
+
+      - name: Run the packaged binary
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          name="gyrseek-v${version}-${TARGET}"
+          mkdir smoke
+          tar -xzf "dist/$name.tar.gz" -C smoke
+          out=$("smoke/$name/gyrseek" --version)
+          if [ "$out" != "gyrseek $version" ]; then
+            echo "::error::the packaged binary reports '$out', expected 'gyrseek $version'"
+            exit 1
+          fi
+          ldd "smoke/$name/gyrseek"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish
+    needs: [verify, build]
+    # Both must have succeeded, not merely "not failed": the checks in verify
+    # are what makes publishing safe.
+    if: ${{ github.event_name == 'push' && needs.verify.result == 'success' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Create this environment in Settings > Environments, require a reviewer and
+    # limit deployments to the tags `v*`: publishing then waits for a second person.
+    environment: release
+    permissions:
+      contents: write  # create the release and upload its files
+      id-token: write  # sign the provenance with the workflow's identity
+      attestations: write  # store the provenance with the repository
+    # No checkout: this job holds write permissions, so it runs no code from
+    # the repository, only the pinned actions below and the gh CLI.
+    steps:
+      - name: Download the archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum gyrseek-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest the provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+          create-storage-record: false
+
+      - name: Create the release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # A draft left by a failed run is invisible to the check in the
+          # verify job. Stop on it, so that two drafts never compete for the tag:
+          # delete it on the Releases page and re-run.
+          drafts=$(gh release list --limit 100 --json tagName,isDraft \
+            --jq ".[] | select(.isDraft and .tagName == \"$TAG\") | .tagName")
+          if [ -n "$drafts" ]; then
+            echo "::error::a draft release for $TAG exists; delete it and re-run"
+            exit 1
+          fi
+          # Created as a draft and published last, once every file is attached,
+          # so that a failure while uploading never leaves a public release
+          # that lacks files.
+          gh release create "$TAG" --verify-tag --draft --title "$TAG" --generate-notes \
+            dist/gyrseek-*.tar.gz dist/SHA256SUMS
+          gh release edit "$TAG" --draft=false

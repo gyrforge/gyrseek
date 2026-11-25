@@ -1,0 +1,18 @@
+# Keeps the full-commit pins of the actions in .github/workflows/ current. The
+# pins would otherwise age without anyone being told. Each pull request moves
+# the SHA and its version comment together, and is reviewed like any other.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A release is proposed a week after it appears: a compromised release is
+    # usually found and pulled within days.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

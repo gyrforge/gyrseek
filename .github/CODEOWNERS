@@ -33,6 +33,7 @@
 # that would run next to them.
 /.github/workflows/ @SouthernMine4957 @david-craggs
 /.github/CODEOWNERS @SouthernMine4957 @david-craggs
+/.github/dependabot.yml @SouthernMine4957 @david-craggs
 /.yamllint.yaml @SouthernMine4957 @david-craggs
 # .gitattributes can mark a file so that GitHub hides its diff in a review.
 /.gitattributes @SouthernMine4957 @david-craggs

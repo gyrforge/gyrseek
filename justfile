@@ -134,7 +134,9 @@ image-pins:
 # Tag current HEAD with version from Cargo.toml (force-update)
 tag:
     version=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/v\1/'); \
-    git tag --delete "$version" 2>/dev/null || true; \
-    git push --delete origin "$version" 2>/dev/null || true; \
+    if git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1; then \
+      echo "$version is already on origin. A released version is never replaced: raise the version in Cargo.toml." >&2; \
+      exit 1; \
+    fi; \
     git tag "$version" && \
     git push origin "$version"
