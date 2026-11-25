@@ -38,6 +38,7 @@ not the entire codebase.
 - `.claude/skills` → `.agents/skills` (folder-level symlink; auto-picks up new skills)
 - `.github/skills` → `.agents/skills` (same)
 - `CLAUDE.md` → `AGENTS.md` (changes to AGENTS.md propagate instantly to Claude Code)
+- `.github/CODEOWNERS` must name the **real** files, not the symlinks: a pull request that edits `.agents/skills/x` changes that path, never `.github/skills/x`, so a rule on the link protects nothing. It lists `.agents/`, `.claude/` (`settings.json` holds shell hooks), `.opencode/` (a JavaScript plugin), `AGENTS.md`/`CLAUDE.md`, `.github/copilot-instructions.md`, `.coderabbit.yaml`, `skills-lock.json`, `.githooks/` (the pre-commit hook runs on every commit of anyone who sets `core.hooksPath`), `.gitattributes` (can hide a diff in review), the workflow and everything CI executes (`justfile`, `tests/`, `docker/`, `Cargo.toml`, `Cargo.lock`), and the symlinks themselves without a trailing slash. A new file or directory that runs code or steers an agent belongs in it. It is enforced only while the `main` ruleset requires code-owner review (a repository setting, not in the repo).
 - `skills-lock.json` at repo root tracks 6 external skills: 3 from `semgrep/skills` (code-security, llm-security, semgrep) and 3 from `DietrichGebert/ponytail` (ponytail, ponytail-help, ponytail-review). See `docs/ARCHITECTURE.md` (Agent Portability Symlinks) for details.
 
 ## Repository Memory
@@ -52,7 +53,7 @@ not the entire codebase.
   - src/runtime_image.rs (Python/Node sandbox image selection from project version files)
   - src/lock_verify.rs (lockfile hashes versus the public registry)
 - CI:
-  - `.github/workflows/ci.yml` — Runs untrusted PR code with workflow-level `contents: read` permissions (with a scoped job-level `checks: write` exception granted strictly to the `cargo-audit` job). Includes `rust-checks` (lint, test), security audits (`cargo-audit`), and containerized test matrices (`linux-docker-uv-test`, etc.). Automated code reviews are handled via CodeRabbit (`.coderabbit.yaml`).
+  - `.github/workflows/ci.yml` — Runs untrusted PR code with workflow-level `contents: read` permissions (with a scoped job-level `checks: write` exception granted strictly to the `cargo-audit` job). Includes `rust-checks` (lint, test), security audits (`cargo-audit`), and containerized test matrices (`linux-docker-uv-test`, etc.). Automated code reviews are handled via CodeRabbit (`.coderabbit.yaml`). Hardened with zizmor 1.33 in mind (`zizmor --offline --persona auditor .github/workflows/ci.yml` reports nothing): every checkout sets `persist-credentials: false`, every job has a `timeout-minutes` (rust-checks 20, the Docker jobs 30, cargo-audit 15; the slowest job takes under 7 minutes), a workflow-level `concurrency` group cancels a pull request's superseded runs (never pushes to main), Rust comes from `rustup` at the version in the workflow's `RUST_VERSION` (1.100.0, bumped on purpose in its own change; the `dtolnay/rust-toolchain` action is gone), and `checks: write` has its reason next to it. All remaining `uses:` are pinned to full commit SHAs.
 - Build and scripts:
   - Justfile is the task runner entrypoint; run `just --list` to see recipes
   - just build — release build (cargo build --release)

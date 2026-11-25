@@ -119,6 +119,8 @@ See [`docs/DOCKER_SECURITY.md`](DOCKER_SECURITY.md) for the full reference. In b
 ## CI/CD Pipeline Architecture
 The CI pipeline (`ci.yml`) runs on `pull_request` and push events with workflow-level `contents: read` permissions (with a scoped job-level `checks: write` grant restricted strictly to the `cargo-audit` job). It executes formatting, static analysis (yamllint, hadolint, shellcheck, clippy), unit/integration test suites, dependency advisory audits (`cargo-audit`), and containerized runtime test matrices. Automated AI code reviews are handled externally via CodeRabbit (`.coderabbit.yaml`).
 
+**Hardening in `ci.yml`** (checked with `zizmor --offline --persona auditor`): every `actions/checkout` sets `persist-credentials: false`, so the token is not left in `.git/config` for the code under test; every job has a `timeout-minutes` (a fork pull request cannot hold a runner for the 6-hour default); a workflow `concurrency` group cancels a pull request's older runs but never a push to `main`; Rust is installed with `rustup` at a pinned `RUST_VERSION`, not a floating `stable` and not a third-party action, so a new Rust release cannot change the lints in an unrelated pull request; all actions are pinned to full commit SHAs.
+
 **Rule:** Never add write permissions (like `pull-requests: write` or `contents: write`) to `ci.yml`. Any future automation requiring write access must be placed in a separate `workflow_run` triggered YAML file to prevent token exfiltration.
 
 ## Threat Model & Accepted Risks
@@ -155,6 +157,8 @@ The repo uses symlinks so multiple AI coding tools share the same skills and ins
 | `.claude/skills` | `../.agents/skills` | Claude Code skill discovery |
 | `.github/skills` | `../.agents/skills` | GitHub Copilot skill discovery |
 | `CLAUDE.md` | `AGENTS.md` | Claude Code instruction alias (looks for `CLAUDE.md`, not `AGENTS.md`) |
+
+`.github/CODEOWNERS` names the real files (`.agents/`, `.claude/`, `.opencode/`, `.githooks/`, the instruction files, `justfile`, `tests/`, `docker/`, `Cargo.*`, the workflow), because a rule on a symlink path never matches the file a pull request changes; these are the files that run code or steer an agent on a maintainer's machine or in CI, so a fork pull request that edits them needs a code owner's approval (once the `main` ruleset requires code-owner review).
 
 New skills added under `.agents/skills/` are automatically picked up by all tools. Because `CLAUDE.md` → `AGENTS.md`, any instruction changes in `AGENTS.md` are instantly reflected for Claude Code with no extra step. If you add support for another agent (Cursor, Windsurf, etc.), create a similar symlink here instead of copying files.
 
