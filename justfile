@@ -131,13 +131,18 @@ image-pins:
         if [ "$now" = "$pinned" ]; then echo "ok     $ref"; else echo "DRIFT  $ref  pinned=$pinned  now=$now"; fi
     done
 
-# Tag HEAD with the version from Cargo.toml and push it, which starts the release workflow. HEAD must be origin/main (the commit that passed CI). Never replaces a tag that origin already has: raise the version instead.
+# Tag HEAD with the version from Cargo.toml and push it, which starts the release workflow. HEAD must be origin/main and its CI run must pass first (waited for with gh). Never replaces a tag that origin already has: raise the version instead.
 tag:
     version=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/v\1/'); \
     git fetch --quiet origin main || { echo "cannot fetch origin/main, so nothing was tagged" >&2; exit 1; }; \
     if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then \
       echo "HEAD is not origin/main: check out main and pull first, so the tag is on the commit that passed CI" >&2; exit 1; \
     fi; \
+    sha=$(git rev-parse HEAD); \
+    id=$(gh run list --workflow ci.yml --commit "$sha" --limit 1 --json databaseId --jq '.[0].databaseId // empty') || { echo "cannot read CI runs with gh, so nothing was tagged" >&2; exit 1; }; \
+    [ -n "$id" ] || { echo "no CI run found for $sha yet: wait for it to start, then run again" >&2; exit 1; }; \
+    echo "waiting for CI run $id on $sha"; \
+    gh run watch "$id" --exit-status >/dev/null || { echo "CI did not pass on $sha, so nothing was tagged" >&2; exit 1; }; \
     rc=0; git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1 || rc=$?; \
     if [ "$rc" -eq 0 ]; then \
       echo "$version is already on origin. A released version is never replaced: raise the version in Cargo.toml." >&2; exit 1; \
