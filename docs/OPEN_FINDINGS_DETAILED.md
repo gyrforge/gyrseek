@@ -1471,3 +1471,15 @@ if next.starts_with('-') {
 **Fix direction:** make the first release a version nobody depends on yet, watch it, and keep the `release` environment's reviewer on until it has gone through once.
 
 ---
+
+---
+
+### Finding 513 — Low | `.github/workflows/ci.yml` | ⚠️ Open
+
+**Summary:** The sandbox on macOS is not tested in CI.
+
+**Root cause:** GitHub-hosted macOS runners have no Docker, and a Linux VM for it cannot be counted on there (nested virtualization). The `(macOS) Build and test without Docker` job therefore builds the release binary, runs every test that needs no daemon (`docker_enforces_sandbox_constraints` is skipped) and checks `--version`. What stays unverified in CI is what runs inside Docker Desktop's VM on a Mac: seccomp there, the trace stream, the `#[ignore]`d Docker tests and the end-to-end scripts. They were verified by hand on macOS (FIXED #411, #434, #461) and can regress unseen. Host mode is not an option, since it needs `strace`.
+
+**Fix direction:** a self-hosted Apple Silicon runner with Docker Desktop or Colima, running `just test-trace-integrity`, if macOS becomes a supported platform with archives of its own; until then, run those recipes by hand before a release that touches the sandbox.
+
+---
