@@ -68,6 +68,15 @@ just build
 # binary is produced at: target/release/gyrseek
 ```
 
+Or, with only a Rust toolchain and no checkout, build a tagged release from source (the crate versions in `Cargo.lock` are used as committed):
+
+```bash
+cargo install --locked --git https://github.com/gyrforge/gyrseek --tag v1.4.3
+# installs gyrseek into ~/.cargo/bin; make sure that directory is on your PATH
+```
+
+On Linux this also needs `pkg-config` and the OpenSSL development headers (`libssl-dev` on Debian and Ubuntu). On macOS nothing else is needed.
+
 ### 2b. Or download a release (Linux and macOS)
 
 Each release (`vX.Y.Z`) on the [Releases page](https://github.com/gyrforge/gyrseek/releases) has an archive for each platform below and a `SHA256SUMS` file. There is no Windows build: on Windows, use WSL2 with the Linux archive.
