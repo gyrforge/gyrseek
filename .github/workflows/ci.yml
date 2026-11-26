@@ -119,6 +119,36 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           [ "$out" = "gyrseek $version" ] || { echo "::error::got '$out', expected 'gyrseek $version'"; exit 1; }
 
+  # Uses the published gyrseek-action (pinned by commit, as users are told to) to install a
+  # released gyrseek, so a broken release of the action, or a gyrseek release it cannot install,
+  # shows up here. It checks the released gyrseek, not the code of this pull request.
+  gyrseek-action:
+    name: (Action) Install with gyrseek-action on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    env:
+      GYRSEEK_VERSION: "1.4.3"
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - name: Install gyrseek
+        id: gyrseek
+        uses: gyrforge/gyrseek-action@193473340803cc66eb27ba7da20a76b24fb7c4b2 # v1.0.1
+        with:
+          version: ${{ env.GYRSEEK_VERSION }}
+
+      - name: Check what was installed
+        env:
+          INSTALLED: ${{ steps.gyrseek.outputs.version }}
+          BIN_DIR: ${{ steps.gyrseek.outputs.path }}
+        run: |
+          set -euo pipefail
+          [ "$INSTALLED" = "$GYRSEEK_VERSION" ] || { echo "::error::the action installed $INSTALLED, asked for $GYRSEEK_VERSION"; exit 1; }
+          [ "$(gyrseek --version)" = "gyrseek $GYRSEEK_VERSION" ] || { echo "::error::gyrseek --version disagrees"; exit 1; }
+          [ "$(command -v gyrseek)" = "$BIN_DIR/gyrseek" ] || { echo "::error::gyrseek on PATH is not the one in the 'path' output"; exit 1; }
+
   linux-docker-uv-test:
     name: (Linux) (Docker) Test CLI with (uv)
     runs-on: ubuntu-latest
