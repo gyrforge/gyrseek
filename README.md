@@ -92,7 +92,7 @@ GitHub-hosted macOS runners have no Docker, so they cannot run a scan.
 Verify, then install (replace the version and architecture):
 
 ```bash
-v=1.4.1; t=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
+v=1.4.3; t=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
 gh release download "v$v" --repo gyrforge/gyrseek -p "gyrseek-v$v-$t.tar.gz" -p SHA256SUMS
 # the archive matches the published hash (macOS has no sha256sum, so it uses shasum)
 if command -v sha256sum >/dev/null; then sha256sum --ignore-missing -c SHA256SUMS
@@ -102,7 +102,7 @@ tar -xzf "gyrseek-v$v-$t.tar.gz"
 sudo install -m 0755 "gyrseek-v$v-$t/gyrseek" /usr/local/bin/gyrseek
 # or, without root, into a directory on your PATH that you own:
 # mkdir -p "$HOME/.local/bin" && install -m 0755 "gyrseek-v$v-$t/gyrseek" "$HOME/.local/bin/gyrseek"
-gyrseek --version                                                  # prints: gyrseek 1.4.1
+gyrseek --version                                                  # prints: gyrseek 1.4.3
 ```
 
 Without `gh`, download the same files from the Releases page; the hash check works without it. For a CI runner, pin the version and the expected SHA-256 in your own pipeline instead of trusting whatever the download returns. The archive holds `gyrseek`, `LICENSE`, `NOTICE` and `README.md`.
@@ -266,4 +266,4 @@ See [docs/DOCKER_SECURITY.md](docs/DOCKER_SECURITY.md) for the canonical referen
 
 ## License
 
-Copyright 2026 Gyrforge. gyrseek is licensed under the [Apache License 2.0](LICENSE); the attribution is in [NOTICE](NOTICE). Releases up to and including v1.4.1 were published under the LGPL-2.1 and stay under it for anyone who already has them.
+Copyright 2026 Gyrforge. gyrseek is licensed under the [Apache License 2.0](LICENSE); the attribution is in [NOTICE](NOTICE). Releases up to and including v1.4.2 were published under the LGPL-2.1 and stay under it for anyone who already has them; v1.4.2 was tagged just before the relicensing was merged, so its archives carry the LGPL `LICENSE`. From v1.4.3 on, the archives carry the Apache-2.0 `LICENSE` and `NOTICE`.

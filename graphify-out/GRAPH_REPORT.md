@@ -1,7 +1,7 @@
-# Graph Report - wt-license  (2026-11-26)
+# Graph Report - gyrseek  (2026-11-26)
 
 ## Corpus Check
-- 116 files · ~287,366 words
+- 116 files · ~287,515 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 11 file(s) not represented in the graph (top: (none) 7, .npm 1, .python 1)
 
@@ -11,29 +11,29 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e2eb7179`
+- Built from commit: `44577a07`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - Review history
-- Won't Fix Findings - Detailed
+- Routing, Config & Scan Orchestration
 - Detailed Findings
 - scanning.rs
 - sandbox.rs
-- lib.rs
-- scan_packages_versions
+- Bun Execution Detection & Exemptions
+- FCrDNS Allowlist Verification
 - High Impact
 - native.sh
 - NonoRunner backend
 - run
 - Semgrep Quick Reference
-- run
+- python_multi_package_tests.rs
 - Docker Security
 - extract_process_exec_signatures
 - Code Correctness Rules
-- Llm Security
-- fetch_history_with_baselines
+- Fail-Closed Policy & Findings
+- Network Anomaly Decision
 - Detailed Findings
 - unescape_strace_string
 - npm/package.json
@@ -86,7 +86,7 @@
 - Secure Azure Terraform Configurations
 - Interrogation
 - semgrep/SKILL.md
-- README.md
+- DOCKER_SECURITY.md
 - Python
 - Prevent SQL Injection
 - LLM03: Secure LLM Supply Chain
@@ -118,7 +118,7 @@
 - Ensure Memory Safety
 - Threat Model & Accepted Risks
 - Validation checklist
-- OPEN_FINDINGS.md
+- Open Findings
 - How It Works
 - Prebuilt Scanner Images
 - classify_npm_spec
@@ -126,16 +126,16 @@
 - LLM01: Prevent Prompt Injection
 - read_import_run
 - Understand Code
-- WONT_FIX_FINDINGS.md
+- WONT_FIX_FINDINGS_DETAILED.md
 - env_lock
 - Pattern Operators
-- ProbeTrace
+- trace_install_docker_matrix
 - .yamllint.yaml
 - Prevent Regular Expression DoS (ReDoS)
 - ponytail-review/SKILL.md
 - AppArmor
 - Common Patterns by Vulnerability
-- .probe
+- build_runner_from_env
 - Configuration
 - build_runner_from_env
 - forward_fail_closed_tests.rs
@@ -156,7 +156,7 @@
 - name
 - Usage
 - reviews
-- gyrseek
+- lock_routing_tests.rs
 - Feedback
 - ForwardMode
 - 10. Insecure Cryptography
@@ -194,10 +194,10 @@
 - copilot-instructions.md
 - opencode.json
 - with
-- jobs
+- cargo-audit
 - gyrseek
 - test
-- exempt
+- parse_npm_lock
 - steps
 - on
 - mirror_proxy.py
@@ -207,7 +207,7 @@
 - Step 5: Write Taint Rules
 - steps
 - steps
-- run
+- linux-docker-uv-test
 - steps
 - lockfile-guards.sh
 - import_in_the_sandbox
@@ -220,7 +220,7 @@
 - NpmResponse
 - import.sh
 - release.yml
-- build_matrix_script_core
+- build_matrix_script_with
 - FailingInstallRunner
 - main.rs
 - release
@@ -279,7 +279,7 @@
 Cohesion: 0.01
 Nodes (243): Design change after Findings 428 and 429: ranges on the command line are scanned at the latest version, Finding 100 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 101 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 102 — Medium | `.github/workflows/post_review.yml` | ✅ Fixed, Finding 103 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 104 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 105 — Low | `.github/workflows/ci.yml` | ✅ Fixed, Finding 106 — High | `.github/workflows/ci.yml` | ✅ Fixed (+235 more)
 
-### Community 1 - "Won't Fix Findings - Detailed"
+### Community 1 - "Routing, Config & Scan Orchestration"
 Cohesion: 0.02
 Nodes (121): Finding 118 — Low | `.github/workflows/ci.yml` | 🛑 Wont Fix, Finding 123 — High | `.github/workflows/post_review.yml` | 🛑 Wont Fix / Invalid, Finding 124 — Low | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix, Finding 125 — Low | `.github/scripts/post_comment.sh` | 🛑 Wont Fix / Invalid, Finding 129 — Low | `.github/scripts/post_comment.sh` | 🛑 Wont Fix / Accepted Risk, Finding 138 — Low | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix / Accepted Risk, Finding 151 — Invalid | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix, Finding 152 — Accepted Risk | `.github/scripts/sanitize_review.py` | 🛑 Wont Fix (+113 more)
 
@@ -295,11 +295,11 @@ Nodes (69): DNS wire-format parser (extract_dns_map), scan_packages_versions / S
 Cohesion: 0.04
 Nodes (58): a_log_that_was_cut_short_never_counts_as_only_a_missing_dependency(), a_name_a_module_lacks_is_not_a_missing_dependency(), APPARMOR_LOAD_ERR, ARTIFACT_INVENTORY_NODE, ARTIFACT_INVENTORY_PYTHON, build_matrix_script(), DEFAULT_PROBE_TIMEOUT_SECS, DEFAULT_TRACE_LIMIT (+50 more)
 
-### Community 5 - "lib.rs"
+### Community 5 - "Bun Execution Detection & Exemptions"
 Cohesion: 0.07
 Nodes (46): validate_allowlist_pkg_key, accepts_new_package_exemptions_empty_list_as_no_exemptions(), baseline_count_zero_falls_back_to_default_two(), clamps_min_baseline_age_hours_to_hard_floor(), DEFAULT_CONFIG_PATH, domain_allowlist_bare_tld_rejected_in_global_and_per_package_positions(), domain_allowlist_empty_value_dropped_in_global_and_per_package_positions(), domain_allowlist_star_value_rejected_in_global_and_per_package_positions() (+38 more)
 
-### Community 6 - "scan_packages_versions"
+### Community 6 - "FCrDNS Allowlist Verification"
 Cohesion: 0.07
 Nodes (59): ImportRun, a_candidate_that_fails_to_load_when_a_baseline_loaded_blocks(), a_candidate_that_loads_when_no_baseline_did_is_not_compared(), a_candidate_that_only_misses_a_dependency_is_warned_about_not_blocked(), a_candidate_that_ran_something_new_before_failing_reports_both(), a_failed_baseline_blocks_on_install_failed_alone(), a_failed_install_blocks_only_its_own_package_in_a_batch(), a_failed_load_still_compares_what_ran_before_the_failure() (+51 more)
 
@@ -323,7 +323,7 @@ Nodes (12): exit_with(), GyrSeek, no_sandbox_flag_is_consumed_wherever_it_appear
 Cohesion: 0.15
 Nodes (13): Basic Structure, Commands, Metadata Fields, Path Filtering, Propagators, Required Rule Fields, Semgrep Quick Reference, Source/Sink Options (+5 more)
 
-### Community 12 - "run"
+### Community 12 - "python_multi_package_tests.rs"
 Cohesion: 0.22
 Nodes (17): a_missing_requirements_file_fails_closed_for_every_spelling(), a_range_inside_a_requirements_file_still_exits_1(), an_attached_r_option_and_unpinned_file_lines_are_not_missed(), an_empty_requirements_file_fails_closed_instead_of_scanning_nothing(), direct_references_are_not_scanned_as_if_they_were_registry_packages(), install_with_no_package_names_fails_closed(), packages_in_an_included_requirements_file_are_scanned(), poetry_add_scans_every_named_package() (+9 more)
 
@@ -339,11 +339,11 @@ Nodes (25): a_program_that_only_looks_like_the_import_step_is_still_reported(), 
 Cohesion: 0.08
 Nodes (23): Assignment in Condition, ato* Functions, Bash, C, Code Correctness Rules, Elixir: Atom Exhaustion, Go, Integer Overflow from Atoi (+15 more)
 
-### Community 16 - "Llm Security"
+### Community 16 - "Fail-Closed Policy & Findings"
 Cohesion: 0.08
 Nodes (23): 10.1 LLM10 - Prevent Unbounded Consumption, 10. Unbounded Consumption, 1.1 LLM01 - Prevent Prompt Injection, 1. Prompt Injection, 2.1 LLM02 - Prevent Sensitive Information Disclosure, 2. Sensitive Information Disclosure, 3.1 LLM03 - Secure LLM Supply Chain, 3. Supply Chain (+15 more)
 
-### Community 17 - "fetch_history_with_baselines"
+### Community 17 - "Network Anomaly Decision"
 Cohesion: 0.13
 Nodes (22): active_test_env_vars(), age_filter_includes_versions_exactly_at_cutoff(), age_filter_keeps_only_versions_older_than_cutoff(), age_filter_skips_candidates_without_publish_timestamps(), age_filter_still_respects_baseline_count_limit(), BaselineHistory, burst_count_is_not_inflated_by_created_modified(), check_override_ages() (+14 more)
 
@@ -551,7 +551,7 @@ Nodes (9): Activation, Answer Handling, Boundaries, Branch Resolution, Depth Con
 Cohesion: 0.20
 Nodes (7): CI/CD Integration, GitHub Actions, Installation (CLI), MCP Tools Available, Resources, Semgrep Static Analysis, When to Use Semgrep
 
-### Community 70 - "README.md"
+### Community 70 - "DOCKER_SECURITY.md"
 Cohesion: 0.25
 Nodes (4): Development: Recipes and Testing, Just Recipes, Testing, Sandbox Modes and Scanner Images
 
@@ -679,7 +679,7 @@ Nodes (6): 1. External AI Code Review, 2. Sandbox Syscall Permissiveness, 3. CI/
 Cohesion: 0.29
 Nodes (7): Step 1: Baseline sanity (no custom seccomp/apparmor), Step 2: Validate seccomp profile syntax, Step 3: Smoke test ptrace with network access, Step 4: Run gyrseek e2e with seccomp, Step 5: AppArmor validation (Linux hosts), Step 5a: Troubleshooting, Validation checklist
 
-### Community 102 - "OPEN_FINDINGS.md"
+### Community 102 - "Open Findings"
 Cohesion: 0.29
 Nodes (5): Complexity & Over-Engineering Findings, Open Findings - Detailed, Open Findings, Security & Correctness Findings, Summary
 
@@ -711,7 +711,7 @@ Nodes (31): a_blank_import_trace_is_a_failed_import_not_a_clean_one(), a_blank_i
 Cohesion: 0.33
 Nodes (5): Approach, Checklist, Goal, Understand Code, Verification
 
-### Community 110 - "WONT_FIX_FINDINGS.md"
+### Community 110 - "WONT_FIX_FINDINGS_DETAILED.md"
 Cohesion: 0.33
 Nodes (4): Detailed Rationale, Won't Fix Findings (Detailed), Summary, Won't Fix Findings
 
@@ -723,7 +723,7 @@ Nodes (3): active_test_env_vars_none_set_returns_empty(), env_lock(), EnvVarGuar
 Cohesion: 0.29
 Nodes (7): Basic Matching, Deep Matching, Metavariable Filters, Metavariables, Negation, Pattern Operators, Scope Operators
 
-### Community 113 - "ProbeTrace"
+### Community 113 - "trace_install_docker_matrix"
 Cohesion: 0.16
 Nodes (15): append_inventory(), collect_probe_traces_expecting(), container_name(), DockerRunner, import_missing_message(), is_valid_trace_limit(), probe_chunks(), ProbeTrace (+7 more)
 
@@ -747,7 +747,7 @@ Nodes (8): Allowed operations, AppArmor, Configuration, Platform note, Recommend
 Cohesion: 0.29
 Nodes (7): Command Injection, Common Patterns by Vulnerability, Dangerous Functions (Pattern Matching), Hardcoded Secrets (Pattern Matching), Path Traversal, SQL Injection, XSS
 
-### Community 119 - ".probe"
+### Community 119 - "build_runner_from_env"
 Cohesion: 0.29
 Nodes (7): HostRunner, is_timeout_exit(), npm_family_install_dir_flag(), npm_family_install_subcommand(), probe_timeout_message(), timeout_exit_codes_cover_term_and_kill_only(), timeout_message_names_the_probe_and_the_setting()
 
@@ -827,7 +827,7 @@ Nodes (11): steps, linux-docker-seccomp-uv-test, name, runs-on, steps, timeout-m
 Cohesion: 0.50
 Nodes (4): npm examples, pnpm examples, Python examples, Usage
 
-### Community 140 - "gyrseek"
+### Community 140 - "lock_routing_tests.rs"
 Cohesion: 0.23
 Nodes (10): gyrseek(), bare_uv_lock_is_routed_to_lockfile_scan(), pnpm_install_is_routed_to_package_scan(), poetry_lock_is_routed_to_lockfile_scan(), pylock_entries_from_another_source_fail_closed_unless_exempt(), python_lockfile_entries_from_another_index_fail_closed_unless_exempt(), run_in(), uv_venv_stays_unscanned_passthrough() (+2 more)
 
@@ -843,11 +843,11 @@ Nodes (5): rust-checks, name, runs-on, steps, timeout-minutes
 Cohesion: 0.25
 Nodes (8): with, dockerfile, just-version, persist-credentials, python-version, recursive, token, version
 
-### Community 181 - "jobs"
+### Community 181 - "cargo-audit"
 Cohesion: 0.12
 Nodes (16): name, permissions, runs-on, timeout-minutes, concurrency, cancel-in-progress, group, env (+8 more)
 
-### Community 184 - "exempt"
+### Community 184 - "parse_npm_lock"
 Cohesion: 0.11
 Nodes (37): a_download_must_be_the_file_of_the_package_it_is_listed_under(), a_local_artifact_stays_excluded_when_the_entry_names_an_index(), a_pylock_entry_without_a_version_takes_it_from_its_files(), exempt(), internal_package_exemptions_let_a_private_registry_package_through(), lockfile_entries_from_anywhere_but_the_npm_registry_fail_closed(), lockfile_entries_with_missing_or_odd_fields_are_handled(), lockfile_parsers_survive_hostile_and_degenerate_input() (+29 more)
 
@@ -883,7 +883,7 @@ Nodes (5): linux-docker-apparmor-seccomp-pip-test, name, runs-on, steps, timeout
 Cohesion: 0.40
 Nodes (5): linux-docker-apparmor-seccomp-pnpm-test, name, runs-on, steps, timeout-minutes
 
-### Community 194 - "run"
+### Community 194 - "linux-docker-uv-test"
 Cohesion: 0.33
 Nodes (6): linux-docker-uv-test, name, runs-on, steps, timeout-minutes, run
 
@@ -927,7 +927,7 @@ Nodes (3): DOCKER_CONFIG, HOME, import.sh script
 Cohesion: 0.22
 Nodes (8): concurrency, cancel-in-progress, group, env, RUST_VERSION, jobs, name, permissions
 
-### Community 207 - "build_matrix_script_core"
+### Community 207 - "build_matrix_script_with"
 Cohesion: 0.13
 Nodes (21): a_missing_or_failing_interpreter_stops_the_script_instead_of_leaving_an_empty_inventory(), a_scanner_image_without_a_working_interpreter_fails_the_scan_with_a_message(), artifact_scan_steps(), artifact_scan_steps_inventory_all_files(), artifact_scan_steps_output_to_correct_log(), build_artifact_scan_steps(), build_matrix_script_core(), build_matrix_script_with() (+13 more)
 
@@ -976,24 +976,24 @@ Cohesion: 0.60
 Nodes (4): pnpm_add_only_non_registry_specs_forwards_directly_without_scanning(), pnpm_add_reaches_scan_branch(), pnpm_command(), pnpm_install_scans_the_lockfile_not_package_json()
 
 ## Knowledge Gaps
-- **64 isolated node(s):** `gyrseek`, `Global`, `PerPackage`, `Original`, `Pinned` (+59 more)
+- **64 isolated node(s):** `gyrseek`, `Range`, `End`, `Line`, `TooLong` (+59 more)
   These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 1451 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
 - **45 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `gyrseek` connect `gyrseek` to `Network Behavior Detection`, `README.md`, `How It Works`, `Prebuilt Scanner Images`, `Usage`, `Sandbox Modes`, `Process-Execution Behavior Detection`, `Configuration`, `rewrite_args_with_pinned_versions`, `Quick Start`?**
-  _High betweenness centrality (0.243) - this node is a cross-community bridge._
+- **Why does `gyrseek` connect `gyrseek` to `Network Behavior Detection`, `DOCKER_SECURITY.md`, `How It Works`, `Prebuilt Scanner Images`, `Usage`, `Sandbox Modes`, `Process-Execution Behavior Detection`, `Configuration`, `rewrite_args_with_pinned_versions`, `Quick Start`?**
+  _High betweenness centrality (0.207) - this node is a cross-community bridge._
 - **Are the 13 inferred relationships involving `load()` (e.g. with `baseline_count_zero_falls_back_to_default_two()` and `minimum_release_age_package_zero_disables_policy()`) actually correct?**
   _`load()` has 13 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `gyrseek`, `Global`, `PerPackage` to the rest of the system?**
+- **What connects `gyrseek`, `Range`, `End` to the rest of the system?**
   _64 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Review history` be split into smaller, more focused modules?**
   _Cohesion score 0.00823045267489712 - nodes in this community are weakly interconnected._
-- **Why does `run()` connect `run` to `gyrseek`, `parse_npm_install_targets_with`, `lib.rs`, `gyrseek`, `load_policy_config`, `main.rs`, `index_settings.rs`, `.new`, `runtime_image.rs`, `parse_global_options`, `build_runner_from_env`, `forward_fail_closed_tests.rs`, `parsing.rs`, `SandboxRunner`?**
-  _High betweenness centrality (0.127) - this node is a cross-community bridge._
-- **Should `Won't Fix Findings - Detailed` be split into smaller, more focused modules?**
+- **Why does `run()` connect `run` to `gyrseek`, `parse_npm_install_targets_with`, `Bun Execution Detection & Exemptions`, `lock_routing_tests.rs`, `load_policy_config`, `main.rs`, `index_settings.rs`, `.new`, `runtime_image.rs`, `parse_global_options`, `build_runner_from_env`, `forward_fail_closed_tests.rs`, `parsing.rs`, `SandboxRunner`?**
+  _High betweenness centrality (0.114) - this node is a cross-community bridge._
+- **Should `Routing, Config & Scan Orchestration` be split into smaller, more focused modules?**
   _Cohesion score 0.01652892561983471 - nodes in this community are weakly interconnected._
 - **Why does `Fixed Findings (Detailed)` connect `FIXED_FINDINGS.md` to `Review history`, `Detailed Findings`?**
-  _High betweenness centrality (0.121) - this node is a cross-community bridge._
+  _High betweenness centrality (0.106) - this node is a cross-community bridge._
