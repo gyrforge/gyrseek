@@ -2,6 +2,7 @@
 
 ## Completed
 - **External AI Code Review Migration** — Replaced in-repository AI review workflows and privileged `workflow_run` comment publishers with external CodeRabbit reviews (`.coderabbit.yaml`), isolating review feedback from runner execution contexts.
+- Release archives for Linux and macOS (Apple Silicon and Intel) with a `SHA256SUMS` file and build attestations, and the `gyrseek-action` GitHub Action that installs a pinned release after checking its hash and attestation. CI installs gyrseek through the published action, pinned by commit, on Linux x86_64, Linux ARM64 and macOS. The sandbox on macOS is still verified by hand (OPEN #513).
 - Per-probe wall-clock limit (`probe_timeout_seconds`, default 300) that blocks only the package that timed out, and `install_failed` blocking with the package manager's own error output when a probe's install fails.
 - Sandbox Python and Node versions follow the project: `python_version`/`node_version` config, `.python-version`, `requires-python`/Poetry ranges, `.nvmrc`/`.node-version` and `engines.node`, selecting from built-in tables of digest-pinned images (Python 3.10–3.14, Node 20/22/24/26).
 - Install-time git clone behavior diffing across package versions, plus `git_clone_allowlist` support.
