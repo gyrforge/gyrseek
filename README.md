@@ -116,6 +116,17 @@ gyrseek --version                                                  # prints: gyr
 
 Without `gh`, download the same files from the Releases page; the hash check works without it. For a CI runner, pin the version and the expected SHA-256 in your own pipeline instead of trusting whatever the download returns. The archive holds `gyrseek`, `LICENSE`, `NOTICE` and `README.md`.
 
+### 2c. Or install with Homebrew (macOS and Linux)
+
+```bash
+brew tap gyrforge/gyrseek
+brew trust gyrforge/gyrseek   # Homebrew 7 and newer; skip on an older Homebrew
+brew install gyrseek
+gyrseek --version
+```
+
+`brew trust` is a deliberate step: Homebrew 7 and newer will not load a third-party tap's formula until you trust it, so read [the formula](https://github.com/gyrforge/homebrew-gyrseek/blob/main/Formula/gyrseek.rb) first. It installs the same release archives as step 2b and checks each against the SHA-256 in the formula, which is generated from the release's `SHA256SUMS` after its build attestation is verified. The requirements are the same as for the archives: Docker running, and on Linux glibc 2.35 or newer with OpenSSL 3 (Ubuntu 22.04 or newer). See [homebrew-gyrseek](https://github.com/gyrforge/homebrew-gyrseek).
+
 ### 3. Run your first scan
 
 ```bash
@@ -266,6 +277,7 @@ See [docs/DOCKER_SECURITY.md](docs/DOCKER_SECURITY.md) for the canonical referen
 | [docs/SANDBOX.md](docs/SANDBOX.md) | Sandbox modes, platform support, scanner images, prebuilt images |
 | [docs/DOCKER_SECURITY.md](docs/DOCKER_SECURITY.md) | Container hardening: seccomp, AppArmor, capabilities, validation |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | `just` recipes and how to run the tests |
+| [docs/RELEASING.md](docs/RELEASING.md) | Step by step: version bump, PR, tag, publish, verify, and the action and Homebrew follow-ups |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Control flow, components, CI/CD, threat model, contributor workflow |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Planned improvements |
 | [docs/OPEN_FINDINGS.md](docs/OPEN_FINDINGS.md), [FIXED](docs/FIXED_FINDINGS.md), [WONT_FIX](docs/WONT_FIX_FINDINGS.md) | Security and correctness findings logs |
