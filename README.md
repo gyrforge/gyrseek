@@ -76,6 +76,39 @@ just build
 # binary is produced at: target/release/gyrseek
 ```
 
+### 2b. Or download a release (Linux only)
+
+Each release (`vX.Y.Z`) on the [Releases page](https://github.com/gyrforge/gyrseek/releases) has two archives and a `SHA256SUMS` file. There are no macOS or Windows builds: on those, build from source.
+
+| Archive | For |
+|---|---|
+| `gyrseek-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` | Linux on Intel/AMD (`uname -m` prints `x86_64`) |
+| `gyrseek-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` | Linux on ARM (`uname -m` prints `aarch64`) |
+
+(`unknown` is the vendor field of the Rust target name, which Linux has none of; it is not a missing value.)
+
+**Prerequisites for the binary:** Ubuntu 22.04 or newer, or another distribution with glibc 2.35+ and OpenSSL 3 (it links both dynamically), plus everything in [Prerequisites](#1-prerequisites) above, Docker above all. Run `ldd gyrseek` to see a missing library.
+
+**Where to run it:** use an Ubuntu 22.04 or 24.04 runner, which has Docker preinstalled on GitHub-hosted runners (`ubuntu-22.04`, `ubuntu-24.04`, `ubuntu-latest`; for the ARM archive `ubuntu-22.04-arm` or `ubuntu-24.04-arm`, there is no `ubuntu-latest-arm`). The release is built and smoke-tested on `ubuntu-22.04`. For a self-hosted runner or your own image, start from `ubuntu:22.04` or newer (Debian 12 also meets the glibc and OpenSSL 3 requirements) and add `libssl3` and `ca-certificates`. Alpine and other musl-based images are not supported: the binary needs glibc. gyrseek starts its own sandbox containers, so a job that itself runs in a container needs access to a Docker daemon (for example the host's socket); that setup is not tested here.
+
+**Keep secrets out of the job.** A clear scan is evidence, not a guarantee (see the coverage table and the open findings): after it, the forwarded install runs on the runner itself, as the runner user, with the job's environment. Do not put cloud credentials, registry or publish tokens, SSH keys or other secrets in the environment of a job that installs packages through gyrseek, and do not run it on a runner that holds any. Install in a job of its own with the read-only `GITHUB_TOKEN` permissions it needs (`contents: read`), no `secrets.*` and `persist-credentials: false` on checkout, and hand the result to later jobs as an artifact. `--no-sandbox` is worse: it runs every probe on the host with no isolation, so use it only in a disposable environment that has no secrets.
+
+Verify, then install (replace the version and architecture):
+
+```bash
+v=1.4.1; t=x86_64-unknown-linux-gnu
+gh release download "v$v" --repo gyrforge/gyrseek -p "gyrseek-v$v-$t.tar.gz" -p SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS                          # the archive matches the published hash
+gh attestation verify "gyrseek-v$v-$t.tar.gz" --repo gyrforge/gyrseek   # built by this repository's release workflow
+tar -xzf "gyrseek-v$v-$t.tar.gz"
+sudo install -m 0755 "gyrseek-v$v-$t/gyrseek" /usr/local/bin/gyrseek
+# or, without root, into a directory on your PATH that you own:
+# install -D -m 0755 "gyrseek-v$v-$t/gyrseek" "$HOME/.local/bin/gyrseek"
+gyrseek --version                                                  # prints: gyrseek 1.4.1
+```
+
+Without `gh`, download the same files from the Releases page; the hash check works without it. For a CI runner, pin the version and the expected SHA-256 in your own pipeline instead of trusting whatever the download returns. The archive holds `gyrseek`, `LICENSE` and `README.md`.
+
 ### 3. Run your first scan
 
 ```bash
@@ -94,7 +127,7 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just build` | Builds the release binary (`target/release/gyrseek`). |
 | `just install` | Installs `gyrseek` into Cargo's bin directory with `cargo install --path . --locked`. |
 | `just uninstall` | Uninstalls `gyrseek` with `cargo uninstall gyrseek`. |
-| `just tag` | Tags the current `HEAD` with the version string from `Cargo.toml` (e.g. `v1.2.3`), force-deletes any existing local/remote tag with the same name, and pushes the new tag to `origin`. |
+| `just tag` | Tags the current `HEAD` with the version string from `Cargo.toml` (e.g. `v1.2.3`), requires `HEAD` to be `origin/main` and waits for its CI run to pass (needs `gh`), refuses a version `origin` already has, and pushes the tag to `origin`, which starts the release workflow. |
 | `just fmt` | Formats the Rust code. |
 | `just test` | Runs `cargo test --all-features --locked`. |
 | `just lint` | Runs `cargo check`, clippy for all targets/features, and a format check. Use this before committing. |
