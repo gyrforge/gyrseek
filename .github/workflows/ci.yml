@@ -85,6 +85,40 @@ jobs:
         env:
           GYRSEEK_REQUIRE_NPM: '1'
 
+  # macOS runners have no Docker, so the sandbox cannot run here. This job checks that gyrseek
+  # builds and that every test that does not need a Docker daemon passes on macOS; the sandbox
+  # on macOS (Docker Desktop) is verified by hand, not in CI.
+  macos-build-and-test:
+    name: (macOS) Build and test without Docker
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build
+        run: cargo build --release --locked
+
+      # --no-fail-fast runs every test binary; the one test that starts a real container is skipped.
+      - name: Test
+        run: cargo test --all-features --locked --no-fail-fast -- --skip docker_enforces_sandbox_constraints
+
+      - name: Run the built binary
+        run: |
+          out=$(target/release/gyrseek --version)
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "$out" = "gyrseek $version" ] || { echo "::error::got '$out', expected 'gyrseek $version'"; exit 1; }
+
   linux-docker-uv-test:
     name: (Linux) (Docker) Test CLI with (uv)
     runs-on: ubuntu-latest
