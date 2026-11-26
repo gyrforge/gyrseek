@@ -140,7 +140,7 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           name="gyrseek-v${version}-${TARGET}"
           mkdir -p "dist/$name"
-          cp "target/$TARGET/release/gyrseek" LICENSE README.md "dist/$name/"
+          cp "target/$TARGET/release/gyrseek" LICENSE NOTICE README.md "dist/$name/"
           strip "dist/$name/gyrseek"
           # strip invalidates the signature that the linker gave the binary,
           # and an unsigned arm64 binary is killed when it starts.

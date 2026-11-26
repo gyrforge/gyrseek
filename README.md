@@ -105,7 +105,7 @@ sudo install -m 0755 "gyrseek-v$v-$t/gyrseek" /usr/local/bin/gyrseek
 gyrseek --version                                                  # prints: gyrseek 1.4.1
 ```
 
-Without `gh`, download the same files from the Releases page; the hash check works without it. For a CI runner, pin the version and the expected SHA-256 in your own pipeline instead of trusting whatever the download returns. The archive holds `gyrseek`, `LICENSE` and `README.md`.
+Without `gh`, download the same files from the Releases page; the hash check works without it. For a CI runner, pin the version and the expected SHA-256 in your own pipeline instead of trusting whatever the download returns. The archive holds `gyrseek`, `LICENSE`, `NOTICE` and `README.md`.
 
 ### 3. Run your first scan
 
@@ -266,4 +266,4 @@ See [docs/DOCKER_SECURITY.md](docs/DOCKER_SECURITY.md) for the canonical referen
 
 ## License
 
-See [LICENSE](LICENSE).
+Copyright 2026 Gyrforge. gyrseek is licensed under the [Apache License 2.0](LICENSE); the attribution is in [NOTICE](NOTICE). Releases up to and including v1.4.1 were published under the LGPL-2.1 and stay under it for anyone who already has them.
