@@ -1,6 +1,6 @@
 name: Release
 
-# Builds gyrseek for Linux, publishes the archives with a SHA256SUMS file, and
+# Builds gyrseek for Linux and macOS (Apple Silicon), publishes the archives with a SHA256SUMS file, and
 # attests their provenance, so that gyrseek-action (and anyone else) can
 # download a pinned version and check it against a hash.
 #
@@ -91,6 +91,15 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
+          # macOS has no libc or OpenSSL to match: the binary links only the
+          # system frameworks, so what sets the oldest macOS it runs on is
+          # MACOSX_DEPLOYMENT_TARGET (set in the Build step), not the runner.
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          # Cross-built on the Apple Silicon runner; the Intel runner images are
+          # on their way out, and nothing here needs a native one.
+          - runner: macos-latest
+            target: x86_64-apple-darwin
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -107,15 +116,21 @@ jobs:
           fi
 
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
 
       - name: Install Rust
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target "$TARGET"
           rustup default "$RUST_VERSION"
 
       - name: Build
-        run: cargo build --release --locked
+        env:
+          TARGET: ${{ matrix.target }}
+          MACOSX_DEPLOYMENT_TARGET: "13.0"  # ignored on Linux; Docker Desktop needs macOS 13 or newer anyway
+        run: cargo build --release --locked --target "$TARGET"
 
       - name: Package
         env:
@@ -125,12 +140,42 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           name="gyrseek-v${version}-${TARGET}"
           mkdir -p "dist/$name"
-          cp target/release/gyrseek LICENSE README.md "dist/$name/"
+          cp "target/$TARGET/release/gyrseek" LICENSE README.md "dist/$name/"
           strip "dist/$name/gyrseek"
-          # The same input gives the same archive: sorted names, no owner, no
-          # timestamps, and no name or date in the gzip header.
-          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-            -C dist -cf - "$name" | gzip -n > "dist/$name.tar.gz"
+          # strip invalidates the signature that the linker gave the binary,
+          # and an unsigned arm64 binary is killed when it starts.
+          if [ "$RUNNER_OS" = macOS ]; then
+            codesign --force --sign - "dist/$name/gyrseek"
+          fi
+          # The same input gives the same archive on both systems (BSD tar has
+          # no GNU options): sorted names, no owner, no timestamps, and no name
+          # or date in the gzip header.
+          NAME="$name" python3 - <<'PY'
+          import gzip, os, tarfile
+
+          name = os.environ["NAME"]
+          top = os.path.join("dist", name)
+
+
+          def plain(info, mode):
+              info.uid = info.gid = 0
+              info.uname = info.gname = ""
+              info.mtime = 0
+              info.mode = mode
+              return info
+
+
+          with open(f"dist/{name}.tar.gz", "wb") as raw:
+              with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+                  with tarfile.open(fileobj=gz, mode="w", format=tarfile.GNU_FORMAT) as tar:
+                      tar.addfile(plain(tarfile.TarInfo(name + "/"), 0o755))
+                      for entry in sorted(os.listdir(top)):
+                          path = os.path.join(top, entry)
+                          info = tar.gettarinfo(path, arcname=f"{name}/{entry}")
+                          mode = 0o755 if os.access(path, os.X_OK) else 0o644
+                          with open(path, "rb") as f:
+                              tar.addfile(plain(info, mode), f)
+          PY
           rm -r "dist/${name:?}"
 
       - name: Run the packaged binary
@@ -142,12 +187,41 @@ jobs:
           name="gyrseek-v${version}-${TARGET}"
           mkdir smoke
           tar -xzf "dist/$name.tar.gz" -C smoke
-          out=$("smoke/$name/gyrseek" --version)
-          if [ "$out" != "gyrseek $version" ]; then
-            echo "::error::the packaged binary reports '$out', expected 'gyrseek $version'"
-            exit 1
+          bin="smoke/$name/gyrseek"
+          run=("$bin")
+          if [ "$RUNNER_OS" = macOS ]; then
+            want=${TARGET%%-*}
+            [ "$want" = aarch64 ] && want=arm64
+            got=$(lipo -archs "$bin")
+            if [ "$got" != "$want" ]; then
+              echo "::error::the binary is built for '$got', expected '$want'"
+              exit 1
+            fi
+            # An Intel binary runs on the Apple Silicon runner only through
+            # Rosetta, which the image may not have: the architecture check
+            # above still holds, the run is skipped with a warning.
+            if [ "$want" != "$(uname -m)" ]; then
+              if arch "-$want" /usr/bin/true 2>/dev/null; then
+                run=(arch "-$want" "$bin")
+              else
+                run=()
+                echo "::warning::cannot run a $want binary on this runner (no Rosetta); built and checked, not run"
+              fi
+            fi
           fi
-          ldd "smoke/$name/gyrseek"
+          if [ "${#run[@]}" -gt 0 ]; then
+            out=$("${run[@]}" --version)
+            if [ "$out" != "gyrseek $version" ]; then
+              echo "::error::the packaged binary reports '$out', expected 'gyrseek $version'"
+              exit 1
+            fi
+          fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            otool -L "$bin"
+            codesign --verify --strict "$bin"
+          else
+            ldd "$bin"
+          fi
 
       - name: Upload the archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

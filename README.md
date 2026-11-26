@@ -68,34 +68,40 @@ just build
 # binary is produced at: target/release/gyrseek
 ```
 
-### 2b. Or download a release (Linux only)
+### 2b. Or download a release (Linux and macOS)
 
-Each release (`vX.Y.Z`) on the [Releases page](https://github.com/gyrforge/gyrseek/releases) has two archives and a `SHA256SUMS` file. There are no macOS or Windows builds: on those, build from source.
+Each release (`vX.Y.Z`) on the [Releases page](https://github.com/gyrforge/gyrseek/releases) has an archive for each platform below and a `SHA256SUMS` file. There is no Windows build: on Windows, use WSL2 with the Linux archive.
 
 | Archive | For |
 |---|---|
 | `gyrseek-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` | Linux on Intel/AMD (`uname -m` prints `x86_64`) |
 | `gyrseek-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` | Linux on ARM (`uname -m` prints `aarch64`) |
+| `gyrseek-vX.Y.Z-aarch64-apple-darwin.tar.gz` | macOS on Apple Silicon (`uname -m` prints `arm64`) |
+| `gyrseek-vX.Y.Z-x86_64-apple-darwin.tar.gz` | macOS on Intel (`uname -m` prints `x86_64`) |
 
-(`unknown` is the vendor field of the Rust target name, which Linux has none of; it is not a missing value.)
+(`unknown` is the vendor field of the Rust target name, which Linux has none of; it is not a missing value. `apple-darwin` is macOS.)
 
-**Prerequisites for the binary:** Ubuntu 22.04 or newer, or another distribution with glibc 2.35+ and OpenSSL 3 (it links both dynamically), plus everything in [Prerequisites](#1-prerequisites) above, Docker above all. Run `ldd gyrseek` to see a missing library.
+**Prerequisites for the binary:** Ubuntu 22.04 or newer, or another distribution with glibc 2.35+ and OpenSSL 3 (it links both dynamically), plus everything in [Prerequisites](#1-prerequisites) above, Docker above all. Run `ldd gyrseek` to see a missing library. **On macOS:** macOS 13 or newer, with Docker Desktop running; the binary uses only system frameworks, so there is nothing else to install. It is signed ad hoc, not notarized: downloading with `gh` or `curl` is fine, but a file saved by a browser carries a quarantine flag that makes macOS refuse to open it, which `xattr -d com.apple.quarantine "gyrseek-vX.Y.Z-TARGET/gyrseek"` clears, run from the directory where you extracted the archive.
 
 **Where to run it:** use an Ubuntu 22.04 or 24.04 runner, which has Docker preinstalled on GitHub-hosted runners (`ubuntu-22.04`, `ubuntu-24.04`, `ubuntu-latest`; for the ARM archive `ubuntu-22.04-arm` or `ubuntu-24.04-arm`, there is no `ubuntu-latest-arm`). The release is built and smoke-tested on `ubuntu-22.04`. For a self-hosted runner or your own image, start from `ubuntu:22.04` or newer (Debian 12 also meets the glibc and OpenSSL 3 requirements) and add `libssl3` and `ca-certificates`. Alpine and other musl-based images are not supported: the binary needs glibc. gyrseek starts its own sandbox containers, so a job that itself runs in a container needs access to a Docker daemon (for example the host's socket); that setup is not tested here.
+
+GitHub-hosted macOS runners have no Docker, so they cannot run a scan.
 
 **Keep secrets out of the job.** A clear scan is evidence, not a guarantee (see [the coverage table](docs/DETECTION_COVERAGE.md) and the open findings): after it, the forwarded install runs on the runner itself, as the runner user, with the job's environment. Do not put cloud credentials, registry or publish tokens, SSH keys or other secrets in the environment of a job that installs packages through gyrseek, and do not run it on a runner that holds any. Install in a job of its own with the read-only `GITHUB_TOKEN` permissions it needs (`contents: read`), no `secrets.*` and `persist-credentials: false` on checkout, and hand the result to later jobs as an artifact. `--no-sandbox` is worse: it runs every probe on the host with no isolation, so use it only in a disposable environment that has no secrets.
 
 Verify, then install (replace the version and architecture):
 
 ```bash
-v=1.4.1; t=x86_64-unknown-linux-gnu
+v=1.4.1; t=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
 gh release download "v$v" --repo gyrforge/gyrseek -p "gyrseek-v$v-$t.tar.gz" -p SHA256SUMS
-sha256sum --ignore-missing -c SHA256SUMS                          # the archive matches the published hash
+# the archive matches the published hash (macOS has no sha256sum, so it uses shasum)
+if command -v sha256sum >/dev/null; then sha256sum --ignore-missing -c SHA256SUMS
+else grep "gyrseek-v$v-$t.tar.gz" SHA256SUMS | shasum -a 256 -c -; fi
 gh attestation verify "gyrseek-v$v-$t.tar.gz" --repo gyrforge/gyrseek   # built by this repository's release workflow
 tar -xzf "gyrseek-v$v-$t.tar.gz"
 sudo install -m 0755 "gyrseek-v$v-$t/gyrseek" /usr/local/bin/gyrseek
 # or, without root, into a directory on your PATH that you own:
-# install -D -m 0755 "gyrseek-v$v-$t/gyrseek" "$HOME/.local/bin/gyrseek"
+# mkdir -p "$HOME/.local/bin" && install -m 0755 "gyrseek-v$v-$t/gyrseek" "$HOME/.local/bin/gyrseek"
 gyrseek --version                                                  # prints: gyrseek 1.4.1
 ```
 
