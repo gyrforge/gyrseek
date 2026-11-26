@@ -2,6 +2,7 @@
 name = "gyrseek"
 version = "1.4.2"
 edition = "2024"
+license = "Apache-2.0"
 
 [dependencies]
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros"] }

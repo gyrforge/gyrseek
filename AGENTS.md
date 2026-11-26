@@ -44,6 +44,7 @@ not the entire codebase.
 ## Repository Memory
 - Project name: gyrseek
 - Language: Rust
+- License: Apache-2.0 (`LICENSE`, `NOTICE` with `Copyright 2026 Gyrforge`, which Apache section 4(d) makes redistributors keep and the release archives ship, and `license` in `Cargo.toml` so crates.io and `cargo deny` can read it), from v1.4.2. Releases up to v1.4.1 were LGPL-2.1. Every dependency is permissive (checked with `cargo metadata`; `r-efi` offers LGPL only as one option next to MIT and Apache-2.0). New dependencies must stay compatible with Apache-2.0: no GPL, AGPL or SSPL
 - Entry points:
   - src/main.rs (binary entrypoint)
   - src/lib.rs (command routing and orchestration)
