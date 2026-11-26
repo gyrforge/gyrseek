@@ -131,10 +131,25 @@ image-pins:
         if [ "$now" = "$pinned" ]; then echo "ok     $ref"; else echo "DRIFT  $ref  pinned=$pinned  now=$now"; fi
     done
 
-# Tag current HEAD with version from Cargo.toml (force-update)
+# Tag HEAD with the version from Cargo.toml and push it, which starts the release workflow. HEAD must be origin/main (the commit that passed CI). Never replaces a tag that origin already has: raise the version instead.
 tag:
     version=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/v\1/'); \
-    git tag --delete "$version" 2>/dev/null || true; \
-    git push --delete origin "$version" 2>/dev/null || true; \
-    git tag "$version" && \
+    git fetch --quiet origin main || { echo "cannot fetch origin/main, so nothing was tagged" >&2; exit 1; }; \
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then \
+      echo "HEAD is not origin/main: check out main and pull first, so the tag is on the commit that passed CI" >&2; exit 1; \
+    fi; \
+    rc=0; git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1 || rc=$?; \
+    if [ "$rc" -eq 0 ]; then \
+      echo "$version is already on origin. A released version is never replaced: raise the version in Cargo.toml." >&2; exit 1; \
+    elif [ "$rc" -ne 2 ]; then \
+      echo "cannot read the tags of origin (git ls-remote exited $rc), so nothing was tagged" >&2; exit 1; \
+    fi; \
+    if git rev-parse -q --verify "refs/tags/$version" >/dev/null; then \
+      if [ "$(git rev-parse "$version^{commit}")" != "$(git rev-parse HEAD)" ]; then \
+        echo "the local tag $version points at another commit than HEAD: delete it (git tag -d $version) or check out that commit" >&2; exit 1; \
+      fi; \
+      echo "the local tag $version already points at HEAD (an earlier push did not finish); pushing it"; \
+    else \
+      git tag "$version"; \
+    fi; \
     git push origin "$version"
