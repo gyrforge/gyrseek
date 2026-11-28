@@ -430,6 +430,19 @@ jobs:
           GYRSEEK_DOCKER_APPARMOR_PROFILE: true
         run: just test-import-npm
 
+      # The only end-to-end scan whose probe count spans several containers: a frozen 84-package
+      # lockfile is 252 probes over 8 containers, exercising probe_chunks, multi-container
+      # batching and sequential trace streaming against real packages. Took about 5 minutes
+      # locally, most of it sequential registry metadata rather than the probes. The fixture has
+      # no install scripts (asserted by the script) and the forwarded install runs with
+      # --ignore-scripts; hashes are left to gyrseek's own lockfile verification.
+      - name: Just test a lockfile at scale
+        env:
+          GYRSEEK_NPM_SCANNER_PREBUILT: true
+          GYRSEEK_NPM_SCANNER_IMAGE: "gyrseek-npm-scanner:latest"
+          GYRSEEK_DOCKER_APPARMOR_PROFILE: true
+        run: just test-scale
+
   linux-docker-apparmor-seccomp-pnpm-test:
     name: (Linux) (Docker) (AppArmor) (Seccomp) Test CLI with (pnpm)
     runs-on: ubuntu-latest

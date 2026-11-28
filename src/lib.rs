@@ -584,7 +584,7 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .filter(|v| {
-            let valid = sandbox::is_valid_trace_limit(v);
+            let valid = sandbox::is_valid_size(v);
             if !valid {
                 println!(
                     "⚠️ [gyrseek] Ignoring trace_limit '{v}': it must be a size such as 256m, 1g or 65536k. Using the default."
@@ -3028,5 +3028,95 @@ mod gyrseek_tests {
         let yaml = "new_package_exemptions: null";
         let cfg: DummyExemptionConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(cfg.new_package_exemptions.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod debian_package_metadata_tests {
+    //! The `.deb` is built from `[package.metadata.deb]` in `Cargo.toml`, but `release.yml` only
+    //! runs on a tag or on a pull request that edits that workflow file, so nothing in `ci.yml`
+    //! exercises the packaging. A pull request that renames an asset, blanks the maintainer or
+    //! lets the synopsis grow would break the release at `just tag` time, which burns a version
+    //! (releases are immutable and the recipe refuses a version that already has one). These
+    //! checks are the cheap half of that: they validate the manifest, not the build.
+
+    fn deb_metadata() -> toml::Value {
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+            .expect("Cargo.toml is readable");
+        let parsed: toml::Value = manifest.parse().expect("Cargo.toml is valid TOML");
+        parsed["package"]["metadata"]["deb"].clone()
+    }
+
+    fn manifest_path(relative: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative)
+    }
+
+    #[test]
+    fn every_packaged_asset_exists() {
+        // `cargo deb` fails late and obscurely on a missing asset. The binary is the one source
+        // that is produced by the build rather than committed.
+        let meta = deb_metadata();
+        for asset in meta["assets"].as_array().expect("assets is a list") {
+            let source = asset[0].as_str().expect("an asset source is a string");
+            if source.starts_with("target/") {
+                continue;
+            }
+            assert!(
+                manifest_path(source).exists(),
+                "packaged asset '{source}' does not exist"
+            );
+        }
+        let license = meta["license-file"][0]
+            .as_str()
+            .expect("license-file names a file");
+        assert!(
+            manifest_path(license).exists(),
+            "license-file '{license}' does not exist"
+        );
+    }
+
+    #[test]
+    fn the_synopsis_is_one_short_line() {
+        // Debian policy: the synopsis is a single short line. `cargo deb` takes it from
+        // `package.description`, and at 93 characters it wrapped onto a second line in the
+        // control file, which lintian flags.
+        let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+            .expect("Cargo.toml is readable");
+        let parsed: toml::Value = manifest.parse().expect("Cargo.toml is valid TOML");
+        let synopsis = parsed["package"]["description"]
+            .as_str()
+            .expect("the crate has a description");
+        assert!(!synopsis.is_empty(), "the synopsis must not be empty");
+        assert!(!synopsis.contains('\n'), "the synopsis must be one line");
+        assert!(
+            synopsis.len() <= 72,
+            "the synopsis is {} characters; Debian wraps it above ~72: {synopsis:?}",
+            synopsis.len()
+        );
+        assert!(
+            !synopsis.ends_with('.'),
+            "a Debian synopsis takes no trailing period: {synopsis:?}"
+        );
+    }
+
+    #[test]
+    fn the_maintainer_is_a_real_publishable_address() {
+        // Debian puts this in the control file of every published package, so a placeholder
+        // would ship. One did, briefly.
+        let meta = deb_metadata();
+        let maintainer = meta["maintainer"]
+            .as_str()
+            .expect("a maintainer is set")
+            .to_ascii_lowercase();
+        assert!(
+            maintainer.contains('@') && maintainer.contains('<') && maintainer.contains('>'),
+            "the maintainer must be `Name <email>`: {maintainer:?}"
+        );
+        for placeholder in ["example.", "invalid", "todo", "changeme"] {
+            assert!(
+                !maintainer.contains(placeholder),
+                "the maintainer is still a placeholder ({placeholder}): {maintainer:?}"
+            );
+        }
     }
 }

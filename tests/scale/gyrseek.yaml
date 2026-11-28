@@ -1,0 +1,14 @@
+# Test fixture only — see README.md. These exemptions were generated from the lockfile, NOT
+# vetted. They let tests/e2e/scale.sh reach the probe phase instead of aborting with
+# insufficient_baselines. An exemption skips the anomaly checks for a package (it is still
+# installed, probed, and blocked on an install or import failure), which is why this is
+# acceptable for a throughput test and not for a real configuration.
+new_package_exemptions:
+  dunder-proto: "1.0.1"
+  es-define-property: "1.0.1"
+  get-proto: "1.0.1"
+  math-intrinsics: "1.1.0"
+  side-channel-list: "1.0.1"
+  side-channel-map: "1.0.1"
+  unpipe: "1.0.0"
+  utils-merge: "1.0.1"
