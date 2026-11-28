@@ -584,7 +584,7 @@ fn load_policy_config(path: &str, explicit: bool) -> Result<PolicyConfig, String
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
         .filter(|v| {
-            let valid = sandbox::is_valid_trace_limit(v);
+            let valid = sandbox::is_valid_size(v);
             if !valid {
                 println!(
                     "⚠️ [gyrseek] Ignoring trace_limit '{v}': it must be a size such as 256m, 1g or 65536k. Using the default."

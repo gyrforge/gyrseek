@@ -465,24 +465,79 @@ impl SandboxRunner for DockerRunner {
     }
 }
 
+/// Container memory limit when `GYRSEEK_MEM_LIMIT` is unset or unusable. It also sizes the
+/// `/work` and `/tmp` tmpfs mounts and bounds the trace tmpfs (`cap_trace_limit_to_memory`).
+pub(crate) const DEFAULT_MEM_LIMIT: &str = "2g";
+
+/// The container memory limit in effect. Validated like the trace limit (FIXED #519): an unusable
+/// value used to go straight to `docker run --memory`, so the scan died with docker's error rather
+/// than a gyrseek warning, and it silently turned the trace cap into a no-op.
 pub(crate) fn sandbox_mem_limit() -> String {
-    std::env::var("GYRSEEK_MEM_LIMIT")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "2g".to_string())
+    match std::env::var("GYRSEEK_MEM_LIMIT") {
+        Ok(v) if is_valid_size(&v) => v.trim().to_string(),
+        Ok(v) if !v.trim().is_empty() => {
+            eprintln!(
+                "\u{26a0}\u{fe0f} [gyrseek] Ignoring GYRSEEK_MEM_LIMIT='{v}': it must be a size such as 512m, 2g or \
+2147483648. A trailing `b` is rejected although docker's --memory accepts it, because this value also \
+sizes the /work and /tmp tmpfs mounts and the kernel rejects `size=...b`; `0` is rejected too, although \
+docker reads it as unlimited, since the limit bounds an untrusted install. Using {DEFAULT_MEM_LIMIT}."
+            );
+            DEFAULT_MEM_LIMIT.to_string()
+        }
+        _ => DEFAULT_MEM_LIMIT.to_string(),
+    }
 }
 
 /// Size of the root-only tmpfs that holds one probe's logs, and so the largest trace gyrseek
 /// accepts for a probe. Traces seen in practice are a few MB (an npm install) to about 40 MB (a
-/// failing source build of a large Python package); the tmpfs counts against the container's
-/// memory limit (so a limit near `GYRSEEK_MEM_LIMIT` can get a flooding probe OOM-killed instead of
-/// blocked on its own). A probe that fills it is blocked, not scanned from a partial trace.
-pub(crate) const DEFAULT_TRACE_LIMIT: &str = "1024m";
+/// failing source build of a large Python package), so this is still an order of magnitude more
+/// than any trace observed. It is a quarter of the default `GYRSEEK_MEM_LIMIT` on purpose: the
+/// tmpfs is memory-backed and counts against that limit, and the old 1024m was half of it, which
+/// let a flooding probe claim memory the install needs (FIXED #463). A probe that fills it is
+/// blocked, not scanned from a partial trace.
+pub(crate) const DEFAULT_TRACE_LIMIT: &str = "512m";
+
+/// The largest share of the container's memory the trace tmpfs may claim, as a divisor: the trace
+/// gets at most `GYRSEEK_MEM_LIMIT / TRACE_LIMIT_MEMORY_DIVISOR`, leaving the rest for the install.
+/// The tmpfs holds gyrseek's own files for one probe at a time, so it needs far less than the
+/// install does; without a cap, a trace limit near the memory limit lets a flooding probe exhaust
+/// the container and get the whole batch OOM-killed (a docker error that fails every package)
+/// instead of being blocked on its own (FIXED #463).
+const TRACE_LIMIT_MEMORY_DIVISOR: u64 = 4;
+
+/// Caps a trace limit at its share of the container's memory, warning when it has to. Returns
+/// `limit` unchanged when it already fits, and when either size cannot be parsed (docker rejects
+/// an unusable `--memory` itself; silently shrinking a trace limit because the memory limit is
+/// unreadable would be worse than leaving it alone).
+pub(crate) fn cap_trace_limit_to_memory(limit: &str, mem_limit: &str) -> String {
+    let (Some(limit_bytes), Some(mem_bytes)) = (size_to_bytes(limit), size_to_bytes(mem_limit))
+    else {
+        return limit.to_string();
+    };
+    let cap = mem_bytes / TRACE_LIMIT_MEMORY_DIVISOR;
+    if limit_bytes <= cap || cap == 0 {
+        return limit.to_string();
+    }
+    let capped = format!("{}m", (cap / (1024 * 1024)).max(1));
+    eprintln!(
+        "\u{26a0}\u{fe0f} [gyrseek] trace_limit {limit} is more than a quarter of GYRSEEK_MEM_LIMIT ({mem_limit}); \
+the trace tmpfs is memory-backed, so using it would leave the install too little memory and risk the \
+whole batch being OOM-killed. Using {capped}. Raise GYRSEEK_MEM_LIMIT to allow a larger trace."
+    );
+    capped
+}
 
 /// A valid size: `256m`, `1g`, `65536k` (or a plain number of bytes), greater than zero.
-pub(crate) fn is_valid_trace_limit(size: &str) -> bool {
-    size_to_bytes(size.trim()).is_some_and(|b| b > 0)
+pub(crate) fn is_valid_size(size: &str) -> bool {
+    let size = size.trim();
+    // A trailing `b` is rejected although `docker run --memory` accepts it, because the same
+    // string is also written into the `size=` option of the `/work`, `/tmp` and trace tmpfs
+    // mounts, and the kernel's tmpfs parser does not accept it: `--tmpfs /x:rw,size=1073741824b`
+    // fails the container at mount time with `invalid argument` (verified against Docker; `1g`
+    // and a bare `1073741824` both work). A validator that accepted it would hand the operator a
+    // docker mount error instead of the warning it exists to give. `size_to_bytes` still parses
+    // the suffix, so the cap arithmetic is right for any form it is handed.
+    !size.to_ascii_lowercase().ends_with('b') && size_to_bytes(size).is_some_and(|b| b > 0)
 }
 
 /// The trace limit in effect: `GYRSEEK_TRACE_LIMIT` when it is set to a valid size, otherwise
@@ -492,27 +547,32 @@ pub(crate) fn sandbox_trace_limit(configured: Option<&str>) -> String {
     let fallback = || {
         configured
             .map(str::trim)
-            .filter(|c| is_valid_trace_limit(c))
+            .filter(|c| is_valid_size(c))
             .unwrap_or(DEFAULT_TRACE_LIMIT)
             .to_string()
     };
-    match std::env::var("GYRSEEK_TRACE_LIMIT") {
-        Ok(v) if is_valid_trace_limit(&v) => v.trim().to_string(),
+    let chosen = match std::env::var("GYRSEEK_TRACE_LIMIT") {
+        Ok(v) if is_valid_size(&v) => v.trim().to_string(),
         Ok(v) if !v.trim().is_empty() => {
             let used = fallback();
             eprintln!(
-                "⚠️ [gyrseek] Ignoring GYRSEEK_TRACE_LIMIT='{v}': it must be a size such as 256m, 1g or 65536k. Using {used}."
+                "⚠️ [gyrseek] Ignoring GYRSEEK_TRACE_LIMIT='{v}': it must be a size such as 256m, 1g or 65536k (a trailing `b` is not accepted: the trace tmpfs rejects `size=...b`). Using {used}."
             );
             used
         }
         _ => fallback(),
-    }
+    };
+    cap_trace_limit_to_memory(&chosen, &sandbox_mem_limit())
 }
 
 /// `256m` -> bytes (`k`, `m`, `g` suffixes, or a plain number of bytes).
 fn size_to_bytes(size: &str) -> Option<u64> {
     let size = size.trim().to_ascii_lowercase();
     let (digits, unit) = match size.chars().last()? {
+        // `b` is an explicit byte suffix docker accepts (`--memory 1073741824b`); without this
+        // arm it fell to the bare-number branch and failed to parse, so a docker-valid memory
+        // limit was rejected and the trace cap computed from the wrong size.
+        'b' => (&size[..size.len() - 1], 1),
         'k' => (&size[..size.len() - 1], 1024),
         'm' => (&size[..size.len() - 1], 1024 * 1024),
         'g' => (&size[..size.len() - 1], 1024 * 1024 * 1024),
@@ -2174,15 +2234,16 @@ fn shell_single_quoted(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ARTIFACT_INVENTORY_NODE, ARTIFACT_INVENTORY_PYTHON, EMBEDDED_APPARMOR_PROFILE_NAME,
-        EMBEDDED_APPARMOR_PROFILE_TEXT, EMBEDDED_SECCOMP_PROFILE_JSON, KILL_PAYLOAD_PROCESSES_STEP,
-        OUTSIDE_WORK_DIRS, REQUIRED_SCANNER_PROGRAMS, SCANNER_USER, TRACE_FUNCTIONS,
-        WORK_RESET_STEP, base64_decode, build_artifact_scan_steps, build_docker_run_args,
-        build_matrix_script, build_runner_from_env, docker_apparmor_enabled_from_env,
-        docker_apparmor_profile_name, image_setup_steps, install_output_tail, probe_installer,
-        probe_timeout_message, read_frames, read_install_failure, required_programs_step,
-        sandbox_max_processes, sandbox_trace_limit, scanner_image_var, scanner_user_setup_steps,
-        size_to_bytes, strace_install_command,
+        ARTIFACT_INVENTORY_NODE, ARTIFACT_INVENTORY_PYTHON, DEFAULT_MEM_LIMIT, DEFAULT_TRACE_LIMIT,
+        EMBEDDED_APPARMOR_PROFILE_NAME, EMBEDDED_APPARMOR_PROFILE_TEXT,
+        EMBEDDED_SECCOMP_PROFILE_JSON, KILL_PAYLOAD_PROCESSES_STEP, OUTSIDE_WORK_DIRS,
+        REQUIRED_SCANNER_PROGRAMS, SCANNER_USER, TRACE_FUNCTIONS, WORK_RESET_STEP, base64_decode,
+        build_artifact_scan_steps, build_docker_run_args, build_matrix_script,
+        build_runner_from_env, cap_trace_limit_to_memory, docker_apparmor_enabled_from_env,
+        docker_apparmor_profile_name, image_setup_steps, install_output_tail, is_valid_size,
+        probe_installer, probe_timeout_message, read_frames, read_install_failure,
+        required_programs_step, sandbox_max_processes, sandbox_mem_limit, sandbox_trace_limit,
+        scanner_image_var, scanner_user_setup_steps, size_to_bytes, strace_install_command,
     };
     use super::{
         DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, import_invocation,
@@ -2383,16 +2444,123 @@ mod tests {
     }
 
     #[test]
+    fn a_byte_suffix_is_not_an_acceptable_configured_size() {
+        // Verified against Docker: `--tmpfs /x:rw,size=1073741824b` fails the container with
+        // `invalid argument`, while `size=1g` and `size=1073741824` both work. The configured
+        // value is written into three tmpfs `size=` options, so the validator has to be as
+        // strict as the strictest consumer, not as lenient as `docker run --memory`.
+        for rejected in ["1073741824b", "1048576b", "1B", " 512b "] {
+            assert!(!is_valid_size(rejected), "{rejected} must be rejected");
+        }
+        for accepted in ["1073741824", "512m", "1g", "65536k", "2G"] {
+            assert!(is_valid_size(accepted), "{accepted} must be accepted");
+        }
+        // The parser still reads the suffix, so the cap arithmetic is right for any form.
+        assert_eq!(size_to_bytes("1073741824b"), Some(1024 * 1024 * 1024));
+    }
+
+    #[test]
+    fn an_unusable_memory_limit_falls_back_with_a_warning_instead_of_reaching_docker() {
+        // One guard: every constructor takes the same env lock, so two would deadlock.
+        let _guard = SandboxEnvVarGuard::set("GYRSEEK_MEM_LIMIT", "2g");
+        for (value, expected) in [
+            // Usable sizes pass through, trimmed.
+            ("512m", "512m"),
+            (" 4g ", "4g"),
+            ("2147483648", "2147483648"),
+            ("2G", "2G"),
+            // Unusable: docker would either reject these or, for `0`, give the container
+            // unlimited memory, which also makes the trace cap a no-op.
+            ("2gb", DEFAULT_MEM_LIMIT),
+            // docker's --memory takes this, but the tmpfs `size=` options built from the same
+            // value do not, so accepting it would fail the container at mount time.
+            ("1073741824b", DEFAULT_MEM_LIMIT),
+            ("1g", "1g"),
+            ("2 g", DEFAULT_MEM_LIMIT),
+            ("lots", DEFAULT_MEM_LIMIT),
+            ("0", DEFAULT_MEM_LIMIT),
+            ("", DEFAULT_MEM_LIMIT),
+        ] {
+            unsafe { std::env::set_var("GYRSEEK_MEM_LIMIT", value) };
+            assert_eq!(sandbox_mem_limit(), expected, "{value:?}");
+        }
+        unsafe { std::env::remove_var("GYRSEEK_MEM_LIMIT") };
+        assert_eq!(sandbox_mem_limit(), DEFAULT_MEM_LIMIT);
+    }
+
+    #[test]
+    fn the_trace_tmpfs_cannot_claim_more_than_its_share_of_container_memory() {
+        // The tmpfs is memory-backed, so a trace limit near the memory limit leaves the install
+        // too little and risks the whole batch being OOM-killed instead of one package blocked.
+        for (limit, mem, expected) in [
+            // Capped: more than a quarter.
+            ("1g", "2g", "512m"),
+            ("2g", "2g", "512m"),
+            ("1024m", "2g", "512m"),
+            ("900m", "2g", "512m"),
+            ("512m", "1g", "256m"),
+            // Within budget: returned unchanged, including the exact quarter.
+            ("512m", "2g", "512m"),
+            ("256m", "2g", "256m"),
+            ("1g", "8g", "1g"),
+            ("65536k", "2g", "65536k"),
+            // Docker's explicit byte suffix must give the same cap as the equivalent `g` value.
+            ("1g", "1073741824b", "256m"),
+            ("1073741824b", "2g", "512m"),
+            ("256m", "1073741824b", "256m"),
+        ] {
+            assert_eq!(
+                cap_trace_limit_to_memory(limit, mem),
+                expected,
+                "{limit} against {mem}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unparsable_size_leaves_the_trace_limit_alone() {
+        // Docker rejects an unusable --memory itself; shrinking the trace because the memory
+        // limit cannot be read would be a silent, wrong narrowing.
+        for (limit, mem) in [("1g", "not-a-size"), ("not-a-size", "2g"), ("1g", "")] {
+            assert_eq!(
+                cap_trace_limit_to_memory(limit, mem),
+                limit,
+                "{limit}/{mem}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_trace_limit_fits_the_default_memory_limit() {
+        // If this ever stops holding, every default scan would start with a warning.
+        assert_eq!(
+            cap_trace_limit_to_memory(DEFAULT_TRACE_LIMIT, "2g"),
+            DEFAULT_TRACE_LIMIT
+        );
+    }
+
+    #[test]
     fn trace_limits_are_read_from_the_environment_and_validated() {
-        // One guard holds the environment lock (and removes the variable again on drop).
-        let _guard = SandboxEnvVarGuard::remove("GYRSEEK_TRACE_LIMIT");
-        assert_eq!(sandbox_trace_limit(None), "1024m");
+        // ONE guard holds the environment lock and restores both variables on drop. A second
+        // guard would deadlock against the first, since every constructor takes the same lock.
+        // The memory limit is high so the quarter-of-memory cap never binds here: this test is
+        // about precedence and validation, and the cap has its own tests below. An empty
+        // `GYRSEEK_TRACE_LIMIT` takes the same branch as an unset one in `sandbox_trace_limit`.
+        let _guard = SandboxEnvVarGuard::set_many(&[
+            ("GYRSEEK_MEM_LIMIT", "64g"),
+            ("GYRSEEK_TRACE_LIMIT", ""),
+        ]);
+        assert_eq!(sandbox_trace_limit(None), DEFAULT_TRACE_LIMIT);
         // The config value applies when the environment says nothing, and so does the default
         // when the config value is not a size.
         assert_eq!(sandbox_trace_limit(Some("512m")), "512m");
         assert_eq!(sandbox_trace_limit(Some(" 1g ")), "1g");
         for bad in ["abc", "0", "12x", ""] {
-            assert_eq!(sandbox_trace_limit(Some(bad)), "1024m", "{bad:?}");
+            assert_eq!(
+                sandbox_trace_limit(Some(bad)),
+                DEFAULT_TRACE_LIMIT,
+                "{bad:?}"
+            );
         }
         // The environment wins over the config; an invalid environment value falls back to the
         // config (then the default) with a warning.
@@ -2401,11 +2569,11 @@ mod tests {
             (" 1g ", None, "1g"),
             ("65536k", None, "65536k"),
             ("1g", Some("512m"), "1g"),
-            ("not-a-size", None, "1024m"),
+            ("not-a-size", None, DEFAULT_TRACE_LIMIT),
             ("not-a-size", Some("512m"), "512m"),
             ("0", Some("2g"), "2g"),
             ("", Some("512m"), "512m"),
-            ("", None, "1024m"),
+            ("", None, DEFAULT_TRACE_LIMIT),
         ] {
             unsafe { std::env::set_var("GYRSEEK_TRACE_LIMIT", value) };
             assert_eq!(

@@ -47,7 +47,7 @@ GYRSEEK_CONFIG=./security-policy.yaml ./target/release/gyrseek npm install
 | `import_scan`                 | `true`        | Load each installed package in the sandbox after its install and compare what that does (see the import-time scan above). `false` turns it off, like `--no-import-scan`. |
 | `import_timeout_seconds`      | `300`         | Wall-clock limit (seconds) for loading one package. A load that exceeds it blocks the package as `import_failed`. `0` falls back to `300`. |
 | `import_*_allowlist`          | empty         | `import_ip_allowlist`, `import_domain_allowlist`, `import_git_clone_allowlist`, `import_process_exec_allowlist`, `import_artifact_allowlist`, `import_sensitive_file_access_allowlist`: the same formats and validation as the install-time keys, applied only to behaviour at import time. |
-| `trace_limit`                 | `1024m`       | Size of the root-only tmpfs that holds one install probe's trace (the largest trace accepted for a probe); a probe that fills it is blocked on its own. A size such as `512m`, `2g` or `65536k`. The `GYRSEEK_TRACE_LIMIT` environment variable overrides it. The tmpfs counts against the container memory limit (`GYRSEEK_MEM_LIMIT`, default `2g`), so keep the two in proportion. |
+| `trace_limit`                 | `512m`        | Size of the root-only tmpfs that holds one install probe's trace (the largest trace accepted for a probe); a probe that fills it is blocked on its own. A size such as `512m`, `2g` or `65536k`. The `GYRSEEK_TRACE_LIMIT` environment variable overrides it. The tmpfs counts against the container memory limit (`GYRSEEK_MEM_LIMIT`, default `2g`), so keep the two in proportion. The tmpfs is memory-backed and counts against `GYRSEEK_MEM_LIMIT`, so an effective value above a quarter of that limit is capped to it with a warning: a larger trace would leave the install too little memory and risk the whole batch being OOM-killed instead of one package blocked. Raise `GYRSEEK_MEM_LIMIT` to allow a larger trace. |
 | `release_burst_window_hours`  | `24`          | Lookback window (hours) for the burst checker.                                                                                                                                                                                                                 |
 | `process_exec_allowlist`      | empty         | Process-execution signatures (`bun\|run\|build`) or bare executables (`bun`) that are allowed **per package** even when newly introduced. All executables are monitored by default; only signatures in this list escape the fail-closed diff. Sandbox harness commands are always excluded. |
 
@@ -106,7 +106,7 @@ probe_timeout_seconds: 300
 import_timeout_seconds: 300   # optional; import_scan: false (or --no-import-scan) skips loading packages
 import_process_exec_allowlist:
   some-package: ["ldconfig|-p"]   # allowed when the package is loaded, not when it is installed
-trace_limit: 1024m             # optional; GYRSEEK_TRACE_LIMIT overrides
+trace_limit: 512m              # optional; GYRSEEK_TRACE_LIMIT overrides; capped at a quarter of GYRSEEK_MEM_LIMIT
 python_version: "3.12"        # optional; otherwise .python-version / pyproject.toml, then 3.13
 node_version: "22"            # optional; otherwise .nvmrc / .node-version / engines.node, then 26
 ```
