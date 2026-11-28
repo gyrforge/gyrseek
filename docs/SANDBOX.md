@@ -45,7 +45,7 @@ CI covers macOS only in part: the `(macOS) Build and test without Docker` job bu
 | `GYRSEEK_TRACE_LIMIT`                                          | `1024m`                 | Size of the root-only tmpfs that holds one probe's trace (the largest trace accepted); a probe that fills it is blocked. Overrides `trace_limit` in `gyrseek.yaml`. |
 | `GYRSEEK_MAX_PROCESSES`                                        | `256`                   | Container process limit for probes. `GYRSEEK_PIDS_LIMIT` is accepted as a fallback. |
 
-In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency.
+In prebuilt mode, runtime setup (`apt-get`, Python `uv` bootstrapping, `corepack enable pnpm`) is skipped to reduce hot-path latency. Setting an image variable does **not** imply prebuilt mode; the two are independent. If you supply your own image, read [Custom scanner images](#custom-scanner-images) for what it must contain.
 
 #### Python and Node version for the sandbox
 
@@ -65,6 +65,111 @@ The sandbox runs on the Python or Node your project uses, so the wheels, depende
 A file naming one version (`3.11`, `3.11.4`, `cpython-3.11.4`, `v22.1.0`, `22`) selects that Python minor or Node major. A range (`>=3.9,<3.13`, Poetry's `^3.9` / `~3.10` / `3.11.*` / `^3.9 || ^3.10`, npm's `>=18 <23` / `^20.9.0 || ^22` / `20.x`) selects the **default if it fits, otherwise the closest supported version below it, otherwise the closest above**. For example `>=3.9` gives 3.13, `>=3.9,<3.13` gives 3.12 and `<3.11` gives 3.10. Newer Pythons have fewer wheels for older releases, so staying near the default is the safer choice.
 
 Supported versions: **Python 3.10, 3.11, 3.12, 3.13, 3.14** and **Node 20, 22, 24, 26**. Each is a digest-pinned image built into gyrseek, so a project file can only choose from this list, never name an arbitrary image. Anything unusable (`pypy3.10`, `system`, `lts/*`, `3.8`, a range that allows none of the supported versions, a hyphen range such as `16 - 18`, or a range gyrseek cannot parse) is ignored with a warning and the default is used. An unsupported value in the config file is an error instead. Only the runtime being scanned is read: an npm run ignores `.python-version` and the reverse. To build a prebuilt image for a version, pass `--build-arg PYTHON_BASE=<image>` to `docker/Dockerfile.python` or `--build-arg NODE_BASE=<image>` to `docker/Dockerfile.npm`.
+
+## Custom scanner images
+
+`GYRSEEK_NPM_SCANNER_IMAGE` and `GYRSEEK_PY_SCANNER_IMAGE` replace the digest-pinned default image
+for that manager. Use them for an internal base image, a runtime version the built-in table does not
+offer, or a registry your network can actually reach. The image must be able to install packages
+*and* to be traced while it does.
+
+### The bare minimum
+
+| Needed | Why | Checked? |
+| --- | --- | --- |
+| `node`, or `python3`/`python` | Runs the package manager and the file inventory after each install | ✅ exit 126, names the runtime |
+| `strace` | Produces every trace; without it gyrseek observes nothing | ✅ exit 126, names the program |
+| `timeout` (GNU coreutils) | Enforces `probe_timeout_seconds` and `import_timeout_seconds` | ✅ exit 126 |
+| `base64`, `df`, `tr`, `cut` | Stream each probe's files out of the root-only trace tmpfs | ✅ exit 126 |
+| The **probe installer**: `npm`, `pnpm`, or `uv` | Performs the install being traced | ✅ exit 126, names the program |
+| A `gyrseek` user, or `useradd`/`adduser` to create one | The traced install is dropped to it (`strace -u gyrseek`) | ✅ exit 126 — checked by outcome, so an image that already ships the user needs neither tool |
+| Network access to the registry | Resolves and downloads the versions being probed | ❌ not checked — surfaces as `install_failed` carrying the package manager's own network error, and blocks only that package |
+
+A failure in any of the checked rows stops the container with **exit 126** and a message naming what
+is missing and the variable that selected the image, rather than producing a trace-less probe whose
+cause has to be guessed. Exit 126 aborts the **whole batch**, not one package, which is right for
+these: an image that cannot be traced in fails every probe identically, so blocking packages one at
+a time would just repeat the same fault N times with advice to report a bug.
+
+Network access is deliberately **not** prechecked. A package manager reports a network failure
+clearly and attributes it correctly (`ENOTFOUND registry.npmjs.org`, `Could not connect`), and
+`install_failed` prints that output verbatim, so a gyrseek-level "no network" message would restate
+it less precisely. A precheck would also be worse than it looks: it aborts the whole container, so one
+blip would block an entire lockfile batch instead of a single package; connectivity at setup says
+nothing about connectivity during probe twelve; and it would mean adding `curl` or `wget` to the list
+above, invalidating more images for no detection gain.
+
+**The host needs registry access too.** Before any container starts, gyrseek fetches each package's
+version history from the public registry to pick the baselines. A network policy that permits the
+host but not the probe container is the one setup where the failure is genuinely confusing: the scan
+gets as far as choosing versions, then every probe fails to install. If you run gyrseek behind a
+proxy or an allowlisted egress, make sure the container's network can reach the same registries
+(`registry.npmjs.org`, `pypi.org`, `files.pythonhosted.org`), not just the host.
+
+**The probe installer is not always the manager you typed.** gyrseek probes every Python manager with
+`uv pip install`, so a Python scanner image needs `uv` and needs **neither `pip` nor `poetry`** — the
+manager you run on the host is a separate thing from the one the sandbox installs with:
+
+| Your command | Probe installs with | The image needs |
+| --- | --- | --- |
+| `pip`, `pip3`, `uv`, `poetry` | `uv pip install --target /work` | `uv` (and `python3`/`python`) |
+| `npm` | `npm install --prefix /work` | `npm` (and `node`) |
+| `pnpm` | `pnpm add --dir /work` | `pnpm` (and `node`) |
+
+On the non-prebuilt path gyrseek supplies `uv` (`python -m pip install uv`) and `pnpm`
+(`corepack enable pnpm`, falling back to `npm install -g pnpm`) itself, so only a prebuilt image has
+to ship them. That is also why the check runs after setup rather than before it.
+
+### The part people get wrong
+
+**Setting a custom image does not imply prebuilt mode.** `GYRSEEK_*_SCANNER_IMAGE` and
+`GYRSEEK_*_SCANNER_PREBUILT` are independent. With the image set and prebuilt *unset* (the default),
+gyrseek still runs its own setup inside your image on every container:
+
+```sh
+apt-get update
+apt-get install -y --no-install-recommends strace ca-certificates
+# plus, per manager:
+python -m pip install --quiet uv          # pip, uv, poetry
+corepack enable pnpm || npm install -g pnpm   # pnpm
+```
+
+So a Debian- or Ubuntu-based image needs nothing but the interpreter and the package manager —
+gyrseek installs `strace` for you. In exchange every probe container pays an `apt-get` run and needs
+network access to the Debian archive.
+
+An image that is **not** Debian-based (Alpine, RHEL/UBI, distroless, or anything without `apt-get`)
+cannot take that path: the setup aborts. Build those as prebuilt images instead, with everything in
+the table already present:
+
+```sh
+export GYRSEEK_NPM_SCANNER_IMAGE=registry.example.com/gyrseek-npm@sha256:...
+export GYRSEEK_NPM_SCANNER_PREBUILT=true
+```
+
+Prebuilt mode skips the setup entirely, which is also why it is the faster path. Note that
+`musl`-based images (Alpine) are a poor fit for the Python side regardless: many wheels are built for
+`manylinux` and will be compiled from source or fail.
+
+### Checking an image before you rely on it
+
+```sh
+img=registry.example.com/gyrseek-npm:latest
+docker run --rm "$img" sh -c '
+  for p in strace timeout base64 df tr cut node npm; do
+    command -v "$p" >/dev/null 2>&1 || echo "MISSING: $p"
+  done; echo checked'
+```
+
+Then run one real scan of a package you know is clean and confirm it is cleared rather than blocked.
+A trace-less probe blocks only the package it belongs to, so a deficient image shows up as every
+package being blocked, not as a silent pass — gyrseek fails closed either way.
+
+### Pin it by digest
+
+A custom image selected by a mutable tag can change under you between probes, which shows up as
+baseline drift rather than as an image problem. Pin the digest, as the built-in defaults do, and see
+[5) Use pinned image digests](#5-use-pinned-image-digests-recommended-for-reproducibility).
 
 ## Prebuilt Scanner Images
 

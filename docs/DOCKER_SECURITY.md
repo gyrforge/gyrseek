@@ -26,6 +26,18 @@ If a probe fills the tmpfs (under 1% or 16 KiB left), its trace is incomplete: t
 
 This replaced writing the logs straight into a bind-mounted `/out` (FIXED #411, #434 and #461): on Docker Desktop for macOS that mount does not enforce in-container ownership. `just test-trace-integrity` runs a real container with a payload that tries to write, truncate, delete and symlink over the traces (also an earlier probe's and the directory itself) and to print a forged frame on stdout, next to a failing probe and a timed-out one, and a payload that floods its trace; with the logs put back in a bind mount the first test fails on macOS. It checks every trace and marker arrives intact and that only the flooding probe is blocked.
 
+### Scanner image requirements
+
+Before any probe runs, the container checks that the image can actually be traced in: `strace`,
+`timeout`, `base64`, `df`, `tr`, `cut` and the manager's probe installer (`npm`, `pnpm` or `uv`) must
+be present, and the unprivileged `gyrseek` user must exist or be creatable. A failure exits **126**
+with a message naming what is missing and the environment variable that selected the image, and
+aborts the batch — an image that cannot be traced in fails every probe identically, so blocking
+packages one at a time would repeat the same fault. Both checks run after the setup steps, so the
+`strace` gyrseek installs itself on the non-prebuilt path counts; what is validated is the state the
+probes run in. See [Custom scanner images](SANDBOX.md#custom-scanner-images) for the full list and
+what is not checked.
+
 ### Probe batching
 
 The Docker backend batches multiple package-version probes (current + baselines for each package) into a single container session while preserving per-package, per-version trace attribution.
