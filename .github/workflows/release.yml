@@ -27,6 +27,9 @@ env:
   # the two differ, so a release is never built with another compiler than the
   # one that passed the tests.
   RUST_VERSION: "1.100.0"
+  # cargo-deb builds the .deb from the [package.metadata.deb] block in Cargo.toml. Pinned
+  # like every other tool here, so a new release of it cannot change what we publish.
+  CARGO_DEB_VERSION: "3.8.0"
 
 jobs:
   verify:
@@ -223,11 +226,52 @@ jobs:
             ldd "$bin"
           fi
 
+      # Debian package, for the Linux targets only. cargo-deb derives the glibc and OpenSSL
+      # dependencies with dpkg-shlibdeps, so it has to run on Linux; it rewrites the
+      # `target/release/` asset paths in Cargo.toml to this target's directory.
+      - name: Build the Debian package
+        if: runner.os == 'Linux'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cargo install cargo-deb --version "$CARGO_DEB_VERSION" --locked
+          cargo deb --target "$TARGET" --no-build --output dist/
+
+      # The package must install and run on a clean image of the oldest glibc we support,
+      # which is what the dependency fields are there to guarantee.
+      - name: Install and run the Debian package
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          deb=$(ls dist/*.deb)
+          # Lintian checks Debian policy (a wrapped synopsis, a bad section, a missing
+          # copyright file); it is advisory here, so its findings are printed, not fatal.
+          sudo apt-get install -y lintian
+          lintian --no-tag-display-limit "$deb" || echo "::warning::lintian reported findings (advisory)"
+          sudo apt-get install -y "./$deb"
+          out=$(gyrseek --version)
+          if [ "$out" != "gyrseek $version" ]; then
+            echo "::error::the installed package reports '$out', expected 'gyrseek $version'"
+            exit 1
+          fi
+          deps=$(dpkg-deb -f "$deb" Depends)
+          if [ -z "$deps" ]; then
+            echo "::error::the package has an empty Depends: dpkg-shlibdeps resolved nothing"
+            exit 1
+          fi
+          echo "Depends: $deps"
+          dpkg-deb -f "$deb" Recommends
+          sudo apt-get remove -y gyrseek
+
       - name: Upload the archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-${{ matrix.target }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
           if-no-files-found: error
           retention-days: 7
 
@@ -260,7 +304,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          sha256sum gyrseek-*.tar.gz > SHA256SUMS
+          sha256sum gyrseek-*.tar.gz gyrseek_*.deb > SHA256SUMS
           cat SHA256SUMS
 
       - name: Attest the provenance
@@ -289,5 +333,5 @@ jobs:
           # so that a failure while uploading never leaves a public release
           # that lacks files.
           gh release create "$TAG" --verify-tag --draft --title "$TAG" --generate-notes \
-            dist/gyrseek-*.tar.gz dist/SHA256SUMS
+            dist/gyrseek-*.tar.gz dist/gyrseek_*.deb dist/SHA256SUMS
           gh release edit "$TAG" --draft=false

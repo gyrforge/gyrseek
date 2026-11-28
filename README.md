@@ -37,7 +37,7 @@ Our goal is not to compete with existing vendors. Instead, we want to give open 
 
 The tool works out of the box and requires no proxy configuration, as long as Docker is installed. A `host` mode exists, but it provides **no protection, only detection**: every probe, including the candidate version being vetted, runs the package's install scripts directly on your machine with your user's files, credentials and environment variables, before `gyrseek` can say anything. A block only stops the follow-up real install; it cannot undo what the probe already ran. Run it only in a **very isolated** situation: a disposable environment (throwaway VM or ephemeral CI runner) that holds no secrets or credentials and has no route to internal networks, where that environment itself is the sandbox. Never on a developer laptop or any machine with real credentials.
 
-We welcome feedback and suggestions to this repository.
+We welcome feedback and suggestions to this repository. For anything that is not a public issue or pull request, reach us at **gyrforge@outlook.com**; for a suspected vulnerability in gyrseek itself, use that address rather than an issue and see [SECURITY.md](SECURITY.md).
 
 ## Quick Start
 
@@ -116,7 +116,29 @@ gyrseek --version                                                  # prints: gyr
 
 Without `gh`, download the same files from the Releases page; the hash check works without it. For a CI runner, pin the version and the expected SHA-256 in your own pipeline instead of trusting whatever the download returns. The archive holds `gyrseek`, `LICENSE`, `NOTICE` and `README.md`.
 
-### 2c. Or install with Homebrew (macOS and Linux)
+### 2c. Or install the Debian package (Debian and Ubuntu)
+
+Releases from `v1.4.5` onward also have a `.deb` for each Linux architecture, built from the same binary as the archive above and listed in the same `SHA256SUMS`. Earlier releases are immutable and have archives only.
+
+Verify, then install (replace the version):
+
+```bash
+v=1.4.5
+a=$(dpkg --print-architecture)          # amd64 or arm64
+gh release download "v$v" --repo gyrforge/gyrseek -p "gyrseek_${v}-1_${a}.deb" -p SHA256SUMS
+sha256sum --ignore-missing -c SHA256SUMS                           # matches the published hash
+gh attestation verify "gyrseek_${v}-1_${a}.deb" --repo gyrforge/gyrseek   # built by this repository's release workflow
+sudo apt install "./gyrseek_${v}-1_${a}.deb"
+gyrseek --version                                                  # prints: gyrseek 1.4.5
+```
+
+Without `gh`, download the same files from the Releases page; the hash check works without it.
+
+`apt` resolves the glibc and OpenSSL dependencies, which is the difference from unpacking the archive by hand, and `apt` also pulls in `docker.io` because the package recommends it; pass `--no-install-recommends` if you already run Docker from another source (Docker CE, rootless, or a remote daemon). Same platform requirements as the archives: glibc 2.35 or newer with OpenSSL 3, so Ubuntu 22.04, Debian 12 or newer.
+
+This is a package *file*, not an apt repository: `apt upgrade` will not update it, so repeat the command for a new version. gyrseek is **not** in the official Debian or Ubuntu archives, so `apt install gyrseek` with no path will not find it.
+
+### 2d. Or install with Homebrew (macOS and Linux)
 
 ```bash
 brew tap gyrforge/gyrseek
@@ -280,6 +302,7 @@ See [docs/DOCKER_SECURITY.md](docs/DOCKER_SECURITY.md) for the canonical referen
 | [docs/RELEASING.md](docs/RELEASING.md) | Step by step: version bump, PR, tag, publish, verify, and the action and Homebrew follow-ups |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Control flow, components, CI/CD, threat model, contributor workflow |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Planned improvements |
+| [SECURITY.md](SECURITY.md) | How to report a vulnerability in gyrseek, and what is in and out of scope |
 | [AGENTS.md](AGENTS.md) | Repository memory and the mandatory update policy for contributors and agents |
 
 > **Repository policy:** after each change, update both `AGENTS.md` and `README.md`.
