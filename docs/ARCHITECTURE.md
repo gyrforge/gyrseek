@@ -194,7 +194,7 @@ New skills added under `.agents/skills/` are automatically picked up by all tool
 After every repository change:
 1. Update AGENTS.md (repository memory).
 2. Update README.md (user-facing docs).
-3. Update docs/ files (ARCHITECTURE.md, ROADMAP.md, OPEN_FINDINGS.md, FIXED_FINDINGS.md, WONT_FIX_FINDINGS.md, DOCKER_SECURITY.md) if architecture or workflow changed.
+3. Update docs/ files (ARCHITECTURE.md, ROADMAP.md, DOCKER_SECURITY.md) if architecture or workflow changed.
 4. Run `graphify update .` to refresh graph artifacts (or `graphify update . --force` if guard warns).
 5. Run `just test` before finishing.
 6. Run `just lint` — cargo check, formatting, and clippy.

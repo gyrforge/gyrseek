@@ -44,7 +44,7 @@
 
 - **Post-install interpreter trigger** — exercise the package's import/startup path inside the sandbox to catch deferred payloads. Covers two patterns:
   - Module-scope code (Telnyx T26, `mistralai` T32): **done** (FIXED #25, `import_scan`): the package's top-level modules are loaded after the install and diffed against the baselines' loads, for Python and Node.
-  - `.pth`-based (Hades/Miasma T1, LiteLLM T25): `*-setup.pth` auto-executes on next Python interpreter startup. Still open (OPEN #489): call `site.addsitedir` before the import so `.pth` files run under strace.
+  - `.pth`-based (Hades/Miasma T1, LiteLLM T25): `*-setup.pth` auto-executes on next Python interpreter startup. Still open (OPEN #489): exercise `.pth` startup hooks during the scan.
   - Further import-time coverage: every submodule of the distribution (OPEN #488, #493), a static diff of the installed source (OPEN #491), host mode (OPEN #490).
 - **Direct git clone runtime interception** — parse `git clone` commands, trace install-time clone behavior, and fail closed on new targets. Phases: command parser support → interception pipeline → baseline model → policy controls → test coverage.
 - **Enhanced generated-file comparison** — layer SHA-256 hashing then semantic-aware diff on top of the current artifact inventory for high-risk file types (shell scripts, JS/TS, Python, lockfiles, manifests). Phases: file inventory diff → content-hash comparison → deterministic normalization → semantic diff → policy controls → integration tests.
@@ -53,7 +53,7 @@
 
 - Prebuilt scanner images as the default path — unblocks read-only rootfs, tighter capability drops, and stronger seccomp/apparmor defaults (see [`DOCKER_SECURITY.md`](DOCKER_SECURITY.md)).
 - Improve resilience to strace output variations.
-- Optional egress mediation/proxy mode for runtime scans (after no-execution-first stable) — logs full URLs (path-level visibility across registries) with allow/block policy, and checks Docker bridge reach into private ranges (OPEN_FINDINGS #412).
+- Optional egress mediation/proxy mode for runtime scans (after no-execution-first stable) — logs full URLs (path-level visibility across registries) with allow/block policy, and checks Docker bridge reach into private ranges (OPEN #412).
 - Provenance and integrity gates — trusted registry policy, digest/signature verification where available.
 
 ### Reliability & UX

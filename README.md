@@ -280,7 +280,6 @@ See [docs/DOCKER_SECURITY.md](docs/DOCKER_SECURITY.md) for the canonical referen
 | [docs/RELEASING.md](docs/RELEASING.md) | Step by step: version bump, PR, tag, publish, verify, and the action and Homebrew follow-ups |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Control flow, components, CI/CD, threat model, contributor workflow |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Planned improvements |
-| [docs/OPEN_FINDINGS.md](docs/OPEN_FINDINGS.md), [FIXED](docs/FIXED_FINDINGS.md), [WONT_FIX](docs/WONT_FIX_FINDINGS.md) | Security and correctness findings logs |
 | [AGENTS.md](AGENTS.md) | Repository memory and the mandatory update policy for contributors and agents |
 
 > **Repository policy:** after each change, update both `AGENTS.md` and `README.md`.

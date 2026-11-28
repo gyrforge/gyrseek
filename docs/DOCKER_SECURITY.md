@@ -14,7 +14,7 @@ Docker is the sandbox. Host mode, which has no isolation and only detects, must 
 
 - **`--cap-add SYS_PTRACE`** — `strace` runs as root but attaches to the install process running as an unprivileged scanner user (`strace -u gyrseek`). Cross-UID ptrace requires `CAP_SYS_PTRACE`, which Docker does not grant by default. Scoped to the container's own PID namespace; cannot trace host processes. Without it, `strace` fails with `ptrace(PTRACE_SEIZE): Operation not permitted`, which produces an empty trace and the scan fails closed.
 - **`--security-opt no-new-privileges`** — prevents the container process from gaining additional privileges.
-- **Resource and filesystem limits** — `--network bridge`, `--pids-limit` (`GYRSEEK_MAX_PROCESSES`, default 256), `--memory` (`GYRSEEK_MEM_LIMIT`, default `2g`), `--cpus 1`, and tmpfs mounts for `/tmp` (`noexec,nosuid,nodev`) and `/work` (`exec,nosuid,nodev`), both sized like the memory limit. `/work` allows execution because install scripts run the binaries their package ships (esbuild, bcrypt) and C extensions load from it, as in a real install; a payload can therefore run a binary it drops there, which the exec trace and the artifact inventory report (FIXED #425; the accepted risk and the alternatives that were turned down are in WONT_FIX_FINDINGS #480). On a `noexec` mount even the dynamic loader cannot map a dropped ELF, which is why `/tmp` keeps it. The container runs as `--user root`; the traced install is dropped to the unprivileged `gyrseek` user by `strace -u`.
+- **Resource and filesystem limits** — `--network bridge`, `--pids-limit` (`GYRSEEK_MAX_PROCESSES`, default 256), `--memory` (`GYRSEEK_MEM_LIMIT`, default `2g`), `--cpus 1`, and tmpfs mounts for `/tmp` (`noexec,nosuid,nodev`) and `/work` (`exec,nosuid,nodev`), both sized like the memory limit. `/work` allows execution because install scripts run the binaries their package ships (esbuild, bcrypt) and C extensions load from it, as in a real install; a payload can therefore run a binary it drops there, which the exec trace and the artifact inventory report (FIXED #425; the accepted risk and the alternatives that were turned down are in WONT_FIX #480). On a `noexec` mount even the dynamic loader cannot map a dropped ELF, which is why `/tmp` keeps it. The container runs as `--user root`; the traced install is dropped to the unprivileged `gyrseek` user by `strace -u`.
 - **Read-only rootfs not enabled** — the runtime apt-based probe tooling setup requires a writable root filesystem. Prebuilt scanner images unblock `--read-only` rootfs (see [Prebuilt Scanner Images](#prebuilt-scanner-images)).
 - **Capabilities not fully dropped** — apt-based setup (used in the non-prebuilt path) fails under a full capability drop.
 
@@ -24,7 +24,7 @@ The traced install payload runs as an unprivileged in-container user (`strace -u
 
 If a probe fills the tmpfs (under 1% or 16 KiB left), its trace is incomplete: the script prints `GYRSEEK-LIMIT <idx>` instead of its files and that package is blocked on its own, with a message naming `GYRSEEK_TRACE_LIMIT` (the next probe gets an empty tmpfs). Traces in practice are a few MB (an npm install) to about 40 MB (a failing source build of a large Python package). The tmpfs counts against the container's memory limit (`GYRSEEK_MEM_LIMIT`).
 
-This replaced writing the logs straight into a bind-mounted `/out` (OPEN_FINDINGS #411, #434 and #461, all fixed): on Docker Desktop for macOS that mount does not enforce in-container ownership, so a payload (uid 1000, no capabilities) deleted and rewrote its trace and an earlier probe's, and could write as much as it liked to the host's disk. `just test-trace-integrity` runs a real container with a payload that tries to write, truncate, delete and symlink over the traces (also an earlier probe's and the directory itself) and to print a forged frame on stdout, next to a failing probe and a timed-out one, and a payload that floods its trace; with the logs put back in a bind mount the first test fails on macOS. It checks every trace and marker arrives intact and that only the flooding probe is blocked.
+This replaced writing the logs straight into a bind-mounted `/out` (FIXED #411, #434 and #461): on Docker Desktop for macOS that mount does not enforce in-container ownership. `just test-trace-integrity` runs a real container with a payload that tries to write, truncate, delete and symlink over the traces (also an earlier probe's and the directory itself) and to print a forged frame on stdout, next to a failing probe and a timed-out one, and a payload that floods its trace; with the logs put back in a bind mount the first test fails on macOS. It checks every trace and marker arrives intact and that only the flooding probe is blocked.
 
 ### Probe batching
 
@@ -180,7 +180,7 @@ neither profile addresses them:
 
 Hardening the container does nothing for either. The marginal security for this threat model comes from
 egress control and from covering the execution window — what the post-install artifact scan
-partly addresses and a future egress proxy would (OPEN_FINDINGS #412) — not from adding AppArmor.
+partly addresses and a future egress proxy would (OPEN #412) — not from adding AppArmor.
 
 ### Practical guidance
 
@@ -242,13 +242,13 @@ Docker mode is not "weaker on macOS because it lacks seccomp and AppArmor". Secc
 | Trace integrity | Traces live in a root-only, size-limited tmpfs and reach the host on stdout, with no host mount | Same | Measured on macOS (`just test-trace-integrity`); the CI Docker job runs it on Linux |
 | Container escape blast radius | The container shares the host kernel, so an escape lands on the host | An escape lands in Docker Desktop's VM first, which is an extra boundary | Documented, not measured |
 | `noexec` on `/tmp` (not `/work`, FIXED #425) | Same | Works there, but a dropped binary can still run from `/home/gyrseek` or `/var/tmp` (measured: a copied ELF and a shebang script both ran). The artifact inventory therefore also lists `/home/gyrseek`, `/var/tmp`, `/run/lock` and `/dev/shm`, reports any file found there as `dropped_file`, and the reset between probes empties them (FIXED #471) | Measured on macOS |
-| Network egress during the probe | Open | Open. Private-address reach is unmeasured on both (OPEN_FINDINGS #412) | Measured (open), not tested (private addresses) |
+| Network egress during the probe | Open | Open. Private-address reach is unmeasured on both (OPEN #412) | Measured (open), not tested (private addresses) |
 | Probe time limit | 300s per probe, `probe_timeout_seconds` (FIXED #413) | 300s per probe, `probe_timeout_seconds` (FIXED #413) | Measured on macOS; not run on native Linux |
 | CI coverage | Yes (`ubuntu-latest` jobs) | None. GitHub-hosted macOS runners cannot run Docker. Tested by hand only | Documented |
 
 What this means in practice:
 
-- Treat the macOS trace as less trustworthy than the Linux one until #411 is fixed. A malicious package that knows about gyrseek could hide earlier events.
+- The trace is as trustworthy on macOS as on Linux: the same root-only tmpfs and frame stream carry it (FIXED #411).
 - Containment of the host is at least as good on macOS as on Linux, probably better, because of the VM.
 - Neither platform restricts what the payload can reach over the network during the probe.
 - WSL2 is a Linux target for gyrseek and has not been tested (see "Hardening availability per platform").
@@ -281,11 +281,11 @@ Digest pinning is recommended for reproducibility and supply-chain integrity.
 - Container setup and `strace` run as root (though the traced payload runs unprivileged via `strace -u`).
 - Full `--read-only` rootfs is not enabled.
 - Capabilities are not fully dropped, and `SYS_PTRACE` is explicitly added.
-- Outbound network is enabled so package managers can reach registries during probes. A malicious package running during the probe can download and run a 2nd stage, or send data to any host, from inside the container; only decoy secrets are present, but the container acts from the host's IP. Whether the container can reach private addresses (LAN, `host.docker.internal`) is unmeasured (OPEN_FINDINGS #412).
+- Outbound network is enabled so package managers can reach registries during probes, and it is not restricted to them; only decoy secrets are present in the container. Whether the container can reach private addresses (LAN, `host.docker.internal`) is unmeasured (OPEN #412).
 - The Python (3.10–3.14) and Node (20, 22, 24, 26) sandbox images are chosen from built-in tables of digest-pinned images using the config or the project's version files; a project file cannot name an arbitrary image. See the [SANDBOX.md](SANDBOX.md) section "Python and Node version for the sandbox".
-- A package that must be built from source cannot be built in the sandbox: the default image has no C compiler and `/tmp` stays `noexec`, so a build that runs a program from `/tmp` fails there even in a custom image that has a compiler (a custom image may differ in the first respect only). A package for which no prebuilt binary exists for the sandbox's Python or Node (bcrypt 5.0.1 on Node 26) is blocked as `install_failed` (OPEN_FINDINGS #479). Setting `python_version` or `node_version` to a release with prebuilt binaries is the workaround. Packages that ship or download a prebuilt binary scan normally (esbuild, scipy, bcrypt 6).
-- Each probe is limited to `probe_timeout_seconds` (default 300) of wall-clock time; an expired probe blocks only that package (FIXED_FINDINGS #413, #422). The limit does not cover the setup phase (`apt-get` when the image is not prebuilt) or a hung Docker daemon. The container is `--rm`, so nothing survives the probe.
-- Trace integrity is not guaranteed on macOS Docker Desktop (OPEN_FINDINGS #411, see "Unprivileged payload integrity").
+- A package that must be built from source cannot be built in the sandbox: the default image has no C compiler and `/tmp` stays `noexec`, so a build that runs a program from `/tmp` fails there even in a custom image that has a compiler (a custom image may differ in the first respect only). A package for which no prebuilt binary exists for the sandbox's Python or Node (bcrypt 5.0.1 on Node 26) is blocked as `install_failed` (OPEN #479). Setting `python_version` or `node_version` to a release with prebuilt binaries is the workaround. Packages that ship or download a prebuilt binary scan normally (esbuild, scipy, bcrypt 6).
+- Each probe is limited to `probe_timeout_seconds` (default 300) of wall-clock time; an expired probe blocks only that package (FIXED #413, #422). The limit does not cover the setup phase (`apt-get` when the image is not prebuilt) or a hung Docker daemon. The container is `--rm`, so nothing survives the probe.
+- Trace integrity on macOS Docker Desktop is covered the same way as on Linux (FIXED #411, see "Unprivileged payload integrity").
 - Behavioral detection observes what runs during the sandbox install. Payloads designed to fire outside the install window (e.g. import-time Python hooks) may not detonate during the scan.
 
 **Why:** earlier stricter configs (read-only rootfs + full capability drop + non-root setup + network isolation) caused apt/setup failures and prevented package downloads during probes, rendering scans unable to run. Prebuilt scanner images are the path to restoring stricter defaults.
