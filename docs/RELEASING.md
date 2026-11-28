@@ -75,8 +75,8 @@ just tag
 `just tag` takes the version from `Cargo.toml`. It refuses unless `HEAD` is exactly `origin/main`, waits for the `ci.yml` run on that commit to pass, and refuses a tag `origin` already has. It then pushes `vX.Y.Z`, which starts `release.yml`:
 
 1. **`verify`**: the tag matches `Cargo.toml`, is on `main`, CI passed on it, and no release exists.
-2. **`build`**: the four archives (Linux x86_64 and ARM64, macOS Apple Silicon and Intel).
-3. **`release`**: waits for your approval. Open the run in the Actions tab, choose **Review deployments**, approve the `release` environment. It then writes `SHA256SUMS`, attests the archives, creates the release as a draft and publishes it. The release is immutable.
+2. **`build`**: the four archives (Linux x86_64 and ARM64, macOS Apple Silicon and Intel), plus a `.deb` for each Linux architecture. The Debian package is built by `cargo-deb` from the `[package.metadata.deb]` block in `Cargo.toml` (pinned by `CARGO_DEB_VERSION`), from the binary the job already built, and the job then runs `lintian` on it (advisory), installs it with `apt`, checks `gyrseek --version`, prints its resolved `Depends`/`Recommends` and removes it again.
+3. **`release`**: waits for your approval. Open the run in the Actions tab, choose **Review deployments**, approve the `release` environment. It then writes `SHA256SUMS` over the archives **and the `.deb` files**, attests them, creates the release as a draft and publishes it. The release is immutable.
 
 ## 6. Verify the release
 
@@ -86,7 +86,7 @@ repo=$(git rev-parse --show-toplevel)             # run this from inside your cl
 d=$(mktemp -d) && cd "$d"
 gh release download "v$v" --repo gyrforge/gyrseek
 shasum -a 256 -c SHA256SUMS                       # sha256sum -c on Linux
-for f in gyrseek-v$v-*.tar.gz; do gh attestation verify "$f" --repo gyrforge/gyrseek --signer-workflow gyrforge/gyrseek/.github/workflows/release.yml >/dev/null && echo "attested: $f"; done
+for f in gyrseek-v$v-*.tar.gz gyrseek_$v-1_*.deb; do gh attestation verify "$f" --repo gyrforge/gyrseek --signer-workflow gyrforge/gyrseek/.github/workflows/release.yml >/dev/null && echo "attested: $f"; done
 for f in gyrseek-v$v-*.tar.gz; do tar -tzf "$f" | sed 's#.*/##' | sort | tr '\n' ' '; echo; done   # LICENSE NOTICE README.md gyrseek, in each
 gh api repos/gyrforge/gyrseek/releases/tags/v$v --jq '{immutable,draft}'    # immutable true, draft false
 

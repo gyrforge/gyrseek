@@ -9,6 +9,10 @@ default:
 build:
     cargo build --release
 
+# Build the Debian package for this host (Linux only; needs `cargo install cargo-deb`)
+deb:
+    cargo deb
+
 # Auto format code
 fmt:
     cargo fmt

@@ -1,8 +1,44 @@
 [package]
 name = "gyrseek"
-version = "1.4.4"
+version = "1.4.5"
 edition = "2024"
 license = "Apache-2.0"
+description = "Block package installs that behave differently from previous versions"
+repository = "https://github.com/gyrforge/gyrseek"
+readme = "README.md"
+keywords = ["supply-chain", "security", "sandbox", "npm", "pypi"]
+categories = ["command-line-utilities", "development-tools"]
+
+# Debian package built by `just deb` and by the release workflow (cargo-deb reads this).
+# `cargo deb --target <triple>` rewrites the `target/release/` asset paths to that target's
+# directory, so the same block builds the amd64 and the arm64 package.
+[package.metadata.deb]
+# Goes into the control file of every published .deb, so this is a public address.
+maintainer = "Gyrforge <gyrforge@outlook.com>"
+section = "devel"
+priority = "optional"
+# Let cargo-deb derive the glibc and OpenSSL shared-library dependencies from the binary
+# (reqwest uses native-tls, so the package links OpenSSL 3 rather than bundling it).
+depends = "$auto"
+# gyrseek runs its probes in Docker. It is not `depends` because `--no-sandbox` runs without
+# a daemon, and because the daemon may come from docker-ce, podman-docker or a rootless
+# install that this package cannot name.
+recommends = "docker.io | docker-ce"
+extended-description = """\
+gyrseek wraps pip, uv, poetry, npm and pnpm. Before an install runs, it installs the target \
+version and a couple of older baseline versions in a Docker sandbox, traces each with strace, \
+and blocks the command when the new version does something the baselines never did: a new \
+network endpoint, a newly executed program, an install-time git clone, a read of a credential \
+file, or a suspicious file left behind. A clear result means no new install-time behaviour was \
+observed against the baselines; it does not mean the package is safe."""
+assets = [
+    ["target/release/gyrseek", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/gyrseek/README.md", "644"],
+    ["NOTICE", "usr/share/doc/gyrseek/NOTICE", "644"],
+]
+# Apache-2.0 section 4(d) keeps NOTICE with the binary; shipping it under
+# /usr/share/doc/gyrseek satisfies that for a .deb.
+license-file = ["LICENSE", "0"]
 
 [dependencies]
 tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "macros"] }
