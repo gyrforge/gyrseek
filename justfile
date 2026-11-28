@@ -9,6 +9,10 @@ default:
 build:
     cargo build --release
 
+# Scan the frozen 84-package lockfile in tests/scale (252 probes, 8 containers; needs Docker and the network)
+test-scale: build
+    tests/e2e/scale.sh
+
 # Build the Debian package for this host (Linux only; needs `cargo install cargo-deb`)
 deb:
     cargo deb

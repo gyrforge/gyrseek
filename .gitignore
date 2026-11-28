@@ -26,6 +26,14 @@ tests/pnpm/pnpm-lock.yaml
 node_modules/
 package-lock.json
 package.json
+# Committed test fixtures, not generated files. The bare patterns above match at any depth, and
+# git only ignores untracked files, so a fixture that is ever removed and re-added would silently
+# stop being tracked and CI would check out an incomplete fixture directory. Negate each one.
+!tests/scale/package.json
+!tests/scale/package-lock.json
+!tests/npm/package.json
+!tests/npm/package-lock.json
+!tests/pnpm/package.json
 
 # Graphify outputs: keep canonical artifacts, ignore run-state and cache files.
 graphify-out/*

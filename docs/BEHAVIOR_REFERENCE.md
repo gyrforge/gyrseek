@@ -14,6 +14,39 @@ Details worth knowing once you're past the basics.
 - After a clean scan of an unpinned (`latest`) **explicit install target**, the forwarded command is rewritten to pin the exact version that was examined, so the host installs the same version `gyrseek` scanned. Lockfile-driven flows (`uv sync`, `poetry install`, etc.) already carry pinned versions and are forwarded verbatim.
 - If baseline versions are unavailable, output may show `baseline-1=n/a` and `baseline-2=n/a`.
 
+## Scanning a whole lockfile
+
+A lockfile scan probes **every registry package the lockfile pins**, not just your direct dependencies, and each one is
+compared against `baseline_count` earlier versions. The work therefore scales with the resolved tree, which is usually
+far larger than the dependency list you wrote. Measured on a project declaring three dependencies (`express`, `axios`,
+`lodash`):
+
+| | |
+|---|---|
+| Direct dependencies declared | 3 |
+| Packages in `package-lock.json` | 84 |
+| Probes at `baseline_count: 2` | 252 |
+| Probe containers (32 probes each) | 8 |
+
+Published surveys put a typical npm project in the hundreds of resolved packages, with large trees past 700, so a real
+application is commonly 1,500–2,400 probes across 50–75 containers. Containers run one after another, not in parallel.
+
+**Expect the first scan of a lockfile to stop early.** Registry metadata is fetched per package before any container
+starts, and a package with fewer than `baseline_count` published versions fails the run closed with
+`insufficient_baselines`. Small, stable transitive dependencies routinely have only one or two releases: in the 84-package
+tree above, **8 of the 81 packages reached** hit this — `dunder-proto`, `es-define-property`, `get-proto`,
+`math-intrinsics`, `side-channel-list`, `side-channel-map`, `unpipe` and `utils-merge`. That is by design rather than a
+defect: too little history means there is nothing to compare against, which is the same position as a brand-new package,
+and gyrseek will not vouch for one. Vet each and add it to `new_package_exemptions` with the version you vetted. Because
+the failure happens in the metadata phase, each iteration is fast but you will discover them one at a time.
+
+**Use a prebuilt scanner image for lockfile scans.** On the default path every container runs `apt-get update` and
+`apt-get install strace` before its probes. That is tolerable once and wasteful fifty times over; see
+[Prebuilt Scanner Images](SANDBOX.md#prebuilt-scanner-images).
+
+**The trace tmpfs is not a scale constraint.** Each probe's files are streamed out and deleted before the next probe
+runs, so peak use is one probe's worth whether you scan one package or five hundred.
+
 **Per-command scanning scope**
 
 - `uv sync` scans all packages found in `uv.lock` before forwarding.
