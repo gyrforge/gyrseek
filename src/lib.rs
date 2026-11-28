@@ -945,7 +945,7 @@ mod config_tests {
         // the global list and the per-package list positions. It passes serde
         // parsing but domain_is_allowlisted never matches it (neither exact nor
         // ends_with(".*")), so silently keeping it would create a dead entry with
-        // no diagnostic — FIXED_FINDINGS.md #315.
+        // no diagnostic — FIXED #315.
         let yaml = concat!(
             "domain_allowlist:\n",
             "  - \"*\"\n", // global position
@@ -985,7 +985,7 @@ mod config_tests {
     fn domain_allowlist_empty_value_dropped_in_global_and_per_package_positions() {
         // An empty string or whitespace-only value normalizes to "" and must be
         // silently dropped (with a warning) in both global and per-package positions.
-        // FIXED_FINDINGS.md #328.
+        // FIXED #328.
         let yaml = concat!(
             "domain_allowlist:\n",
             "  - \"\"\n",   // global empty

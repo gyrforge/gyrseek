@@ -5935,7 +5935,7 @@ read(6, "\x00\x44\x00\x00\x81\x80\x00\x01\x00\x02\x00\x00\x00\x00\x03\x66\x6f\x6
     /// Drop runs on panic too, so a failing assertion can never leave the var set.
     /// The lock is recovered from poisoning (`into_inner`) so one panicking test
     /// does not cascade into PoisonError panics in every subsequent test —
-    /// closes FIXED_FINDINGS.md #13 without reintroducing the cross-test race.
+    /// closes FIXED #13 without reintroducing the cross-test race.
     struct EnvVarGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
         key: &'static str,
