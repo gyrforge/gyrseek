@@ -79,7 +79,7 @@ On Linux this also needs `pkg-config` and the OpenSSL development headers (`libs
 
 ### 2b. Or download a release (Linux and macOS)
 
-Each release (`vX.Y.Z`) on the [Releases page](https://github.com/gyrforge/gyrseek/releases) has an archive for each platform below and a `SHA256SUMS` file. There is no Windows build: on Windows, use WSL2 with the Linux archive.
+Each release (`vX.Y.Z`) on the [Releases page](https://github.com/gyrforge/gyrseek/releases) has an archive for each platform below, a `.deb` for each Linux architecture from `v1.4.5` onward (see [2c](#2c-or-install-the-debian-package-debian-and-ubuntu)), and a `SHA256SUMS` file covering all of them. There is no Windows build: on Windows, use WSL2 with the Linux archive.
 
 | Archive | For |
 |---|---|

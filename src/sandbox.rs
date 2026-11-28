@@ -1195,10 +1195,26 @@ fn package_spec(manager: &str, package: &str, version: &str) -> String {
 
 /// Shell steps that create the unprivileged scanner user (idempotently, across
 /// both Debian `useradd` and BusyBox `adduser`) and hand it ownership of /work.
-fn scanner_user_setup_steps() -> Vec<String> {
+fn scanner_user_setup_steps(manager: &str) -> Vec<String> {
+    let image_var = scanner_image_var(manager);
     vec![
         format!(
             "id -u {u} >/dev/null 2>&1 || useradd -m -d /home/{u} -s /bin/sh {u} >/dev/null 2>&1 || adduser -D -h /home/{u} -s /bin/sh {u} >/dev/null 2>&1 || true",
+            u = SCANNER_USER
+        ),
+        // The creation above ends in `|| true`, so without this the first probe would reach
+        // `strace -u gyrseek`, which cannot resolve the user, leave no trace, and be reported as
+        // an unexpected missing trace with advice to re-run and report a bug. Every probe would
+        // fail the same way, so this is an image-wide fault and aborts the batch, like the
+        // missing-program check (FIXED #518). Checked by outcome, not by looking for `useradd`:
+        // an image that ships the user already needs neither tool, and an image where `useradd`
+        // exists but cannot write to /etc would pass a tool check and still have no user.
+        format!(
+            "id -u {u} >/dev/null 2>&1 || {{ \
+echo \"gyrseek: the scanner image has no '{u}' user and neither useradd nor adduser could create one, \
+so the traced install cannot be dropped to an unprivileged user; add a '{u}' user to the image \
+(see docs/SANDBOX.md, Custom scanner images) or unset {image_var} to use the default image\" >&2; \
+exit 126; }}",
             u = SCANNER_USER
         ),
         "mkdir -p /work".to_string(),
@@ -1266,8 +1282,59 @@ fn strace_command(install: &str, out_log: Option<&str>, timeout_secs: usize) -> 
     format!("{cmd} {install}")
 }
 
+/// The programs the matrix script itself needs from the scanner image, besides the package
+/// manager and its interpreter: `strace` produces every trace, `timeout` enforces
+/// `probe_timeout_seconds`, and `gyrseek_publish` streams each probe's files out with `base64`,
+/// `df`, `tr` and `cut`. Without one of them no usable trace arrives, and the scan used to fail
+/// closed without saying why: the probe was blocked by `trace_missing_message`, which tells the
+/// operator to re-run and report a bug, when the cause is a scanner image that cannot be traced
+/// in (FIXED #518, OPEN #463). The interpreter has its own check in the artifact scan
+/// (FIXED #467), so it is deliberately not repeated here.
+const REQUIRED_SCANNER_PROGRAMS: &[&str] = &["strace", "timeout", "base64", "df", "tr", "cut"];
+
+/// The program a manager's probes actually install with, which is **not** always the manager the
+/// operator typed: `install_invocation` probes a pip, pip3, uv or poetry scan with
+/// `uv pip install`, so a Python scanner image needs `uv` and needs neither `pip` nor `poetry`.
+/// Naming the typed manager here would send operators looking for the wrong binary.
+fn probe_installer(manager: &str) -> &'static str {
+    match manager {
+        "npm" => "npm",
+        "pnpm" => "pnpm",
+        _ => "uv",
+    }
+}
+
+/// Fails the container with exit 126 and a message naming the first required program the image
+/// lacks, as the interpreter check does. It runs *after* the setup steps, so the `strace` that
+/// gyrseek installs itself on the non-prebuilt path counts, as do the `uv` it pip-installs and the
+/// `pnpm` it enables through corepack: what is checked is the state the probes actually run in,
+/// whichever path produced it.
+fn scanner_image_var(manager: &str) -> &'static str {
+    if is_npm_family_manager(manager) {
+        "GYRSEEK_NPM_SCANNER_IMAGE"
+    } else {
+        "GYRSEEK_PY_SCANNER_IMAGE"
+    }
+}
+
+fn required_programs_step(manager: &str) -> String {
+    let image_var = scanner_image_var(manager);
+    let programs = format!(
+        "{} {}",
+        REQUIRED_SCANNER_PROGRAMS.join(" "),
+        probe_installer(manager)
+    );
+    format!(
+        "for p in {programs}; do command -v \"$p\" >/dev/null 2>&1 || {{ \
+echo \"gyrseek: the scanner image has no '$p', which the sandbox needs in order to install a package and trace it; \
+install it in the image (see docs/SANDBOX.md, Custom scanner images) or unset {image_var} to use the default image\" >&2; \
+exit 126; }}; done",
+    )
+}
+
 /// Shared image-setup steps (install strace/ca-certs and, for Python, uv) used
-/// when the scanner image is not prebuilt.
+/// when the scanner image is not prebuilt, then a check that the image really has
+/// everything the probes need.
 fn image_setup_steps(manager: &str, prebuilt: bool) -> Vec<String> {
     let mut steps = vec!["set -e".to_string()];
     if !prebuilt {
@@ -1288,6 +1355,7 @@ fn image_setup_steps(manager: &str, prebuilt: bool) -> Vec<String> {
             steps.push("python -m pip install --quiet uv >/dev/null".to_string());
         }
     }
+    steps.push(required_programs_step(manager));
     steps
 }
 
@@ -1723,7 +1791,7 @@ fn build_matrix_script_core(
     install: &dyn Fn(&str) -> String,
 ) -> String {
     let mut steps = image_setup_steps(manager, prebuilt);
-    steps.extend(scanner_user_setup_steps());
+    steps.extend(scanner_user_setup_steps(manager));
     steps.extend(trace_dir_setup_steps());
     steps.extend(script_variable_steps(
         manager,
@@ -2108,11 +2176,13 @@ mod tests {
     use super::{
         ARTIFACT_INVENTORY_NODE, ARTIFACT_INVENTORY_PYTHON, EMBEDDED_APPARMOR_PROFILE_NAME,
         EMBEDDED_APPARMOR_PROFILE_TEXT, EMBEDDED_SECCOMP_PROFILE_JSON, KILL_PAYLOAD_PROCESSES_STEP,
-        OUTSIDE_WORK_DIRS, SCANNER_USER, TRACE_FUNCTIONS, WORK_RESET_STEP, base64_decode,
-        build_artifact_scan_steps, build_docker_run_args, build_matrix_script,
-        build_runner_from_env, docker_apparmor_enabled_from_env, docker_apparmor_profile_name,
-        install_output_tail, probe_timeout_message, read_frames, read_install_failure,
-        sandbox_max_processes, sandbox_trace_limit, size_to_bytes, strace_install_command,
+        OUTSIDE_WORK_DIRS, REQUIRED_SCANNER_PROGRAMS, SCANNER_USER, TRACE_FUNCTIONS,
+        WORK_RESET_STEP, base64_decode, build_artifact_scan_steps, build_docker_run_args,
+        build_matrix_script, build_runner_from_env, docker_apparmor_enabled_from_env,
+        docker_apparmor_profile_name, image_setup_steps, install_output_tail, probe_installer,
+        probe_timeout_message, read_frames, read_install_failure, required_programs_step,
+        sandbox_max_processes, sandbox_trace_limit, scanner_image_var, scanner_user_setup_steps,
+        size_to_bytes, strace_install_command,
     };
     use super::{
         DockerRunner, INSTALL_OUTPUT_READ_BYTES, collect_probe_traces, import_invocation,
@@ -2646,6 +2716,139 @@ mod tests {
     }
 
     #[test]
+    fn a_scanner_image_is_checked_for_the_programs_the_probes_need() {
+        // The check must be there on both paths: a prebuilt image is never apt-installed into,
+        // and on the non-prebuilt path gyrseek's own `apt-get install strace` can fail (an image
+        // without apt at all), which `set -e` turns into a container that traces nothing.
+        for prebuilt in [false, true] {
+            let steps = image_setup_steps("npm", prebuilt);
+            let check = steps.last().expect("steps are never empty");
+            for program in REQUIRED_SCANNER_PROGRAMS {
+                assert!(check.contains(program), "{program} not checked: {check}");
+            }
+            assert!(check.contains("exit 126"), "{check}");
+        }
+    }
+
+    #[test]
+    fn a_scanner_image_that_cannot_create_the_unprivileged_user_fails_the_batch() {
+        // `strace -u gyrseek` cannot resolve a user that does not exist, so without this the
+        // probe leaves no trace and every package in the batch is blocked one by one with
+        // advice to re-run and report a bug.
+        for manager in ["npm", "pip"] {
+            let steps = scanner_user_setup_steps(manager);
+            let check = steps
+                .iter()
+                .find(|s| s.contains("exit 126"))
+                .unwrap_or_else(|| panic!("{manager}: the user is verified"));
+            assert!(check.contains(SCANNER_USER), "{check}");
+            assert!(check.contains(scanner_image_var(manager)), "{check}");
+        }
+    }
+
+    #[test]
+    fn the_user_is_verified_after_the_attempt_to_create_it_and_before_work_is_owned() {
+        // Checked by outcome: an image that already ships the user needs neither useradd nor
+        // adduser, and `chown -R gyrseek /work` would fail for the same reason the trace would.
+        let steps = scanner_user_setup_steps("npm");
+        let create = steps
+            .iter()
+            .position(|s| s.contains("useradd"))
+            .expect("the user is created");
+        let check = steps
+            .iter()
+            .position(|s| s.contains("exit 126"))
+            .expect("the user is verified");
+        let chown = steps
+            .iter()
+            .position(|s| s.contains("chown"))
+            .expect("/work is owned by the scanner user");
+        assert!(create < check && check < chown, "{steps:?}");
+    }
+
+    #[test]
+    fn the_program_check_runs_after_the_setup_that_installs_them() {
+        // strace is installed by gyrseek itself when the image is not prebuilt, so checking
+        // before the install would reject every default image.
+        let steps = image_setup_steps("pip", false);
+        let apt = steps
+            .iter()
+            .position(|s| s.contains("install -y --no-install-recommends strace"))
+            .expect("the non-prebuilt path installs strace");
+        let check = steps
+            .iter()
+            .position(|s| s.contains("command -v"))
+            .expect("the programs are checked");
+        assert!(
+            apt < check,
+            "the check must come after the install: {steps:?}"
+        );
+    }
+
+    #[test]
+    fn the_program_check_names_the_installer_the_probes_really_use() {
+        // Not the manager the operator typed: every Python manager probes with `uv pip install`.
+        for (manager, installer) in [
+            ("npm", "npm"),
+            ("pnpm", "pnpm"),
+            ("pip", "uv"),
+            ("pip3", "uv"),
+            ("uv", "uv"),
+            ("poetry", "uv"),
+        ] {
+            assert_eq!(probe_installer(manager), installer, "{manager}");
+            let check = required_programs_step(manager);
+            assert!(
+                check.contains(&format!(" {installer};"))
+                    || check.contains(&format!(" {installer} ")),
+                "{manager} should require {installer}: {check}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_program_check_does_not_ask_for_a_manager_the_probes_never_run() {
+        // A poetry or pip scan installs with uv in the sandbox, so demanding `poetry` or `pip`
+        // in the image would send the operator after a binary that is genuinely not needed.
+        for manager in ["pip", "pip3", "poetry"] {
+            let check = required_programs_step(manager);
+            for absent in ["poetry", "pip"] {
+                assert!(
+                    !check.contains(&format!(" {absent} "))
+                        && !check.contains(&format!(" {absent};")),
+                    "{manager} must not require {absent}: {check}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_program_check_names_the_image_variable_of_that_manager() {
+        for (manager, var) in [
+            ("npm", "GYRSEEK_NPM_SCANNER_IMAGE"),
+            ("pnpm", "GYRSEEK_NPM_SCANNER_IMAGE"),
+            ("pip", "GYRSEEK_PY_SCANNER_IMAGE"),
+            ("uv", "GYRSEEK_PY_SCANNER_IMAGE"),
+            ("poetry", "GYRSEEK_PY_SCANNER_IMAGE"),
+        ] {
+            let check = required_programs_step(manager);
+            assert!(check.contains(var), "{manager} should name {var}: {check}");
+        }
+    }
+
+    #[test]
+    fn the_program_check_is_single_quote_free_so_the_shell_can_wrap_it() {
+        // The step is embedded in the matrix script; an apostrophe would end the quoting.
+        // `'$p'` in the message is inside a double-quoted echo, which is fine, but the step
+        // itself must survive `sh -lc`.
+        let check = required_programs_step("npm");
+        assert!(
+            !check.contains("\\'"),
+            "no escaped single quote should be needed: {check}"
+        );
+    }
+
+    #[test]
     fn a_missing_or_failing_interpreter_stops_the_script_instead_of_leaving_an_empty_inventory() {
         // The only quiet exit is a full trace tmpfs, which is reported as over the limit.
         for (manager, runtime) in [("pip", "python3 or python"), ("npm", "node")] {
@@ -2841,7 +3044,10 @@ mod tests {
         let trap = script
             .find("trap gyrseek_publish_rest EXIT")
             .expect("publish on exit");
-        let first_payload = script.find("strace").expect("first probe");
+        // The invocation, not the bare word: the required-programs check at the top of the
+        // script names `strace` too, and runs before these functions are defined (it needs no
+        // publishing, since it exits before any probe has produced a file).
+        let first_payload = script.find("strace -f").expect("first probe");
         assert!(
             functions < first_payload && trap < first_payload,
             "{script}"
@@ -4760,9 +4966,11 @@ useradd -m -d /home/gyrseek -s /bin/sh gyrseek; chown gyrseek /work; runuser -u 
             assert!(script.contains(&format!("'pkg{i}==1.0.{i}'")), "probe {i}");
         }
         assert_eq!(script.matches(WORK_RESET_STEP).count(), 13);
-        // An empty batch is an empty install section, not a crash.
+        // An empty batch is an empty install section, not a crash. Matched on the strace
+        // invocation, not the bare word: the setup also names `strace` as a program the
+        // scanner image must have.
         let empty = build_matrix_script("npm", &[], true, 300);
-        assert!(!empty.contains("strace"));
+        assert!(!empty.contains("strace -f"));
     }
 
     #[test]

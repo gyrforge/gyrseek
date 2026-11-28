@@ -11,6 +11,7 @@ The `Justfile` contains convenience recipes for common tasks. All recipes run fr
 | `just build` | Builds the release binary (`target/release/gyrseek`). |
 | `just install` | Installs `gyrseek` into Cargo's bin directory with `cargo install --path . --locked`. |
 | `just uninstall` | Uninstalls `gyrseek` with `cargo uninstall gyrseek`. |
+| `just deb` | Builds the Debian package from the `[package.metadata.deb]` block in `Cargo.toml` (needs `cargo install cargo-deb`). Linux only in practice: `dpkg-shlibdeps` resolves the dependency fields and is not on macOS, where the build succeeds but leaves `Depends:` empty. The release workflow builds the published `.deb` files the same way, per Linux target. |
 | `just tag` | Tags the current `HEAD` with the version string from `Cargo.toml` (e.g. `v1.2.3`), requires `HEAD` to be `origin/main` and waits for its CI run to pass (needs `gh`), refuses a version `origin` already has, and pushes the tag to `origin`, which starts the release workflow. |
 | `just fmt` | Formats the Rust code. |
 | `just test` | Runs `cargo test --all-features --locked`. |
